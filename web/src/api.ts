@@ -3,6 +3,9 @@ import type {
   EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule,
   Summary, SysctlStatus, SystemStatus, TailscaleStatus, WGPeer,
   YouTubeStatus, DiscoveredScreen, LoungeDevice,
+  NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
+  ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
+  SpeedResult, ConsentStatus, ConsentRule,
 } from './types'
 
 export class ApiError extends Error {
@@ -314,6 +317,61 @@ export const api = {
         mute_ads: boolean; categories: string[]; min_skip_length: number
       }>,
     ) => post<YouTubeStatus>('/youtube/settings', body),
+  },
+
+  backup: {
+    exportURL: '/api/backup',
+    restore: (bundle: unknown, options?: Record<string, boolean>) =>
+      post<{ applied: string[]; skipped: string[]; warnings: string[] }>('/backup/restore',
+        options ? { bundle, options } : bundle),
+  },
+
+  notify: {
+    get: () => get<NotifyConfig>('/notify'),
+    test: () => post<{ ok: boolean }>('/notify/test'),
+    saveWebhook: (h: Webhook) => post<NotifyConfig>('/notify/webhooks', h),
+    deleteWebhook: (name: string) => del<NotifyConfig>(`/notify/webhooks/${encodeURIComponent(name)}`),
+  },
+
+  routes: {
+    list: () => get<{ configured: StaticRoute[]; kernel: string[] }>('/routes'),
+    save: (r: StaticRoute) => post<StaticRoute>('/routes', r),
+    remove: (name: string) => del<{ ok: boolean }>(`/routes/${encodeURIComponent(name)}`),
+    apply: () => post<{ ok: boolean }>('/routes/apply'),
+  },
+
+  wan: {
+    status: () => get<WANStatus>('/wan'),
+    save: (cfg: MultiWANConfig) => post<WANStatus>('/wan/settings', cfg),
+  },
+
+  shaping: {
+    status: () => get<{ config: ShapingConfig; status: ShapingStatus }>('/shaping'),
+    apply: (cfg: ShapingConfig) => post<{ config: ShapingConfig; status: ShapingStatus }>('/shaping', cfg),
+  },
+
+  portmap: {
+    list: () => get<{ config: Record<string, unknown>; running: boolean; mappings: PortMapping[] }>('/portmap'),
+    remove: (proto: string, port: number) => del<{ ok: boolean }>(`/portmap/${proto}/${port}`),
+  },
+
+  tools: {
+    ping: (target: string, count = 4) => post<PingResult>('/tools/ping', { target, count }),
+    traceroute: (target: string, max_hops = 20) =>
+      post<{ hops: TracerouteHop[]; raw: string }>('/tools/traceroute', { target, max_hops }),
+    wol: (mac: string, broadcast?: string) =>
+      post<{ ok: boolean; broadcast: string }>('/tools/wol', { mac, broadcast }),
+    speedtest: () => post<SpeedResult>('/tools/speedtest'),
+  },
+
+  consent: {
+    status: () => get<ConsentStatus>('/consent'),
+    decide: (id: string, decision: 'allow' | 'deny', scope: 'device' | 'network' = 'device') =>
+      post<ConsentRule>('/consent/decide', { id, decision, scope }),
+    enrol: (client_ids: string[]) => post<{ enrolled: string[] }>('/consent/enrol', { client_ids }),
+    forget: (client_id: string, host: string, scope: string) =>
+      post<{ ok: boolean }>('/consent/forget', { client_id, host, scope }),
+    clear: () => post<{ cleared: number }>('/consent/clear'),
   },
 
   config: {

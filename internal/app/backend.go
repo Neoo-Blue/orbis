@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
 	"github.com/Neoo-Blue/orbis/internal/store"
@@ -331,4 +332,128 @@ func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error
 		"local_rows_cleared": cleared,
 		"unresolved":         unresolved,
 	}, nil
+}
+
+// ---- build / backup support ----
+
+// SetBuild records the version string for the status surface and backups.
+func (a *App) SetBuild(v string) { a.build = v }
+
+// Build returns the version string this daemon was compiled as.
+func (a *App) Build() string { return a.build }
+
+// RedactedConfig returns a config whose secrets are masked, as a live-shaped
+// *config.Config so callers that expect one can use it. It is NOT updatable:
+// the returned value is a snapshot, and Update on it fails loudly by design.
+func (a *App) RedactedConfig() *config.Config {
+	red := a.Cfg.Redacted()
+	return &red
+}
+
+// ReloadAfterRestore re-reads the configuration into the subsystems that cache
+// it. A restore rewrites the file and the in-memory config, but a resolver
+// holding parsed upstreams or a manager holding a device list would otherwise
+// keep running the pre-restore setup until the next daemon restart.
+func (a *App) ReloadAfterRestore() {
+	if a.DNS != nil {
+		if err := a.DNS.ReloadUpstreams(); err != nil {
+			a.log("restore: dns upstreams: %v", err)
+		}
+		a.DNS.Cache().Flush()
+	}
+	if err := a.reloadPolicies(); err != nil {
+		a.log("restore: policies: %v", err)
+	}
+	if a.Lounge != nil {
+		a.Lounge.Apply()
+	}
+	a.log("restore: configuration reloaded")
+}
+
+// RestartWANMonitor re-reads the multi-WAN configuration and restarts probing,
+// so a settings change takes effect immediately instead of at the next boot.
+func (a *App) RestartWANMonitor() {
+	cfg := a.Cfg.Snapshot()
+	a.WAN.Stop()
+	if cfg.Network.MultiWAN.Enabled {
+		a.WAN.Start(a.ctx, cfg.Network.MultiWAN)
+	}
+}
+
+// ---- ask-on-first-connection ----
+
+// observeConsent feeds a newly-seen flow to the consent queue and enforces a
+// standing deny by cutting the connection.
+//
+// The hostname is what a decision is keyed on, so a flow with no name yet is
+// skipped: the tracker fills the name in from DNS or SNI shortly after, and
+// deciding on a bare address would produce a rule that expires with the CDN.
+func (a *App) observeConsent(f *store.Flow) {
+	if f == nil {
+		return
+	}
+	if a.Consent == nil || f.ClientID == "" {
+		return
+	}
+	host := f.Hostname
+	if host == "" {
+		host = f.SNI
+	}
+	if host == "" {
+		return
+	}
+	decision, known := a.Consent.Observe(consent.Request{
+		ClientID: f.ClientID, ClientIP: f.SrcIP, Host: host,
+		DstIP: f.DstIP, Port: f.DstPort, Proto: f.Proto, App: f.App,
+		Country: f.Country, ASOrg: f.ASOrg, FirstSeen: f.StartedAt, LastSeen: f.LastSeen,
+	})
+	if known && decision == consent.Deny {
+		// Terminate is the same enforcement path the flow tracker uses, so a
+		// consent deny behaves exactly like any other block: drop set plus a
+		// conntrack teardown, and a no-op in observe mode.
+		dst, err1 := netip.ParseAddr(f.DstIP)
+		src, err2 := netip.ParseAddr(f.SrcIP)
+		if err1 != nil || err2 != nil {
+			return
+		}
+		proto := uint8(6)
+		if strings.EqualFold(f.Proto, "udp") {
+			proto = 17
+		}
+		if err := a.Firewall.Terminate(f.ID, src, dst,
+			uint16(f.SrcPort), uint16(f.DstPort), proto); err != nil {
+			a.log("consent: could not block %s for %s: %v", host, f.ClientID, err)
+		}
+	}
+}
+
+// ConsentDecide answers a pending question and persists the rule.
+func (a *App) ConsentDecide(id string, decision consent.Decision, scope string) (consent.Rule, error) {
+	r, ok := a.Consent.Decide(id, decision, scope)
+	if !ok {
+		return consent.Rule{}, fmt.Errorf("no such pending request")
+	}
+	if err := a.Store.SaveConsentRule(store.ConsentRule{
+		ClientID: r.ClientID, Host: r.Host, Decision: string(r.Decision),
+		Scope: r.Scope, DecidedAt: r.DecidedAt,
+	}); err != nil {
+		return r, fmt.Errorf("rule applied but not saved: %w", err)
+	}
+	a.Store.Audit("api", "consent."+string(decision), r.Host, "", r.Scope, "ok")
+	a.Bus.Publish(Event{Type: "consent.decided", Data: r})
+	return r, nil
+}
+
+// ConsentForget removes a decision so the next connection asks again.
+func (a *App) ConsentForget(clientID, host, scope string) error {
+	if !a.Consent.Forget(clientID, host, scope) {
+		return fmt.Errorf("no such rule")
+	}
+	return a.Store.DeleteConsentRule(clientID, host, scope)
+}
+
+// SetConsentEnrolled replaces the enrolled device set.
+func (a *App) SetConsentEnrolled(ids []string) {
+	a.Consent.SetEnrolled(ids)
+	a.Store.Audit("api", "consent.enrol", fmt.Sprint(len(ids))+" device(s)", "", "", "ok")
 }

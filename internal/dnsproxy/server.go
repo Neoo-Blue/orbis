@@ -42,6 +42,9 @@ type Server struct {
 
 	mu        sync.RWMutex
 	upstreams []*Upstream
+	// zoneUps holds pre-parsed upstreams for conditional-forward zones, keyed
+	// by zone domain. Parsing a spec per query would be wasteful.
+	zoneUps   map[string][]*Upstream
 	servers   []*dns.Server
 	running   bool
 
@@ -51,6 +54,9 @@ type Server struct {
 	inflight   map[string]*inflightCall
 	inflightMu sync.Mutex
 
+	// limiter is amplification protection, keyed per client address.
+	limiter *RateLimiter
+
 	stats Stats
 }
 
@@ -59,8 +65,11 @@ type Stats struct {
 	Blocked   int64 `json:"blocked"`
 	Cached    int64 `json:"cached"`
 	Errors    int64 `json:"errors"`
-	Collapsed int64 `json:"collapsed"`
-	Local     int64 `json:"local"`
+	Collapsed  int64 `json:"collapsed"`
+	Local      int64 `json:"local"`
+	RateLimited int64 `json:"rate_limited"`
+	Rebind      int64 `json:"rebind_blocked"`
+	Rewritten   int64 `json:"rewritten"`
 }
 
 type inflightCall struct {
@@ -83,6 +92,7 @@ func New(cfg *config.Config, st *store.Store, m *adblock.Matcher, hooks Hooks, l
 		hooks:    hooks,
 		log:      log,
 		inflight: map[string]*inflightCall{},
+		limiter:  NewRateLimiter(c.DNS.RateLimit),
 	}
 }
 
@@ -102,8 +112,33 @@ func (s *Server) ReloadUpstreams() error {
 	if len(ups) == 0 {
 		return fmt.Errorf("no upstreams configured")
 	}
+
+	// Conditional-forward zones get their own parsed pools. A zone whose
+	// upstream fails to parse is skipped with a log rather than taking the
+	// whole resolver down, since the default upstreams still work.
+	zones := map[string][]*Upstream{}
+	for _, z := range c.DNS.ConditionalForward {
+		domain := strings.ToLower(strings.TrimSuffix(z.Domain, "."))
+		if domain == "" {
+			continue
+		}
+		var pool []*Upstream
+		for _, spec := range z.Upstreams {
+			u, err := ParseUpstream(spec)
+			if err != nil {
+				s.log("dns: conditional zone %q upstream %q: %v", domain, spec, err)
+				continue
+			}
+			pool = append(pool, u)
+		}
+		if len(pool) > 0 {
+			zones[domain] = pool
+		}
+	}
+
 	s.mu.Lock()
 	s.upstreams = ups
+	s.zoneUps = zones
 	s.mu.Unlock()
 	return nil
 }
@@ -196,6 +231,17 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 
 	s.stats.Queries++
 
+	// 0. Rate limit before any work. A flood must cost this node as little as
+	//    possible, and a refused reply is smaller than the query that caused it.
+	if s.limiter != nil {
+		s.limiter.SetLimit(cfg.DNS.RateLimit)
+		if !s.limiter.Allow(clientAddr, start) {
+			s.stats.RateLimited++
+			s.refuse(w, r)
+			return
+		}
+	}
+
 	logEntry := store.DNSQuery{
 		TS:       start,
 		ClientIP: clientAddr.String(),
@@ -207,7 +253,21 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		logEntry.ClientID = id
 	}
 
-	// 1. Local records (DHCP leases, static hosts) win over everything.
+	// 1. Operator rewrites win over everything: they are an explicit
+	//    instruction and must not be second-guessed by a blocklist.
+	if len(cfg.DNS.Rewrites) > 0 {
+		if m := ApplyRewrite(cfg.DNS.Rewrites, r, q, name); m != nil {
+			logEntry.RCode = dns.RcodeToString[m.Rcode]
+			logEntry.LatencyMS = msSince(start)
+			logEntry.Answer = answerStrings(m)
+			logEntry.BlockSource = "rewrite"
+			s.stats.Rewritten++
+			s.finish(w, m, logEntry, cfg)
+			return
+		}
+	}
+
+	// 2. Local records (DHCP leases, static hosts) win over everything else.
 	if s.hooks.LocalRecords != nil {
 		if rrs := s.hooks.LocalRecords(q.Name, q.Qtype); len(rrs) > 0 {
 			m := new(dns.Msg)
@@ -222,7 +282,50 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	// 2. Block policy on the queried name.
+	// 3. Per-client policy: services, DoH bypass and safe search. These are
+	//    evaluated whether or not the blocklists are enabled, because they are
+	//    an operator decision rather than a subscription.
+	policy := s.policyFor(clientAddr)
+	if policy != nil && ScheduleActive(policy.Schedule, start) {
+		if svc, hit := MatchBlockedService(name, policy.BlockedServices); hit {
+			m := s.blockedReply(r, q, cfg, adblock.Match{
+				Blocked: true, Source: "policy:" + policy.Name, Rule: "service:" + svc,
+			})
+			logEntry.Blocked = true
+			logEntry.BlockSource = "service:" + svc
+			logEntry.RCode = dns.RcodeToString[m.Rcode]
+			logEntry.LatencyMS = msSince(start)
+			s.stats.Blocked++
+			s.finish(w, m, logEntry, cfg)
+			return
+		}
+		if policy.BlockDoH && IsDoHBypass(name) {
+			m := s.blockedReply(r, q, cfg, adblock.Match{
+				Blocked: true, Source: "policy:" + policy.Name, Rule: "doh-bypass",
+			})
+			logEntry.Blocked = true
+			logEntry.BlockSource = "doh-bypass"
+			logEntry.RCode = dns.RcodeToString[m.Rcode]
+			logEntry.LatencyMS = msSince(start)
+			s.stats.Blocked++
+			s.finish(w, m, logEntry, cfg)
+			return
+		}
+		if policy.SafeSearch {
+			if target := SafeSearchTarget(name); target != "" && target != name {
+				if m := s.safeSearchReply(r, q, target); m != nil {
+					logEntry.RCode = dns.RcodeToString[m.Rcode]
+					logEntry.LatencyMS = msSince(start)
+					logEntry.Answer = answerStrings(m)
+					logEntry.BlockSource = "safesearch"
+					s.finish(w, m, logEntry, cfg)
+					return
+				}
+			}
+		}
+	}
+
+	// 4. Block policy on the queried name.
 	if cfg.AdBlock.Enabled {
 		if match, blocked := s.evaluateBlock(name, clientAddr, cfg); blocked {
 			m := s.blockedReply(r, q, cfg, match)
@@ -236,7 +339,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	// 3. Cache.
+	// 5. Cache.
 	dnssecOK := isDNSSECOK(r)
 	if cached, ok, fresh := s.cache.Get(q, dnssecOK); ok && fresh {
 		cached.SetReply(r)
@@ -251,8 +354,8 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	// 4. Forward, collapsing duplicate concurrent queries.
-	resp, upstream, err := s.resolve(context.Background(), r, q, dnssecOK)
+	// 6. Forward, collapsing duplicate concurrent queries.
+	resp, upstream, err := s.resolve(context.Background(), r, q, name, dnssecOK)
 	if err != nil || resp == nil {
 		// Serve stale rather than failing outright: a brief upstream outage
 		// should not take the whole network offline.
@@ -272,8 +375,8 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	// 5. CNAME uncloaking. A first-party name that CNAMEs into an ad network
-	//    is invisible to step 2; this is where that gets caught.
+	// 7. CNAME uncloaking. A first-party name that CNAMEs into an ad network
+	//    is invisible to step 4; this is where that gets caught.
 	if cfg.AdBlock.Enabled && cfg.AdBlock.CNAMEUncloak {
 		chain := cnameChain(resp)
 		if len(chain) > 0 {
@@ -289,6 +392,16 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 				return
 			}
 			logEntry.CNAMEChain = chain
+		}
+	}
+
+	// 8. Rebinding protection, before the answer is cached so a poisoned
+	//    record never gets served twice.
+	if cfg.DNS.RebindProtection && !RebindAllowed(name, cfg.DNS.LocalDomain, cfg.DNS.RebindAllowlist) {
+		if n := StripRebind(resp); n > 0 {
+			s.stats.Rebind++
+			logEntry.BlockSource = "dns-rebind"
+			s.log("dns: stripped %d private answer(s) for %s (rebinding protection)", n, name)
 		}
 	}
 
@@ -417,7 +530,7 @@ func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, mat
 }
 
 // resolve forwards to upstreams, collapsing duplicate concurrent requests.
-func (s *Server) resolve(ctx context.Context, r *dns.Msg, q dns.Question, dnssecOK bool) (*dns.Msg, string, error) {
+func (s *Server) resolve(ctx context.Context, r *dns.Msg, q dns.Question, name string, dnssecOK bool) (*dns.Msg, string, error) {
 	key := cacheKey(q, dnssecOK)
 
 	s.inflightMu.Lock()
@@ -435,7 +548,7 @@ func (s *Server) resolve(ctx context.Context, r *dns.Msg, q dns.Question, dnssec
 	s.inflight[key] = call
 	s.inflightMu.Unlock()
 
-	msg, from, err := s.forward(ctx, r)
+	msg, from, err := s.forward(ctx, r, name)
 	call.msg, call.from, call.err = msg, from, err
 	call.wg.Done()
 
@@ -449,10 +562,18 @@ func (s *Server) resolve(ctx context.Context, r *dns.Msg, q dns.Question, dnssec
 	return msg.Copy(), from, err
 }
 
-func (s *Server) forward(ctx context.Context, r *dns.Msg) (*dns.Msg, string, error) {
+func (s *Server) forward(ctx context.Context, r *dns.Msg, name string) (*dns.Msg, string, error) {
+	cfg := s.cfg.Snapshot()
 	s.mu.RLock()
 	ups := append([]*Upstream(nil), s.upstreams...)
-	strategy := s.cfg.Snapshot().DNS.Strategy
+	// A conditional-forward zone replaces the pool entirely: the whole point
+	// is that this namespace must not leak to the public resolvers.
+	if domain := MatchForwardZone(cfg.DNS.ConditionalForward, name); domain != "" {
+		if pool, ok := s.zoneUps[domain]; ok && len(pool) > 0 {
+			ups = append([]*Upstream(nil), pool...)
+		}
+	}
+	strategy := cfg.DNS.Strategy
 	s.mu.RUnlock()
 	if len(ups) == 0 {
 		return nil, "", fmt.Errorf("no upstreams")
@@ -582,8 +703,10 @@ func (s *Server) Stats() map[string]any {
 		"queries": s.stats.Queries, "blocked": s.stats.Blocked,
 		"cached": s.stats.Cached, "errors": s.stats.Errors,
 		"collapsed": s.stats.Collapsed, "local": s.stats.Local,
-		"running": s.Running(),
-		"cache":   s.cache.Stats(),
+		"rate_limited": s.stats.RateLimited, "rebind_blocked": s.stats.Rebind,
+		"rewritten": s.stats.Rewritten,
+		"running":   s.Running(),
+		"cache":     s.cache.Stats(),
 	}
 	s.mu.RLock()
 	ups := make([]map[string]any, 0, len(s.upstreams))
@@ -653,4 +776,64 @@ func remoteAddr(w dns.ResponseWriter) netip.Addr {
 
 func msSince(t time.Time) float64 {
 	return float64(time.Since(t).Microseconds()) / 1000
+}
+
+// policyFor resolves the policy attached to a client address, or nil.
+func (s *Server) policyFor(client netip.Addr) *store.Policy {
+	if s.hooks.ClientFor == nil || s.hooks.PolicyFor == nil {
+		return nil
+	}
+	_, policyID := s.hooks.ClientFor(client)
+	if policyID == "" {
+		return nil
+	}
+	return s.hooks.PolicyFor(policyID)
+}
+
+// safeSearchReply resolves the engine's filtered hostname and returns its
+// addresses under the originally-queried name, plus the CNAME that explains
+// the substitution. Returning the CNAME alone would work for most clients but
+// costs them a second round trip; resolving here keeps it to one.
+//
+// Only A and AAAA are rewritten. Anything else (MX, TXT, HTTPS) is left to the
+// normal path, because substituting those breaks mail and connection hints for
+// no filtering benefit.
+func (s *Server) safeSearchReply(r *dns.Msg, q dns.Question, target string) *dns.Msg {
+	if q.Qtype != dns.TypeA && q.Qtype != dns.TypeAAAA {
+		return nil
+	}
+	probe := new(dns.Msg)
+	probe.SetQuestion(dns.Fqdn(target), q.Qtype)
+	probe.RecursionDesired = true
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, _, err := s.forward(ctx, probe, target)
+	if err != nil || resp == nil || len(resp.Answer) == 0 {
+		return nil
+	}
+
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+	m.Answer = append(m.Answer, &dns.CNAME{
+		Hdr:    dns.RR_Header{Name: q.Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300},
+		Target: dns.Fqdn(target),
+	})
+	for _, rr := range resp.Answer {
+		switch v := rr.(type) {
+		case *dns.A:
+			m.Answer = append(m.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: dns.Fqdn(target), Rrtype: dns.TypeA,
+					Class: dns.ClassINET, Ttl: v.Hdr.Ttl}, A: v.A})
+		case *dns.AAAA:
+			m.Answer = append(m.Answer, &dns.AAAA{
+				Hdr: dns.RR_Header{Name: dns.Fqdn(target), Rrtype: dns.TypeAAAA,
+					Class: dns.ClassINET, Ttl: v.Hdr.Ttl}, AAAA: v.AAAA})
+		}
+	}
+	if len(m.Answer) < 2 {
+		return nil // CNAME with no addresses is worse than not intervening
+	}
+	return m
 }

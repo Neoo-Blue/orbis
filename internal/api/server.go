@@ -67,6 +67,10 @@ func (s *Server) Start() error {
 	// public by definition.
 	r.Get("/orbis-ca.crt", s.handleCACert)
 
+	// Prometheus scrapes cannot present a session cookie, so /metrics sits
+	// outside the auth wrapper and is guarded by an optional bearer token.
+	r.Get("/metrics", s.handleMetrics)
+
 	r.NotFound(s.serveUI())
 
 	s.http = &http.Server{

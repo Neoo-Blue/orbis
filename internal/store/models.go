@@ -129,6 +129,9 @@ type Policy struct {
 	Allowlist   []string  `json:"allowlist"`
 	Denylist    []string  `json:"denylist"`
 	SafeSearch  bool      `json:"safe_search"`
+	// BlockedServices are BlockedService ids (tiktok, roblox, ...) refused
+	// for clients on this policy.
+	BlockedServices []string `json:"blocked_services"`
 	BlockDoH    bool      `json:"block_doh"`
 	Schedule    string    `json:"schedule,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`

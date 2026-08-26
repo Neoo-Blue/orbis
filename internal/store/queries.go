@@ -112,7 +112,8 @@ func (s *Store) UpdateRuleCounters(counters map[string][2]int64) error {
 
 func (s *Store) Policies() ([]Policy, error) {
 	rows, err := s.db.Query(`SELECT id, name, COALESCE(description,''), categories, allowlist, denylist,
-		safe_search, block_doh, COALESCE(schedule,''), created_at, updated_at FROM policies ORDER BY name`)
+		safe_search, block_doh, COALESCE(schedule,''), COALESCE(blocked_services,'[]'),
+		created_at, updated_at FROM policies ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -120,16 +121,17 @@ func (s *Store) Policies() ([]Policy, error) {
 	out := []Policy{}
 	for rows.Next() {
 		var p Policy
-		var cats, allow, deny string
+		var cats, allow, deny, svcs string
 		var safe, doh int
 		var created, updated int64
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &cats, &allow, &deny, &safe, &doh,
-			&p.Schedule, &created, &updated); err != nil {
+			&p.Schedule, &svcs, &created, &updated); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(cats), &p.Categories)
 		_ = json.Unmarshal([]byte(allow), &p.Allowlist)
 		_ = json.Unmarshal([]byte(deny), &p.Denylist)
+		_ = json.Unmarshal([]byte(svcs), &p.BlockedServices)
 		p.SafeSearch = safe != 0
 		p.BlockDoH = doh != 0
 		p.CreatedAt = time.Unix(created, 0)
@@ -148,15 +150,18 @@ func (s *Store) SavePolicy(p *Policy) error {
 	cats, _ := json.Marshal(orEmpty(p.Categories))
 	allow, _ := json.Marshal(orEmpty(p.Allowlist))
 	deny, _ := json.Marshal(orEmpty(p.Denylist))
+	svcs, _ := json.Marshal(orEmpty(p.BlockedServices))
 	_, err := s.db.Exec(`INSERT INTO policies
-		(id, name, description, categories, allowlist, denylist, safe_search, block_doh, schedule, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		(id, name, description, categories, allowlist, denylist, safe_search, block_doh, schedule,
+		 blocked_services, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description,
 			categories=excluded.categories, allowlist=excluded.allowlist, denylist=excluded.denylist,
 			safe_search=excluded.safe_search, block_doh=excluded.block_doh, schedule=excluded.schedule,
-			updated_at=excluded.updated_at`,
+			blocked_services=excluded.blocked_services, updated_at=excluded.updated_at`,
 		p.ID, p.Name, p.Description, string(cats), string(allow), string(deny),
-		b2i(p.SafeSearch), b2i(p.BlockDoH), p.Schedule, p.CreatedAt.Unix(), p.UpdatedAt.Unix())
+		b2i(p.SafeSearch), b2i(p.BlockDoH), p.Schedule, string(svcs),
+		p.CreatedAt.Unix(), p.UpdatedAt.Unix())
 	return err
 }
 
@@ -949,4 +954,50 @@ func (s *Store) AllFlowDestinations(limit int) ([]string, error) {
 		out = append(out, ip)
 	}
 	return out, rows.Err()
+}
+
+// ---------- ask-on-first-connection ----------
+
+// ConsentRule mirrors consent.Rule without importing that package, keeping the
+// store free of dependencies on the subsystems that use it.
+type ConsentRule struct {
+	ClientID  string
+	Host      string
+	Decision  string
+	Scope     string
+	DecidedAt time.Time
+}
+
+func (s *Store) ConsentRules() ([]ConsentRule, error) {
+	rows, err := s.db.Query(`SELECT client_id, host, decision, scope, decided_at FROM consent_rules`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConsentRule
+	for rows.Next() {
+		var r ConsentRule
+		var ts int64
+		if err := rows.Scan(&r.ClientID, &r.Host, &r.Decision, &r.Scope, &ts); err != nil {
+			return nil, err
+		}
+		r.DecidedAt = time.Unix(ts, 0)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SaveConsentRule(r ConsentRule) error {
+	_, err := s.db.Exec(`INSERT INTO consent_rules (client_id, host, decision, scope, decided_at)
+		VALUES (?,?,?,?,?)
+		ON CONFLICT(client_id, host, scope) DO UPDATE SET
+			decision=excluded.decision, decided_at=excluded.decided_at`,
+		r.ClientID, r.Host, r.Decision, r.Scope, r.DecidedAt.Unix())
+	return err
+}
+
+func (s *Store) DeleteConsentRule(clientID, host, scope string) error {
+	_, err := s.db.Exec(`DELETE FROM consent_rules WHERE client_id=? AND host=? AND scope=?`,
+		clientID, host, scope)
+	return err
 }

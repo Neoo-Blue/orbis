@@ -481,3 +481,103 @@ export interface LoungeDevice {
   name: string
   offset: number
 }
+
+// ---- notifications ----
+
+export interface Webhook {
+  name: string; enabled: boolean; url: string
+  format?: string; headers?: Record<string, string>
+}
+
+export interface NotifyConfig {
+  enabled: boolean
+  min_severity: string
+  dedupe_minutes: number
+  webhooks: Webhook[]
+  email: {
+    enabled: boolean; host: string; port: number
+    username: string; password: string; from: string; to: string[]
+  }
+}
+
+// ---- gateway ----
+
+export interface StaticRoute {
+  name: string; enabled: boolean; destination: string
+  gateway?: string; interface?: string; metric?: number; table?: number
+}
+
+export interface WANLink {
+  name: string; enabled: boolean; interface: string
+  gateway?: string; priority: number; weight?: number; probes?: string[]
+}
+
+export interface MultiWANConfig {
+  enabled: boolean; links: WANLink[]
+  interval_seconds: number; failures_to_down: number
+  successes_to_up: number; load_balance: boolean
+}
+
+export interface LinkState {
+  name: string; interface: string; gateway: string
+  up: boolean; active: boolean; latency_ms: number; loss_percent: number
+  consecutive_failures: number; consecutive_successes: number
+  last_change: string; last_error?: string
+}
+
+export interface WANStatus {
+  config: MultiWANConfig; running: boolean; active: string; links: LinkState[]
+}
+
+export interface ShapingConfig {
+  enabled: boolean; interface: string
+  upload_kbps: number; download_kbps: number
+  headroom_percent: number; overhead?: string
+  discipline: string; prioritise_interactive: boolean
+}
+
+export interface ShapingStatus {
+  applied: boolean; interface: string; discipline: string
+  egress_kbps: number; ingress_kbps: number; qdisc?: string; detail?: string
+}
+
+export interface PortMapping {
+  protocol: string; client: string
+  internal_port: number; external_port: number
+  expires: string; created: string
+}
+
+// ---- tools ----
+
+export interface PingResult {
+  target: string; sent: number; received: number; loss_percent: number
+  min_ms: number; avg_ms: number; max_ms: number; raw: string
+}
+
+export interface TracerouteHop {
+  hop: number; host: string; address: string; rtts: string[]
+}
+
+export interface SpeedResult {
+  download_mbps: number; upload_mbps: number
+  latency_ms: number; jitter_ms: number
+  server: string; ran_at: string; note?: string
+}
+
+// ---- ask on first connection ----
+
+export interface ConsentRequest {
+  id: string; client_id: string; client_ip: string; host: string
+  dst_ip: string; port: number; proto: string; app?: string
+  country?: string; as_org?: string
+  first_seen: string; last_seen: string; count: number
+}
+
+export interface ConsentRule {
+  client_id: string; host: string
+  decision: 'allow' | 'deny'; decided_at: string; scope: string
+}
+
+export interface ConsentStatus {
+  enrolled: string[]; pending: ConsentRequest[]; rules: ConsentRule[]
+}

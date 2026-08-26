@@ -16,6 +16,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/adblock"
 	"github.com/Neoo-Blue/orbis/internal/ai"
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
 	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
 	"github.com/Neoo-Blue/orbis/internal/dpi"
@@ -25,6 +26,8 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/lounge"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
+	"github.com/Neoo-Blue/orbis/internal/notify"
+	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
 	"github.com/google/uuid"
@@ -47,12 +50,15 @@ type App struct {
 	Smart   *adblock.SmartCapture
 
 	DNS       *dnsproxy.Server
+	DNSCrypt  *dnsproxy.EncryptedServer
 	DHCP      *dhcp.Server
 	Firewall  *firewall.Engine
 	VPN       *vpn.Manager
 	Tailscale *vpn.Tailscale
 	Egress    *vpn.EgressManager
 	Net       *netconf.Manager
+	WAN       *netconf.WANMonitor
+	PortMap   *portmap.Server
 	MITM      *mitm.Proxy
 	CA        *mitm.CA
 	Lounge    *lounge.Manager
@@ -61,8 +67,17 @@ type App struct {
 	Assistant *ai.Assistant
 	Analyzer  *ai.Analyzer
 
+	// Notifier delivers events off the box (webhook, email).
+	Notifier *notify.Notifier
+
+	// Consent is ask-on-first-connection for enrolled devices.
+	Consent *consent.Store
+
 	// Bus is the live fan-out used by the WebSocket layer.
 	Bus *Bus
+
+	// build is the version string, for backups and the status surface.
+	build string
 
 	log  func(string, ...any)
 	ctx  context.Context
@@ -116,8 +131,30 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	if err := a.Registry.Load(); err != nil {
 		logf("clients: load failed: %v", err)
 	}
+	// Ask-on-first-connection. Seeded from the database so decisions survive
+	// a restart; enrolment is per device and off by default.
+	a.Consent = consent.NewStore(500)
+	if rules, err := st.ConsentRules(); err == nil {
+		conv := make([]consent.Rule, 0, len(rules))
+		for _, r := range rules {
+			conv = append(conv, consent.Rule{
+				ClientID: r.ClientID, Host: r.Host,
+				Decision: consent.Decision(r.Decision), Scope: r.Scope, DecidedAt: r.DecidedAt,
+			})
+		}
+		a.Consent.LoadRules(conv)
+	} else {
+		logf("consent: could not load rules: %v", err)
+	}
+	a.Consent.SetOnNew(func(req consent.Request) {
+		a.Bus.Publish(Event{Type: "consent.pending", Data: req})
+	})
+
 	a.Tracker.Subscribe(func(u flows.Update) {
 		a.Bus.Publish(Event{Type: string(u.Kind), Data: u.Flow})
+		if u.Kind == flows.UpdateNew {
+			a.observeConsent(u.Flow)
+		}
 	})
 	a.Registry.SetOnNew(func(c *store.Client) {
 		a.Bus.Publish(Event{Type: "client.new", Data: c})
@@ -145,6 +182,10 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Tailscale = vpn.NewTailscale(cfg, logf)
 	a.Egress = vpn.NewEgressManager(logf)
 	a.Net = netconf.NewManager(logf)
+	a.WAN = netconf.NewWANMonitor(logf)
+	a.PortMap = portmap.New(func() portmap.Config {
+		return cfg.Snapshot().Network.PortMap
+	}, logf)
 
 	// Filter proxy.
 	ca, err := mitm.LoadOrCreateCA(cfg.MITM.CADir)
@@ -171,12 +212,18 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		},
 	}, logf)
 
+	// Encrypted DNS for clients (DoT/DoH), sharing the resolver's policy path.
+	a.DNSCrypt = dnsproxy.NewEncrypted(a.DNS, logf)
+
 	// DHCP.
 	a.DHCP = dhcp.New(cfg, st, dhcp.Hooks{OnLease: a.onLease}, logf)
 
 	// Native YouTube ad control (Lounge engine): no CA, drives the player on
 	// cast-capable devices.
 	a.Lounge = lounge.New(cfg, logf)
+
+	// Event delivery.
+	a.Notifier = notify.New(cfg, logf)
 
 	// Capture.
 	a.Capture = flows.NewCapturer(a.Tracker, cfg.Capture.SnapLen, cfg.Capture.Interfaces, logf)
@@ -217,6 +264,40 @@ func (a *App) Start() {
 		}
 	}
 
+	// Static routes go in before anything that depends on reachability.
+	if len(cfg.Network.Routes) > 0 {
+		if err := a.Net.ApplyRoutes(a.ctx, cfg.Network.Routes); err != nil {
+			a.log("network: static routes: %v", err)
+			a.raise(store.SevWarning, "network", "Some static routes could not be installed", err.Error())
+		}
+	}
+
+	// Multi-WAN probing owns the default route once it is enabled.
+	if cfg.Network.MultiWAN.Enabled {
+		a.WAN.Start(a.ctx, cfg.Network.MultiWAN)
+	}
+
+	// Traffic shaping only makes sense inline: in observe mode this node is
+	// not on the forwarding path and shaping its own interface does nothing
+	// for the network.
+	if cfg.Network.Shaping.Enabled && cfg.Mode == config.ModeInline {
+		if st, err := a.Net.ApplyShaping(a.ctx, cfg.Network.Shaping); err != nil {
+			a.log("network: shaping: %v", err)
+			a.raise(store.SevWarning, "network", "Traffic shaping failed to apply", err.Error())
+		} else if st.Detail != "" {
+			a.log("network: shaping applied with notes: %s", st.Detail)
+		}
+	}
+
+	// NAT-PMP hands out inbound port forwards, which only means anything when
+	// this node is the gateway doing the NAT.
+	if cfg.Network.PortMap.Enabled && cfg.Mode == config.ModeInline {
+		if err := a.PortMap.Start(a.ctx); err != nil {
+			a.log("portmap: %v", err)
+			a.raise(store.SevWarning, "network", "NAT-PMP failed to start", err.Error())
+		}
+	}
+
 	a.Tracker.Start()
 	a.Registry.Start()
 
@@ -243,6 +324,13 @@ func (a *App) Start() {
 		if err := a.DNS.Start(); err != nil {
 			a.log("dns: %v", err)
 			a.raise(store.SevWarning, "dns", "DNS resolver failed to start", err.Error())
+		}
+	}
+
+	if cfg.DNS.Enabled && cfg.DNS.Encrypted.Enabled {
+		if err := a.DNSCrypt.Start(); err != nil {
+			a.log("dns: encrypted transports: %v", err)
+			a.raise(store.SevWarning, "dns", "Encrypted DNS failed to start", err.Error())
 		}
 	}
 
@@ -351,6 +439,15 @@ func (a *App) Stop() {
 		a.Lounge.Stop()
 	}
 	a.DNS.Stop()
+	if a.WAN != nil {
+		a.WAN.Stop()
+	}
+	if a.PortMap != nil {
+		a.PortMap.Stop()
+	}
+	if a.DNSCrypt != nil {
+		a.DNSCrypt.Stop()
+	}
 	a.DHCP.Stop()
 	a.Capture.Stop()
 	a.Conntrack.Stop()
@@ -472,10 +569,14 @@ func (a *App) recordStats() {
 }
 
 func (a *App) raise(severity, category, title, detail string) {
-	_ = a.Store.AddEvent(store.Event{
+	ev := store.Event{
 		ID: uuid.NewString(), TS: time.Now(), Severity: severity,
 		Category: category, Title: title, Detail: detail,
-	})
+	}
+	_ = a.Store.AddEvent(ev)
+	if a.Notifier != nil {
+		a.Notifier.Send(ev)
+	}
 	a.Bus.Publish(Event{Type: "event.new", Data: map[string]any{
 		"severity": severity, "category": category, "title": title, "detail": detail,
 	}})

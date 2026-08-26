@@ -280,3 +280,25 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);
 `
+
+// migrations carry changes that CREATE TABLE IF NOT EXISTS cannot express.
+// Each runs on every open and must be idempotent; an "duplicate column name"
+// error is the expected outcome on an already-migrated database and is
+// swallowed by applyMigrations rather than treated as a failure.
+//
+// Adding a column here is the only supported way to extend an existing table:
+// the schema block above is never re-applied to a database that already has
+// the table, so a field added there alone would silently never appear on a
+// node that has been running.
+var migrations = []string{
+	`ALTER TABLE policies ADD COLUMN blocked_services TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE dns_queries ADD COLUMN policy TEXT`,
+	`CREATE TABLE IF NOT EXISTS consent_rules (
+		client_id  TEXT NOT NULL,
+		host       TEXT NOT NULL,
+		decision   TEXT NOT NULL,
+		scope      TEXT NOT NULL,
+		decided_at INTEGER NOT NULL,
+		PRIMARY KEY (client_id, host, scope)
+	)`,
+}

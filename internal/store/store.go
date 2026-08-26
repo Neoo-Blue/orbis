@@ -68,6 +68,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	applyMigrations(db)
 
 	s := &Store{db: db, closed: make(chan struct{})}
 	s.wg.Add(1)
@@ -637,4 +638,21 @@ func clampInt(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// applyMigrations runs each idempotent migration, ignoring the "duplicate
+// column name" error that means it has already been applied. Anything else is
+// logged to the caller's discretion by being ignored here too: a migration
+// that cannot apply must not stop the daemon from starting, because a node
+// that will not boot is worse than a node missing one optional column.
+func applyMigrations(db *sql.DB) {
+	for _, stmt := range migrations {
+		// The only expected error is "duplicate column name" on a database
+		// that already has it. Anything else is reported once and skipped;
+		// refusing to boot over an optional column would be worse.
+		if _, err := db.Exec(stmt); err != nil &&
+			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			fmt.Fprintf(os.Stderr, "store: migration skipped (%v): %s\n", err, stmt)
+		}
+	}
 }

@@ -72,6 +72,8 @@ func main() {
 		logger.Fatalf("startup: %v", err)
 	}
 
+	application.SetBuild(versionString())
+
 	if *printRules {
 		ruleset, err := application.Firewall.Render()
 		if err != nil {

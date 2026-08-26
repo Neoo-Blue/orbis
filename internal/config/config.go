@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/Neoo-Blue/orbis/internal/netconf"
+	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -47,6 +48,7 @@ type Config struct {
 	VPN       VPNConfig       `yaml:"vpn" json:"vpn"`
 	Tailscale TailscaleConfig `yaml:"tailscale" json:"tailscale"`
 	AI        AIConfig        `yaml:"ai" json:"ai"`
+	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
 	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
 
 	// path and mu are runtime state, not configuration. mu is a pointer so
@@ -88,6 +90,17 @@ type NetworkConfig struct {
 	// VLANs are 802.1Q tagged interfaces. Each becomes a normal interface
 	// that zones, DHCP scopes and firewall rules can refer to by name.
 	VLANs []netconf.VLAN `yaml:"vlans" json:"vlans"`
+	// Routes are operator-configured static routes, reapplied at boot so they
+	// survive a reboot unlike a manual `ip route`.
+	Routes []netconf.StaticRoute `yaml:"routes" json:"routes"`
+	// MultiWAN probes several uplinks and moves the default route to a
+	// healthy one. A gateway with one uplink has a single point of failure.
+	MultiWAN netconf.MultiWANConfig `yaml:"multiwan" json:"multiwan"`
+	// Shaping fixes bufferbloat, which does more for perceived speed than
+	// bandwidth does.
+	Shaping netconf.ShapingConfig `yaml:"shaping" json:"shaping"`
+	// PortMap serves NAT-PMP so consoles can open their own inbound ports.
+	PortMap portmap.Config `yaml:"portmap" json:"portmap"`
 }
 
 type NodeConfig struct {
@@ -116,6 +129,10 @@ type APIConfig struct {
 	// AdminHash is a bcrypt hash. Empty means the setup wizard is unlocked.
 	AdminHash string `yaml:"admin_hash" json:"admin_hash"`
 	AllowCORS bool   `yaml:"allow_cors" json:"allow_cors"`
+	// MetricsToken guards /metrics with a bearer token. Empty leaves the
+	// endpoint open to anything that can reach the API port, which is the
+	// right default only on a management network.
+	MetricsToken string `yaml:"metrics_token" json:"metrics_token"`
 }
 
 type StoreConfig struct {
@@ -181,6 +198,57 @@ type DNSConfig struct {
 	LocalDomain string `yaml:"local_domain" json:"local_domain"`
 	// BlockEDE emits an Extended DNS Error explaining the block.
 	BlockEDE bool `yaml:"block_ede" json:"block_ede"`
+	// RateLimit caps queries per client per second. 0 disables it. This is
+	// amplification protection: an open resolver gets conscripted into a
+	// reflection attack quickly, and the victim sees this node as the source.
+	RateLimit int `yaml:"rate_limit" json:"rate_limit"`
+	// RebindProtection strips answers pointing into private address space,
+	// which is how a hostile page reaches a victim's router from inside their
+	// own browser. Local names are exempt (see RebindAllowlist).
+	RebindProtection bool `yaml:"rebind_protection" json:"rebind_protection"`
+	// RebindAllowlist names domains permitted to resolve to private space,
+	// for the legitimate case of an external name pointing at an internal host.
+	RebindAllowlist []string `yaml:"rebind_allowlist" json:"rebind_allowlist"`
+	// Rewrites answer names locally instead of forwarding them.
+	Rewrites []DNSRewrite `yaml:"rewrites" json:"rewrites"`
+	// ConditionalForward routes specific zones to specific upstreams, for a
+	// split-horizon or a corporate VPN's internal namespace.
+	ConditionalForward []ForwardZone `yaml:"conditional_forward" json:"conditional_forward"`
+	// Encrypted serves DoH/DoT to clients on this network. Without it clients
+	// reach this resolver over plaintext port 53.
+	Encrypted EncryptedDNSConfig `yaml:"encrypted" json:"encrypted"`
+}
+
+// DNSRewrite pins a name to an answer. Answer may be an IP (producing A/AAAA),
+// another hostname (producing a CNAME), or "#" for NXDOMAIN.
+type DNSRewrite struct {
+	Domain string `yaml:"domain" json:"domain"`
+	Answer string `yaml:"answer" json:"answer"`
+	TTL    int    `yaml:"ttl" json:"ttl"`
+}
+
+// ForwardZone sends one namespace to dedicated upstreams.
+type ForwardZone struct {
+	Domain    string   `yaml:"domain" json:"domain"`
+	Upstreams []string `yaml:"upstreams" json:"upstreams"`
+}
+
+// EncryptedDNSConfig is the client-facing DoH/DoT listener. Serving encrypted
+// DNS is what lets a phone keep using this resolver off the LAN, and stops
+// anyone on the LAN reading every lookup off the wire.
+type EncryptedDNSConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// DoTListen is the DNS-over-TLS address (RFC 7858 uses port 853).
+	DoTListen string `yaml:"dot_listen" json:"dot_listen"`
+	// DoHListen serves DNS-over-HTTPS on /dns-query.
+	DoHListen string `yaml:"doh_listen" json:"doh_listen"`
+	// CertFile/KeyFile are the PEM pair presented to clients. When empty a
+	// self-signed certificate is generated, which works for DoT clients that
+	// pin a SPKI hash but not for a browser expecting a public CA.
+	CertFile string `yaml:"cert_file" json:"cert_file"`
+	KeyFile  string `yaml:"key_file" json:"key_file"`
+	// Hostname is the name on the generated certificate.
+	Hostname string `yaml:"hostname" json:"hostname"`
 }
 
 type AdBlockConfig struct {
@@ -514,6 +582,40 @@ type AnomalyConfig struct {
 	UseAI bool `yaml:"use_ai" json:"use_ai"`
 }
 
+// NotifyConfig delivers events off the node. An alert nobody sees is not an
+// alert, and until this existed every event stayed in the local database.
+type NotifyConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// MinSeverity filters what is worth waking someone for: info, warning
+	// or critical.
+	MinSeverity string `yaml:"min_severity" json:"min_severity"`
+	// DedupeMinutes collapses repeats of the same category+title. Repeated
+	// identical alerts train people to ignore all alerts.
+	DedupeMinutes int       `yaml:"dedupe_minutes" json:"dedupe_minutes"`
+	Webhooks      []Webhook `yaml:"webhooks" json:"webhooks"`
+	Email         EmailConfig `yaml:"email" json:"email"`
+}
+
+// Webhook posts an event as JSON. Format selects the body shape: "json"
+// (default), "slack" or "discord".
+type Webhook struct {
+	Name    string            `yaml:"name" json:"name"`
+	Enabled bool              `yaml:"enabled" json:"enabled"`
+	URL     string            `yaml:"url" json:"url"`
+	Format  string            `yaml:"format" json:"format"`
+	Headers map[string]string `yaml:"headers" json:"headers"`
+}
+
+type EmailConfig struct {
+	Enabled  bool     `yaml:"enabled" json:"enabled"`
+	Host     string   `yaml:"host" json:"host"`
+	Port     int      `yaml:"port" json:"port"`
+	Username string   `yaml:"username" json:"username"`
+	Password string   `yaml:"password" json:"password"`
+	From     string   `yaml:"from" json:"from"`
+	To       []string `yaml:"to" json:"to"`
+}
+
 type GeoIPConfig struct {
 	// CityDB / ASNDB are MaxMind-format .mmdb paths. When absent, the
 	// bundled coarse allocation table is used so the globe still works.
@@ -567,6 +669,16 @@ func Default() *Config {
 			LogQueries:   true,
 			LocalDomain:  "lan",
 			BlockEDE:     true,
+			// 200/s is far above any real client (a heavy page load is a few
+			// dozen) and far below what a reflection attack needs.
+			RateLimit:        200,
+			RebindProtection: true,
+			Encrypted: EncryptedDNSConfig{
+				Enabled:   false,
+				DoTListen: "0.0.0.0:853",
+				DoHListen: "0.0.0.0:8443",
+				Hostname:  "orbis.lan",
+			},
 		},
 		AdBlock: AdBlockConfig{
 			Enabled:             true,
@@ -867,10 +979,15 @@ func (c *Config) Snapshot() Config {
 	return cp
 }
 
+// MaskedSecret is what a secret looks like once it has left the daemon. Any
+// value equal to it on the way back in must be treated as "unchanged" rather
+// than written through, or a round-trip through the UI destroys the real key.
+const MaskedSecret = "••••••••"
+
 // Redacted returns a snapshot with secrets replaced, for the API surface.
 func (c *Config) Redacted() Config {
 	cp := c.Snapshot()
-	const mask = "••••••••"
+	const mask = MaskedSecret
 	if cp.AI.APIKey != "" {
 		cp.AI.APIKey = mask
 	}
@@ -885,6 +1002,9 @@ func (c *Config) Redacted() Config {
 	}
 	if cp.Tailscale.AuthKey != "" {
 		cp.Tailscale.AuthKey = mask
+	}
+	if cp.Notify.Email.Password != "" {
+		cp.Notify.Email.Password = mask
 	}
 	for i := range cp.VPN.Tunnels {
 		if cp.VPN.Tunnels[i].PrivateKey != "" {

@@ -373,7 +373,11 @@ type TailscaleConfig struct {
 	// AdvertiseRoutes turns this node into a subnet router for the listed
 	// CIDRs, so tailnet devices reach the LAN without a client on each host.
 	AdvertiseRoutes []string `yaml:"advertise_routes" json:"advertise_routes"`
-	// AcceptRoutes accepts subnet routes other nodes advertise.
+	// AcceptRoutes accepts subnet routes other nodes advertise. Off by
+	// default, and deliberately so: if any tailnet node advertises a prefix
+	// that covers this node's own LAN, accepting it sends locally-destined
+	// traffic into the tunnel and the node drops off its own network. The
+	// UI refuses to enable it silently when that overlap exists.
 	AcceptRoutes bool `yaml:"accept_routes" json:"accept_routes"`
 	// AcceptDNS lets the tailnet override DNS. Off by default: accepting it
 	// would bypass this node's own filtering resolver.
@@ -536,7 +540,7 @@ func Default() *Config {
 		},
 		Tailscale: TailscaleConfig{
 			Enabled:          false,
-			AcceptRoutes:     true,
+			AcceptRoutes:     false,
 			AcceptDNS:        false,
 			ExitNodeAllowLAN: true,
 			RouteTable:       52,

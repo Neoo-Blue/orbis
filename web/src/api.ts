@@ -195,6 +195,7 @@ export const api = {
         status: TailscaleStatus
         config: Record<string, unknown>
         steering_active: string[]
+        overlapping_routes: string[]
         warnings: string[]
         install_hint?: string
       }>('/tailscale/status'),
@@ -208,6 +209,7 @@ export const api = {
       post<{ status: TailscaleStatus; next_step?: string }>('/tailscale/advertise-exit-node', { enabled }),
     setRoutes: (routes: string[]) => post<TailscaleStatus>('/tailscale/routes', { routes }),
     steer: (clients: string[]) => post<{ steering_active: string[] }>('/tailscale/steer', { clients }),
+    acceptRoutes: (enabled: boolean) => post<TailscaleStatus>('/tailscale/accept-routes', { enabled }),
   },
 
   proxy: {

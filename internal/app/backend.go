@@ -271,7 +271,19 @@ func (a *App) Context() context.Context { return a.ctx }
 // updating a database take effect retroactively rather than only going
 // forward.
 func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error) {
-	cleared, err := a.Store.ClearLocalFlowGeo()
+	// Anything not globally routable that picked up a position from an
+	// earlier, coarser fallback gets it stripped.
+	dests, err := a.Store.AllFlowDestinations(50000)
+	if err != nil {
+		return nil, err
+	}
+	var bogons []string
+	for _, ip := range dests {
+		if addr, err := netip.ParseAddr(ip); err != nil || geoip.IsPrivate(addr) {
+			bogons = append(bogons, ip)
+		}
+	}
+	cleared, err := a.Store.ClearFlowGeo(bogons)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +322,7 @@ func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	a.log("geoip: backfilled %d address(es) across %d row(s); cleared %d local row(s), %d still unresolved",
+	a.log("geoip: backfilled %d address(es) across %d row(s); cleared %d non-routable row(s), %d still unresolved",
 		len(updates), rows, cleared, unresolved)
 
 	return map[string]any{

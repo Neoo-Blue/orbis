@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os/exec"
 	"sort"
 	"strings"
@@ -135,7 +137,17 @@ func (t *Tailscale) Up(ctx context.Context) error {
 	if len(c.AdvertiseRoutes) > 0 {
 		args = append(args, "--advertise-routes="+strings.Join(c.AdvertiseRoutes, ","))
 	}
-	args = append(args, fmt.Sprintf("--accept-routes=%t", c.AcceptRoutes))
+	// Never bring the node up with route acceptance on while a peer covers
+	// our own LAN; that combination is what strands it.
+	acceptRoutes := c.AcceptRoutes
+	if acceptRoutes {
+		if overlap := t.OverlappingRoutes(ctx); len(overlap) > 0 {
+			t.log("tailscale: NOT accepting routes — a peer advertises %s, which covers this "+
+				"node's own network and would take it off the LAN", strings.Join(overlap, ", "))
+			acceptRoutes = false
+		}
+	}
+	args = append(args, fmt.Sprintf("--accept-routes=%t", acceptRoutes))
 	// Accepting the tailnet's DNS would override the resolver this whole
 	// product exists to run, so it defaults off and is called out in the UI.
 	args = append(args, fmt.Sprintf("--accept-dns=%t", c.AcceptDNS))
@@ -438,6 +450,100 @@ func convertNode(n *rawNode) Node {
 		LastSeen: n.LastSeen, RxBytes: n.RxBytes, TxBytes: n.TxBytes,
 		Routes: n.PrimaryRoutes,
 	}
+}
+
+// OverlappingRoutes reports subnet routes offered by tailnet peers that cover
+// a network this node is already directly attached to.
+//
+// This is the failure that takes a subnet-routed node off its own LAN: with
+// accept-routes on, Tailscale installs the peer's route into table 52, an
+// `ip rule` sends everything through that table first, and traffic destined
+// for the LAN two feet away goes into the tunnel instead. The return path
+// does not match, so the node simply stops answering — including on SSH.
+func (t *Tailscale) OverlappingRoutes(ctx context.Context) []string {
+	local := localPrefixes()
+	if len(local) == 0 {
+		return nil
+	}
+	st := t.Status(ctx)
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range st.Peers {
+		for _, r := range p.Routes {
+			pfx, err := netip.ParsePrefix(r)
+			if err != nil || pfx.Bits() == 0 {
+				continue // a default route is the exit-node case, not this
+			}
+			for _, l := range local {
+				// Either direction of containment is a problem: a peer
+				// advertising a supernet of our LAN is just as disruptive.
+				if pfx.Overlaps(l) && !seen[r] {
+					seen[r] = true
+					out = append(out, r)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// localPrefixes returns the networks this node is directly attached to,
+// excluding the tunnel itself.
+func localPrefixes() []netip.Prefix {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []netip.Prefix
+	for _, i := range ifaces {
+		if i.Flags&net.FlagLoopback != 0 || strings.HasPrefix(i.Name, "tailscale") ||
+			strings.HasPrefix(i.Name, "wg") {
+			continue
+		}
+		addrs, err := i.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			pfx, err := netip.ParsePrefix(ipnet.String())
+			if err != nil {
+				continue
+			}
+			pfx = pfx.Masked()
+			if pfx.Addr().IsLinkLocalUnicast() || pfx.Bits() == 0 {
+				continue
+			}
+			out = append(out, pfx)
+		}
+	}
+	return out
+}
+
+// SetAcceptRoutes toggles route acceptance, refusing to enable it while a
+// peer advertises a prefix covering this node's own LAN.
+func (t *Tailscale) SetAcceptRoutes(ctx context.Context, on bool) error {
+	if on {
+		if overlap := t.OverlappingRoutes(ctx); len(overlap) > 0 {
+			return fmt.Errorf(
+				"a tailnet peer advertises %s, which covers this node's own network — "+
+					"accepting it would route local traffic into the tunnel and take this node "+
+					"off the LAN. Stop advertising that route, or leave route acceptance off",
+				strings.Join(overlap, ", "))
+		}
+	}
+	if err := t.cfg.Update(func(c *config.Config) { c.Tailscale.AcceptRoutes = on }); err != nil {
+		return err
+	}
+	if _, err := t.run(ctx, 30*time.Second, "set", fmt.Sprintf("--accept-routes=%t", on)); err != nil {
+		return err
+	}
+	t.invalidate()
+	return nil
 }
 
 // SteerPrefixes returns the LAN CIDRs whose traffic should be policy-routed

@@ -246,6 +246,10 @@ under version control. Secrets are masked in the API response and never returned
 - **The node locates itself with one DNS query** that asks a public resolver to echo back the
   address it saw. The geolocation then happens against the local database, so the node's position
   is never transmitted. It can be turned off entirely.
+- **Tailscale route acceptance is off by default and guarded.** If any tailnet peer advertises a
+  prefix covering a network this node is already attached to, accepting it sends locally-destined
+  traffic into the tunnel and the node drops off its own LAN — including its management interface.
+  Orbis detects the overlap, refuses to enable acceptance, and says which route is the problem.
 
 ---
 

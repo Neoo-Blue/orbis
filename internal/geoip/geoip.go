@@ -219,24 +219,52 @@ func (r *Resolver) LookupAddr(addr netip.Addr) Location {
 	return loc
 }
 
-// IsPrivate covers RFC1918, CGNAT, loopback, link-local, ULA and multicast:
-// everything that should never get an arc drawn to another continent.
+// bogons are the address ranges that are not globally routable. Anything in
+// them must never be geolocated: a placement would draw an arc from the local
+// network to a random continent, which is worse than showing nothing.
+var bogons = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // "this network"
+	netip.MustParsePrefix("10.0.0.0/8"),      // RFC 1918
+	netip.MustParsePrefix("100.64.0.0/10"),   // carrier-grade NAT
+	netip.MustParsePrefix("127.0.0.0/8"),     // loopback
+	netip.MustParsePrefix("169.254.0.0/16"),  // link-local
+	netip.MustParsePrefix("172.16.0.0/12"),   // RFC 1918
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+	netip.MustParsePrefix("192.0.2.0/24"),    // TEST-NET-1
+	netip.MustParsePrefix("192.168.0.0/16"),  // RFC 1918
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking
+	netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2
+	netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3
+	netip.MustParsePrefix("224.0.0.0/4"),     // multicast
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, and 255.255.255.255 with it
+	netip.MustParsePrefix("::/128"),          // unspecified
+	netip.MustParsePrefix("::1/128"),         // loopback
+	netip.MustParsePrefix("64:ff9b::/96"),    // NAT64
+	netip.MustParsePrefix("100::/64"),        // discard-only
+	netip.MustParsePrefix("2001:db8::/32"),   // documentation
+	netip.MustParsePrefix("fc00::/7"),        // unique local
+	netip.MustParsePrefix("fe80::/10"),       // link-local
+	netip.MustParsePrefix("ff00::/8"),        // multicast
+}
+
+// IsPrivate reports whether an address should be treated as local — that is,
+// anything not globally routable. It is the single gate deciding whether a
+// destination gets a position on the map at all.
 func IsPrivate(addr netip.Addr) bool {
 	if !addr.IsValid() {
 		return true
 	}
+	// Unmap first, or a v4-mapped v6 address (::ffff:192.168.1.1) sails past
+	// every IPv4 prefix below.
+	addr = addr.Unmap()
+
 	if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() ||
-		addr.IsMulticast() || addr.IsUnspecified() || addr.IsPrivate() {
+		addr.IsMulticast() || addr.IsUnspecified() || addr.IsPrivate() ||
+		addr.IsInterfaceLocalMulticast() {
 		return true
 	}
-	if addr.Is4() {
-		b := addr.As4()
-		// 100.64.0.0/10 carrier-grade NAT
-		if b[0] == 100 && b[1] >= 64 && b[1] <= 127 {
-			return true
-		}
-		// 169.254/16 is covered by IsLinkLocalUnicast; 0.0.0.0/8 is bogon.
-		if b[0] == 0 {
+	for _, p := range bogons {
+		if p.Contains(addr) {
 			return true
 		}
 	}

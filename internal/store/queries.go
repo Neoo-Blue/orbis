@@ -894,21 +894,59 @@ func (s *Store) ApplyGeoUpdates(updates []GeoUpdate) (int64, error) {
 	return total, nil
 }
 
-// ClearLocalFlowGeo strips any location from flows between private addresses.
-// A local flow that somehow acquired a country would draw an arc across the
-// globe from one room to another.
-func (s *Store) ClearLocalFlowGeo() (int64, error) {
+// ClearFlowGeo strips the location from the rows named. Used for local flows
+// and for bogon destinations that an earlier, coarser fallback placed on a
+// continent — an arc from the living room to Asia is worse than no arc.
+func (s *Store) ClearFlowGeo(dstIPs []string) (int64, error) {
 	tx, unlock, err := s.beginWrite()
 	if err != nil {
 		return 0, err
 	}
 	defer unlock()
 	defer tx.Rollback()
+
 	res, err := tx.Exec(`UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''
 		WHERE direction = 'local' AND (country != '' OR lat != 0 OR lon != 0)`)
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
-	return n, tx.Commit()
+	total, _ := res.RowsAffected()
+
+	if len(dstIPs) > 0 {
+		stmt, err := tx.Prepare(`UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''
+			WHERE dst_ip = ? AND (country != '' OR lat != 0 OR lon != 0 OR city != '')`)
+		if err != nil {
+			return total, err
+		}
+		defer stmt.Close()
+		for _, ip := range dstIPs {
+			r, err := stmt.Exec(ip)
+			if err != nil {
+				return total, err
+			}
+			n, _ := r.RowsAffected()
+			total += n
+		}
+	}
+	return total, tx.Commit()
+}
+
+// AllFlowDestinations lists every distinct destination in history, so the
+// backfill can decide which are bogons that should never have a position.
+func (s *Store) AllFlowDestinations(limit int) ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT dst_ip FROM flows
+		WHERE country != '' OR lat != 0 OR lon != 0 OR city != '' LIMIT ?`, clampInt(limit, 1, 100000))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return nil, err
+		}
+		out = append(out, ip)
+	}
+	return out, rows.Err()
 }

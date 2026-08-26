@@ -1160,9 +1160,10 @@ function VPNSection({ config, save, toast }: SectionProps) {
   )
 }
 
-function TailscaleSection({ config, save, toast }: SectionProps) {
+function TailscaleSection({ config, save, refresh, toast }: SectionProps) {
   const { data } = usePoll(() => api.tailscale.status(), 8000)
   const st = data?.status
+  const overlap = data?.overlapping_routes ?? []
   const [authKey, setAuthKey] = useState('')
 
   return (
@@ -1255,8 +1256,22 @@ function TailscaleSection({ config, save, toast }: SectionProps) {
             onSave={(v) => save({ 'tailscale.advertise_routes': v })} />
 
           <SwitchRow label="Accept routes from other nodes" checked={config.tailscale.accept_routes}
-            hint="Lets this node reach subnets other machines advertise."
-            onChange={(v) => save({ 'tailscale.accept_routes': v })} />
+            disabled={overlap.length > 0}
+            hint={overlap.length > 0
+              ? <strong style={{ color: 'var(--amber)' }}>
+                  A peer advertises {overlap.join(', ')}, which covers this node's own network.
+                  Accepting it would send local traffic into the tunnel and take this node off the
+                  LAN — including this page. Stop advertising that route first.
+                </strong>
+              : "Lets this node reach subnets other machines advertise. Safe unless a peer advertises a prefix covering a network this node is already on."}
+            onChange={async (v) => {
+              try {
+                await api.tailscale.acceptRoutes(v)
+                refresh()
+              } catch (e) {
+                toast(e instanceof Error ? e.message : 'Could not change route acceptance', 'err')
+              }
+            }} />
 
           <SwitchRow label="Accept the tailnet's DNS" checked={config.tailscale.accept_dns}
             hint="Off by default on purpose: accepting it would override the filtering resolver this node runs, for its own lookups."

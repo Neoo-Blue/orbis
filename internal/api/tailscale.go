@@ -20,6 +20,7 @@ func (s *Server) mountTailscale(r chi.Router) {
 		r.Post("/advertise-exit-node", s.handleTSAdvertiseExitNode)
 		r.Post("/routes", s.handleTSRoutes)
 		r.Post("/steer", s.handleTSSteer)
+		r.Post("/accept-routes", s.handleTSAcceptRoutes)
 	})
 }
 
@@ -41,7 +42,8 @@ func (s *Server) handleTSStatus(w http.ResponseWriter, r *http.Request) {
 			"ssh":                 cfg.SSH,
 			"login_server":        cfg.LoginServer,
 		},
-		"steering_active": s.app.Tailscale.SteeringActive(r.Context()),
+		"steering_active":    s.app.Tailscale.SteeringActive(r.Context()),
+		"overlapping_routes": s.app.Tailscale.OverlappingRoutes(r.Context()),
 	}
 	if !st.Available {
 		out["install_hint"] = vpn.InstallHint()
@@ -65,6 +67,12 @@ func (s *Server) handleTSStatus(w http.ResponseWriter, r *http.Request) {
 	if cfg.AcceptDNS {
 		warnings = append(warnings,
 			"accept_dns is on, so the tailnet's DNS overrides this node's filtering resolver for its own lookups.")
+	}
+	if overlap := s.app.Tailscale.OverlappingRoutes(r.Context()); len(overlap) > 0 {
+		warnings = append(warnings,
+			"A tailnet peer advertises "+strings.Join(overlap, ", ")+", which covers this node's own "+
+				"network. Accepting routes while that is true would send local traffic into the "+
+				"tunnel and take this node off the LAN, so route acceptance is being held off.")
 	}
 	out["warnings"] = warnings
 	writeOK(w, out)
@@ -230,8 +238,27 @@ func (s *Server) handleTSSteer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.app.Store.Audit(r.RemoteAddr, "tailscale.steer", strings.Join(req.Clients, ","), "", "", "ok")
 	writeOK(w, map[string]any{
-		"steering_active": s.app.Tailscale.SteeringActive(r.Context()),
+		"steering_active":    s.app.Tailscale.SteeringActive(r.Context()),
+		"overlapping_routes": s.app.Tailscale.OverlappingRoutes(r.Context()),
 	})
+}
+
+// handleTSAcceptRoutes toggles route acceptance through the guarded setter,
+// which refuses when a peer's advertised prefix covers this node's own LAN.
+func (s *Server) handleTSAcceptRoutes(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.app.Tailscale.SetAcceptRoutes(r.Context(), req.Enabled); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	s.app.Store.Audit(r.RemoteAddr, "tailscale.accept_routes", "", "", boolWord(req.Enabled), "ok")
+	writeOK(w, s.app.Tailscale.Status(r.Context()))
 }
 
 func boolWord(b bool) string {

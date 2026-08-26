@@ -273,7 +273,9 @@ function Tailscale() {
 
   return (
     <>
-      {data.warnings?.map((w, i) => <Banner key={i} tone="warn">{w}</Banner>)}
+      {data.warnings?.map((w, i) => (
+        <Banner key={i} tone={w.includes('off the LAN') ? 'err' : 'warn'}>{w}</Banner>
+      ))}
       {st.auth_url && (
         <Banner tone="info" action={
           <a className="btn sm primary" href={st.auth_url} target="_blank" rel="noreferrer">Open</a>

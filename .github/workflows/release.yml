@@ -1,0 +1,120 @@
+name: Release
+
+# Deliberately not triggered on every push: the CI workflow already tests each
+# commit. This builds the published artifacts once a day (and on demand, and on
+# a version tag), so the Docker image and the install binaries stay current
+# without a build per commit.
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC daily
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # publish the rolling/tagged release
+  packages: write   # push the image to GHCR
+
+env:
+  IMAGE: ghcr.io/neoo-blue/orbis
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Decide version and channel
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME}"   >> "$GITHUB_OUTPUT"
+            echo "channel=stable"               >> "$GITHUB_OUTPUT"
+            echo "release_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false"             >> "$GITHUB_OUTPUT"
+          else
+            echo "version=nightly-$(date +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "channel=nightly"              >> "$GITHUB_OUTPUT"
+            echo "release_tag=nightly"          >> "$GITHUB_OUTPUT"
+            echo "prerelease=true"              >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the UI
+        run: |
+          cd web
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Cross-compile binaries
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=${{ steps.ver.outputs.version }}" \
+              -o dist/orbisd-linux-$arch ./cmd/orbisd
+          done
+          ls -lh dist
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.ver.outputs.channel }}
+            ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
+          # ':latest' only ever tracks a real tagged release, never a nightly.
+          # A separate step below adds it when this run is a tag.
+
+      - name: Tag the image as latest (stable only)
+        if: steps.ver.outputs.channel == 'stable'
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.IMAGE }}:latest \
+            ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
+
+      - name: Publish the release with install binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.release_tag }}
+          name: ${{ steps.ver.outputs.version }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
+          # The rolling 'nightly' tag is moved to this commit each run so the
+          # one-line installer always finds current binaries at a stable URL.
+          make_latest: ${{ steps.ver.outputs.channel == 'stable' }}
+          files: |
+            dist/orbisd-linux-amd64
+            dist/orbisd-linux-arm64
+          body: |
+            Orbis ${{ steps.ver.outputs.version }}
+
+            Install on a Debian/Ubuntu host, VM or LXC:
+            ```
+            curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/orbis/main/deploy/bootstrap.sh | sudo bash
+            ```
+
+            Docker:
+            ```
+            docker run -d --network host --cap-add NET_ADMIN --cap-add NET_RAW \
+              -v orbis-config:/etc/orbis -v orbis-data:/var/lib/orbis \
+              ${{ env.IMAGE }}:${{ steps.ver.outputs.channel }}
+            ```

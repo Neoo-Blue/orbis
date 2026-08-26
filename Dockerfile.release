@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+#
+# Runtime-only image for CI. The binary is cross-compiled in the workflow (fast,
+# native, no QEMU) and copied in per architecture, so this Dockerfile compiles
+# nothing and a multi-arch build does not run a Go toolchain under emulation.
+# For a from-source local build use the main Dockerfile instead.
+
+FROM alpine:3.20
+
+# The tools Orbis shells out to: nftables (ruleset), iproute2 (routing),
+# conntrack (tearing down blocked connections + byte counters), tcpdump (pcap
+# export). bind-tools and curl are used by the installer and the healthcheck.
+RUN apk add --no-cache \
+      nftables iproute2 conntrack-tools tcpdump \
+      ca-certificates tzdata libcap curl bind-tools \
+    && addgroup -S orbis && adduser -S -G orbis orbis
+
+# buildx sets TARGETARCH to amd64 / arm64 for each platform in --platform.
+ARG TARGETARCH
+COPY dist/orbisd-linux-${TARGETARCH} /usr/local/bin/orbisd
+RUN chmod 0755 /usr/local/bin/orbisd
+
+RUN mkdir -p /etc/orbis /var/lib/orbis && chown -R orbis:orbis /var/lib/orbis
+VOLUME ["/etc/orbis", "/var/lib/orbis"]
+
+EXPOSE 8080/tcp 53/udp 53/tcp 853/tcp 8443/tcp 3128/tcp 3129/tcp 51820/udp
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8080/api/auth/status >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/local/bin/orbisd"]
+CMD ["-config", "/etc/orbis/orbis.yaml"]

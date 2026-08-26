@@ -116,19 +116,18 @@ Press **⌘K** (or Ctrl-K) anywhere to jump to a page, device, or action.
 
 ## Install
 
-Debian 12/13 or Ubuntu 22.04+, on bare metal, a VM, or an LXC.
+One line, on a Debian/Ubuntu host, VM, or existing LXC, or on a Proxmox host:
 
 ```bash
-# Build (Go 1.25+, Node 20+)
-cd web && npm ci && npm run build && cd ..
-CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o orbisd ./cmd/orbisd
-
-# Install
-sudo ./deploy/install.sh ./orbisd
-
-# Optional but recommended: real geolocation instead of continent-level guesses
-sudo ./deploy/fetch-geoip.sh
+curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/orbis/main/deploy/bootstrap.sh | sudo bash
 ```
+
+It works out where it is and does the rest. On a **Proxmox host** it creates a privileged LXC and
+installs Orbis inside it, so nothing lands on the hypervisor; on a **Debian/Ubuntu** host, VM or
+container it installs in place: dependencies, the prebuilt binary for the architecture, a systemd
+service, and the GeoIP databases. It never changes how the network behaves; the node comes up in
+observe mode. Common overrides are documented at the top of
+[deploy/bootstrap.sh](deploy/bootstrap.sh) (`CTID`, `BRIDGE`, `IP`, `STORAGE`, `SKIP_GEOIP`, ...).
 
 Then open `http://<host>:8080`. A first-run wizard asks how the node should sit on the network and
 checks, honestly, whether it can actually see your traffic.
@@ -136,8 +135,15 @@ checks, honestly, whether it can actually see your traffic.
 ### Docker
 
 ```bash
-docker compose up -d
+docker run -d --name orbis --network host \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  -v orbis-config:/etc/orbis -v orbis-data:/var/lib/orbis \
+  ghcr.io/neoo-blue/orbis:nightly
 ```
+
+Or `docker compose up -d` with the bundled compose file. The image is published multi-arch (amd64
+and arm64) to GHCR by a daily CI build, with `:nightly` tracking main and `:latest` a tagged
+release.
 
 Host networking is required, not optional: Orbis reads raw frames to pull SNI out of a ClientHello,
 and inside a bridge network the only frames it would ever see are its own. See

@@ -23,6 +23,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/flows"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
+	"github.com/Neoo-Blue/orbis/internal/intercept"
 	"github.com/Neoo-Blue/orbis/internal/lounge"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
@@ -61,6 +62,7 @@ type App struct {
 	WAN       *netconf.WANMonitor
 	PortMap   *portmap.Server
 	Topology  *topology.Scanner
+	Intercept *intercept.Manager
 	MITM      *mitm.Proxy
 	CA        *mitm.CA
 	Lounge    *lounge.Manager
@@ -186,6 +188,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Net = netconf.NewManager(logf)
 	a.WAN = netconf.NewWANMonitor(logf)
 	a.Topology = topology.NewScanner()
+	a.Intercept = intercept.NewManager(logf)
 	a.PortMap = portmap.New(func() portmap.Config {
 		return cfg.Snapshot().Network.PortMap
 	}, logf)
@@ -426,6 +429,16 @@ func (a *App) Start() {
 		}
 	}
 
+	// ARP interception, if any devices are enrolled. It is independent of
+	// inline/observe mode: it is how a node that is NOT the gateway still gets
+	// selected devices' traffic.
+	if cfg.Network.Intercept.Enabled && len(cfg.Network.Intercept.Clients) > 0 {
+		if err := a.SyncIntercept(); err != nil {
+			a.log("intercept: %v", err)
+			a.raise(store.SevWarning, "intercept", "ARP interception failed to start", err.Error())
+		}
+	}
+
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.maintenanceLoop() }()
 
@@ -447,6 +460,9 @@ func (a *App) Stop() {
 	}
 	if a.PortMap != nil {
 		a.PortMap.Stop()
+	}
+	if a.Intercept != nil {
+		a.Intercept.Stop()
 	}
 	if a.DNSCrypt != nil {
 		a.DNSCrypt.Stop()

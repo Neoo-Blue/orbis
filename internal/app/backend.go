@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"os/exec"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
+	"github.com/Neoo-Blue/orbis/internal/intercept"
 	"github.com/Neoo-Blue/orbis/internal/store"
 )
 
@@ -510,4 +512,72 @@ func (a *App) DefaultGateway() string {
 		}
 	}
 	return ""
+}
+
+// SyncIntercept reconciles the ARP interception engine with configuration. It
+// resolves the gateway from the default route when the config leaves it blank,
+// and picks each enrolled device's MAC from the client registry when the config
+// stored only an address.
+func (a *App) SyncIntercept() error {
+	cfg := a.Cfg.Snapshot().Network.Intercept
+	gw := cfg.Gateway
+	if gw == "" {
+		gw = a.DefaultGateway()
+	}
+	gwAddr, err := netip.ParseAddr(gw)
+	if err != nil {
+		return fmt.Errorf("no usable gateway (%q): %w", gw, err)
+	}
+
+	lan := cfg.LANInterface
+	if lan == "" {
+		lan = a.Cfg.Snapshot().Firewall.WANInterface // the node's primary LAN nic
+	}
+	if lan == "" {
+		lan = "eth0"
+	}
+
+	// Fill in any missing MACs from what the registry has observed, so the
+	// operator can enrol a device by address alone.
+	pairs := map[string]string{}
+	for ip, mac := range cfg.Clients {
+		if mac == "" {
+			if addr, err := netip.ParseAddr(ip); err == nil {
+				if c := a.Registry.ByIP(addr); c != nil {
+					mac = c.MAC
+				}
+			}
+		}
+		if mac != "" {
+			pairs[ip] = mac
+		}
+	}
+
+	return a.Intercept.Apply(a.ctx, intercept.Config{
+		Enabled:      cfg.Enabled,
+		LANInterface: lan,
+		Gateway:      gwAddr,
+		Clients:      intercept.ResolveTargets(pairs),
+		RedirectDNS:  cfg.RedirectDNS,
+		DNSPort:      53,
+		RedirectHTTP: cfg.RedirectHTTP,
+		HTTPPort:     portOfAddr(a.Cfg.Snapshot().MITM.ListenHTTP),
+		HTTPSPort:    portOfAddr(a.Cfg.Snapshot().MITM.ListenTLS),
+	})
+}
+
+// portOfAddr pulls the port off a listen address like "0.0.0.0:3128".
+func portOfAddr(addr string) int {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, r := range port {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
 }

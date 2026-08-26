@@ -105,6 +105,31 @@ type NetworkConfig struct {
 	Shaping netconf.ShapingConfig `yaml:"shaping" json:"shaping"`
 	// PortMap serves NAT-PMP so consoles can open their own inbound ports.
 	PortMap portmap.Config `yaml:"portmap" json:"portmap"`
+	// Intercept inserts Orbis into selected devices' path by ARP, without
+	// becoming the network's gateway or DHCP server.
+	Intercept InterceptConfig `yaml:"intercept" json:"intercept"`
+}
+
+// InterceptConfig is ARP interception: Orbis answers ARP for the real gateway
+// with its own MAC for enrolled devices, so their traffic comes to it. It is
+// off by default and per-device, because the mechanism is ARP spoofing and
+// applying it to a device is a deliberate act.
+type InterceptConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// LANInterface is the interface the enrolled devices share with this node.
+	LANInterface string `yaml:"lan_interface" json:"lan_interface"`
+	// Gateway is the real gateway whose address Orbis impersonates. Empty means
+	// discover it from the default route.
+	Gateway string `yaml:"gateway" json:"gateway"`
+	// Clients are the enrolled devices, keyed by IP with their MAC as value.
+	// The MAC is required: a unicast poisoning reply must be addressed to the
+	// device, and it also lets the restore-on-stop reach exactly that device.
+	Clients map[string]string `yaml:"clients" json:"clients"`
+	// RedirectDNS steers enrolled clients' DNS into the local resolver.
+	RedirectDNS bool `yaml:"redirect_dns" json:"redirect_dns"`
+	// RedirectHTTP steers 80/443 into the intercepting proxy. Off by default:
+	// a device without the CA breaks on it.
+	RedirectHTTP bool `yaml:"redirect_http" json:"redirect_http"`
 }
 
 type NodeConfig struct {

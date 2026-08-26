@@ -679,3 +679,32 @@ export interface TopoGraph {
   scanned_at?: string
   notes?: string[]
 }
+
+// ---- ARP interception ----
+
+export interface InterceptConfig {
+  enabled: boolean
+  lan_interface: string
+  gateway: string
+  clients: Record<string, string>
+  redirect_dns: boolean
+  redirect_http: boolean
+}
+
+export interface InterceptStats {
+  running: boolean
+  interface: string
+  gateway: string
+  gateway_mac: string
+  targets: number
+  reasserts: number
+  restores: number
+  last_reassert?: string
+  started_at?: string
+}
+
+export interface InterceptStatus {
+  config: InterceptConfig
+  stats: InterceptStats
+  gateway: string
+}

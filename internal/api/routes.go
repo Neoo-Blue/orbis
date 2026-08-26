@@ -127,6 +127,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountDNSTools(r)
 	s.mountOnboarding(r)
 	s.mountTopology(r)
+	s.mountIntercept(r)
 
 	r.Route("/events", func(r chi.Router) {
 		r.Get("/", s.handleEvents)

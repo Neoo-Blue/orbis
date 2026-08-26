@@ -12,6 +12,7 @@ import { AdBlockPage } from './pages/AdBlock'
 import { YouTubePage } from './pages/YouTube'
 import { DNSToolsPage } from './pages/DNSTools'
 import { TopologyPage } from './pages/Topology'
+import { InterceptPage } from './pages/Intercept'
 import { GatewayPage } from './pages/Gateway'
 import { ConsentPage } from './pages/Consent'
 import { FirewallPage } from './pages/Firewall'
@@ -26,7 +27,7 @@ import { ErrorBoundary } from './ErrorBoundary'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept'
 
 const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
@@ -42,6 +43,7 @@ const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?
   { id: 'firewall', label: 'Firewall', icon: 'shield', group: 'Network' },
   { id: 'network', label: 'DHCP & LAN', icon: 'route' },
   { id: 'gateway', label: 'Gateway', icon: 'activity' },
+  { id: 'intercept', label: 'Interception', icon: 'route' },
   { id: 'vpn', label: 'VPN', icon: 'key' },
   { id: 'assistant', label: 'Assistant', icon: 'chat', group: 'Operate' },
   { id: 'events', label: 'Events', icon: 'bell' },
@@ -242,6 +244,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {route === 'youtube' && <YouTubePage />}
           {route === 'consent' && <ConsentPage />}
           {route === 'gateway' && <GatewayPage />}
+          {route === 'intercept' && <InterceptPage />}
           {route === 'firewall' && <FirewallPage status={status} />}
           {route === 'network' && <NetworkPage status={status} />}
           {route === 'vpn' && <VPNPage />}

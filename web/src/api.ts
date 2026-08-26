@@ -6,7 +6,7 @@ import type {
   NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
   ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
-  OnboardingState, PlacementCheck, TopoGraph,
+  OnboardingState, PlacementCheck, TopoGraph, InterceptStatus,
 } from './types'
 
 export class ApiError extends Error {
@@ -397,6 +397,14 @@ export const api = {
   topology: {
     get: () => get<TopoGraph>('/topology'),
     scan: () => post<TopoGraph>('/topology/scan'),
+  },
+
+  intercept: {
+    get: () => get<InterceptStatus>('/intercept'),
+    settings: (b: Partial<{ enabled: boolean; lan_interface: string; gateway: string; redirect_dns: boolean; redirect_http: boolean }>) =>
+      post<InterceptStatus>('/intercept/settings', b),
+    enroll: (ip: string, mac: string) => post<InterceptStatus>('/intercept/enroll', { ip, mac }),
+    remove: (ip: string) => post<InterceptStatus>('/intercept/remove', { ip }),
   },
 
   config: {

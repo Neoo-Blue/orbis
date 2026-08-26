@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/api"
 	"github.com/Neoo-Blue/orbis/internal/app"
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/mcp"
 )
 
 // version is overwritten at build time with -ldflags "-X main.version=...".
@@ -34,6 +36,8 @@ func main() {
 		showVersion = flag.Bool("version", false, "print version and exit")
 		checkOnly   = flag.Bool("check", false, "validate the configuration and exit")
 		printRules  = flag.Bool("print-ruleset", false, "render the nftables ruleset to stdout and exit")
+		mcpMode     = flag.Bool("mcp", false, "run as a Model Context Protocol server on stdin/stdout")
+		mcpWrite    = flag.Bool("mcp-write", false, "allow the MCP server to change configuration (off by default)")
 		verbose     = flag.Bool("v", false, "verbose logging")
 	)
 	flag.Parse()
@@ -67,12 +71,30 @@ func main() {
 			"WireGuard will be unavailable; the UI and API will still work.")
 	}
 
+	// Anything Load had to correct is worth saying loudly: it means the node
+	// was not doing what its own configuration claimed.
+	for _, note := range cfg.Notes {
+		logf("config: %s", note)
+	}
+
 	application, err := app.New(cfg, logf)
 	if err != nil {
 		logger.Fatalf("startup: %v", err)
 	}
 
 	application.SetBuild(versionString())
+
+	// MCP runs instead of the daemon, not alongside it: it speaks JSON-RPC on
+	// stdout, so anything else logging there would corrupt the stream. Logs go
+	// to stderr for the same reason.
+	if *mcpMode {
+		mcp.Version = versionString()
+		srv := mcp.New(application, *mcpWrite, logf)
+		if err := srv.Serve(context.Background(), os.Stdin, os.Stdout); err != nil {
+			logger.Fatalf("mcp: %v", err)
+		}
+		return
+	}
 
 	if *printRules {
 		ruleset, err := application.Firewall.Render()

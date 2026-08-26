@@ -51,6 +51,10 @@ type Config struct {
 	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
 	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
 
+	// Notes carries messages produced while loading, for the daemon to log and
+	// surface. Not persisted: it describes this load, not the configuration.
+	Notes []string `yaml:"-" json:"notes,omitempty"`
+
 	// path and mu are runtime state, not configuration. mu is a pointer so
 	// that a Snapshot — which is a by-value copy — does not carry a copied
 	// lock; snapshots set it to nil and are read-only by construction.
@@ -836,10 +840,53 @@ func Load(path string) (*Config, error) {
 		c.mu = &sync.RWMutex{}
 	}
 	c.path = path
+
+	// Inline mode with the firewall off is not a gateway, it is a machine that
+	// forwards without translating. Replies come back around it, conntrack
+	// records one direction, and the UI reports "inline" the whole time. Rather
+	// than refuse to boot on a config that has been running like this, correct
+	// it to what it actually was and say so.
+	if note := c.reconcileMode(); note != "" {
+		c.Notes = append(c.Notes, note)
+	}
+
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// reconcileMode downgrades a mode the rest of the configuration cannot deliver,
+// returning a human-readable note when it changes anything.
+func (c *Config) reconcileMode() string {
+	if c.Mode != ModeInline {
+		return ""
+	}
+	if !c.Firewall.Enabled {
+		c.Mode = ModeObserve
+		return "mode was inline but the firewall is disabled, so no NAT or forwarding rules " +
+			"would be installed and this node was never actually a gateway; mode set to observe. " +
+			"Enable the firewall and set inline again to route traffic."
+	}
+	if c.Firewall.WANInterface == "" {
+		c.Mode = ModeObserve
+		return "mode was inline but no WAN interface is set, so NAT has nothing to translate " +
+			"towards; mode set to observe. Set firewall.wan_interface and try again."
+	}
+	// The forward chain defaults to dropping, and every accept rule that lets
+	// LAN traffic out is generated from a zone. With no zones there is nothing
+	// to generate, so the ruleset is a black hole: forwarding is enabled, the
+	// policy is drop, and nothing matches. This is worse than the no-NAT case
+	// it sits next to, because that one merely failed to translate, while this
+	// one silently discards every packet the node was asked to route.
+	if c.Firewall.DefaultForward == "drop" && len(c.Firewall.Zones) == 0 {
+		c.Mode = ModeObserve
+		return "mode was inline with the firewall enabled but no zones defined, which generates " +
+			"a forward chain that drops every routed packet; mode set to observe so the node " +
+			"stops black-holing traffic. Define at least one LAN zone and one WAN zone, then " +
+			"set inline again."
+	}
+	return ""
 }
 
 func (c *Config) Path() string { return c.path }

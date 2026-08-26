@@ -1,0 +1,6 @@
+The built web UI is embedded into the binary from this directory.
+
+`go:embed` needs the directory to exist even when there is no build in it,
+which is what this file is for. Run `cd web && npm ci && npm run build` to
+populate ./dist; until then the daemon serves a placeholder page explaining
+how to build it.

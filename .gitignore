@@ -1,0 +1,18 @@
+# Build output
+/orbisd
+/dist
+/cmd/orbisd/web/dist
+node_modules/
+
+# Local development
+*.db
+*.db-wal
+*.db-shm
+dev.yaml
+*.local
+.DS_Store
+
+# Never commit these
+*.mmdb
+orbis-ca.key
+orbis.yaml

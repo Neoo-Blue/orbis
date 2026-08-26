@@ -450,3 +450,70 @@
     .globe-ticker { display: none; }
   }
 }
+
+/* ============================================================
+   Polish layer (v1.9). Appended so it overrides cleanly and can
+   be reverted as a block. Depth, micro-interactions, density.
+   ============================================================ */
+
+/* Cards get a hairline top-accent and a soft depth that lifts on
+   interaction, so a dense page still reads as discrete panels. */
+.card {
+  position: relative;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset, var(--shadow);
+  transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+}
+.card::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: 1px; border-radius: var(--radius) var(--radius) 0 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 35%, transparent), transparent);
+  opacity: .5; pointer-events: none;
+}
+.card:hover { border-color: var(--line); }
+.card-head {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 3%, transparent), transparent);
+}
+
+/* Stat values pick up a subtle gradient so the numbers feel alive. */
+.stat-value {
+  background: linear-gradient(180deg, var(--text), color-mix(in srgb, var(--text) 72%, var(--text-dim)));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.stat-value.accent { background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--blue))); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.stat-value.amber  { background: linear-gradient(180deg, var(--amber), #d98a2b); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.stat-value.red    { background: linear-gradient(180deg, var(--red), #d64c5c); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* Buttons: gentle gradient + press feedback. */
+.btn { transition: transform .1s ease, background .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn.primary {
+  background: linear-gradient(180deg, rgba(78,232,192,.22), rgba(78,232,192,.10));
+  box-shadow: 0 0 0 0 rgba(78,232,192,0);
+}
+.btn.primary:hover:not(:disabled) {
+  box-shadow: 0 6px 18px -8px rgba(78,232,192,.5);
+}
+
+/* Denser grid options for enterprise pages. */
+.grid.c4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+@media (max-width: 900px) { .grid.c4 { grid-template-columns: repeat(2, 1fr); } }
+
+/* Nav gets a faint glass depth and an active accent bar. */
+.nav { backdrop-filter: blur(8px); }
+.nav-item { position: relative; }
+.nav-item[aria-current="page"]::before {
+  content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 2px;
+  background: var(--accent); box-shadow: 0 0 10px var(--accent);
+}
+
+/* Tables/rows a touch denser and with a hover cue. */
+.tag { transition: background .15s ease; }
+tr:hover td, .row:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+
+/* Subtle animated sheen on the brand mark. */
+.brand-mark { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 40%, transparent)); }
+
+/* Segmented control feels more like a real toggle. */
+.segmented { box-shadow: inset 0 1px 0 rgba(255,255,255,.03); }
+
+/* Scrollbars, because detail matters. */
+::-webkit-scrollbar-thumb { border-radius: 6px; }

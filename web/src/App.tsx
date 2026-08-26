@@ -24,6 +24,7 @@ import { SettingsPage } from './pages/Settings'
 import { Login } from './pages/Login'
 import { Onboarding } from './pages/Onboarding'
 import { ErrorBoundary } from './ErrorBoundary'
+import { CommandPalette } from './CommandPalette'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
@@ -164,6 +165,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
 
   return (
     <div className="shell">
+      <CommandPalette pages={ROUTES} onNavigate={(r) => navigate(r as Route)} />
       <nav className="nav">
         <div className="brand">
           <svg className="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">

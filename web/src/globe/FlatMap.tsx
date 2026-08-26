@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import landRings from '../data/land.json'
-import countryRings from '../data/countries.json'
+import countryShapes from '../data/countries.json'
 import type { GlobeArc, GlobeData } from '../types'
+
+/** One ring of one country, tagged with its ISO 3166-1 alpha-2 code. */
+interface CountryShape { c: string; n: string; r: number[] }
 import { bytes, countryFlag } from '../format'
 
 /**
@@ -33,6 +36,9 @@ const COLORS = {
   land: '#1d3550',
   border: '#152740',
   graticule: '#0e1a2b',
+  // Crest of the travelling gradient: cool outbound, warm inbound.
+  flowOut: '#eafffb',
+  flowIn: '#ffd9a0',
 }
 
 function verdictColor(v: string): string {
@@ -73,6 +79,7 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
   const view = useRef<View>({ zoom: 1, offsetX: 0, offsetY: 0 })
   const arcsRef = useRef<GlobeArc[]>([])
   const homeRef = useRef<{ lat: number; lng: number; label: string } | null>(null)
+  const countryLoadRef = useRef<Map<string, { intensity: number; blocked: boolean }>>(new Map())
   const hoverRef = useRef<GlobeArc | null>(null)
   const pointerRef = useRef<{ x: number; y: number } | null>(null)
   const dragRef = useRef<{ x: number; y: number } | null>(null)
@@ -85,6 +92,25 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
     for (const a of liveArcs ?? []) map.set(a.id, a)
     arcsRef.current = [...map.values()].filter((a) => a.end_lat !== 0 || a.end_lng !== 0)
     homeRef.current = data?.home ?? homeRef.current
+
+    // Per-country intensity, scaled against the busiest country so the map
+    // adapts to this network rather than to an absolute byte count.
+    const loads = new Map<string, { intensity: number; blocked: boolean }>()
+    const rows = data?.countries ?? []
+    let peak = 0
+    for (const r of rows) peak = Math.max(peak, r.connections)
+    if (peak > 0) {
+      for (const r of rows) {
+        if (!r.country) continue
+        // Log scale, or one busy country flattens every other to nothing.
+        const share = Math.log10(1 + r.connections) / Math.log10(1 + peak)
+        loads.set(r.country.toUpperCase(), {
+          intensity: Math.max(0.18, Math.min(0.9, 0.18 + share * 0.72)),
+          blocked: r.blocked > 0 && r.blocked >= r.connections * 0.4,
+        })
+      }
+    }
+    countryLoadRef.current = loads
   }, [data, liveArcs])
 
   /** project maps a coordinate to canvas pixels under the current view. */
@@ -173,7 +199,33 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
       ctx.stroke()
       ctx.globalAlpha = 1
 
-      drawRings(countryRings as number[][], COLORS.border, 0.42, 1)
+      // Lit countries first, as a filled wash under the borders, so a country
+      // this network is talking to reads at a glance without hiding its outline.
+      const loads = countryLoadRef.current
+      if (loads.size) {
+        for (const shape of countryShapes as CountryShape[]) {
+          const load = loads.get(shape.c)
+          if (!load) continue
+          ctx.beginPath()
+          const flat = shape.r
+          for (let i = 0; i + 1 < flat.length; i += 2) {
+            const [x, y] = project(flat[i + 1], flat[i])
+            if (i === 0) ctx.moveTo(x, y)
+            else ctx.lineTo(x, y)
+          }
+          ctx.closePath()
+          ctx.fillStyle = load.blocked ? COLORS.block : COLORS.allow
+          ctx.globalAlpha = load.intensity * 0.16
+          ctx.fill()
+          ctx.strokeStyle = load.blocked ? COLORS.block : COLORS.allow
+          ctx.globalAlpha = load.intensity * 0.55
+          ctx.lineWidth = 1
+          ctx.stroke()
+        }
+        ctx.globalAlpha = 1
+      }
+
+      drawRings((countryShapes as CountryShape[]).map((c) => c.r), COLORS.border, 0.42, 1)
       drawRings(landRings as number[][], COLORS.land, 0.85, 1.1)
 
       const home = homeRef.current
@@ -207,23 +259,38 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
         ctx.stroke()
 
         if (autoAnimate && a.active) {
-          // A travelling marker, phase-offset per arc so a burst of new
-          // connections does not produce a synchronised rank of dots.
+          // A crest that runs along the arc, rather than a dot riding it. The
+          // direction of travel is the encoding: outbound runs home → remote,
+          // inbound runs the other way, so an unsolicited inbound connection
+          // is visible without reading a legend.
           const phase = hashPhase(a.id)
           const speed = 0.2 + Math.min(0.3, a.bytes / 5_000_000)
-          // The curve runs home → remote; an inbound connection is the same
-          // path travelled the other way. Motion is what makes direction
-          // legible at a glance, since colour is already spent on the verdict.
-          let p = (t * speed + phase) % 1
-          if (a.direction === 'in') p = 1 - p
-          const inv = 1 - p
-          const px = inv * inv * hx + 2 * inv * p * cx + p * p * ex
-          const py = inv * inv * hy + 2 * inv * p * cy + p * p * ey
-          ctx.globalAlpha = 0.9 * Math.sin(p * Math.PI)
-          ctx.fillStyle = arcColor(a)
-          ctx.beginPath()
-          ctx.arc(px, py, 1.4 + weight * 1.6, 0, Math.PI * 2)
-          ctx.fill()
+          const inbound = a.direction === 'in'
+          const head = ((t * speed + phase) % 1 + 1) % 1
+          const crest = inbound ? COLORS.flowIn : COLORS.flowOut
+
+          // Canvas has no shader, so the comet is drawn as a short run of
+          // segments whose alpha falls off behind the crest. Twelve is enough
+          // to read as continuous without costing a full re-stroke per arc.
+          const steps = 12
+          const span = 0.3
+          ctx.lineWidth = 0.9 + weight * 1.5
+          for (let i = 0; i < steps; i++) {
+            const t0 = i / steps
+            const t1 = (i + 1) / steps
+            // Distance behind the crest, in the direction the flow travels.
+            const d = inbound ? (head - t0 + 1) % 1 : (t0 - head + 1) % 1
+            if (d > span) continue
+            const fade = 1 - d / span
+            const pt0 = quadPoint(hx, hy, cx, cy, ex, ey, t0)
+            const pt1 = quadPoint(hx, hy, cx, cy, ex, ey, t1)
+            ctx.strokeStyle = crest
+            ctx.globalAlpha = Math.min(0.95, fade * fade * (0.35 + weight * 0.5))
+            ctx.beginPath()
+            ctx.moveTo(pt0[0], pt0[1])
+            ctx.lineTo(pt1[0], pt1[1])
+            ctx.stroke()
+          }
         }
       }
       ctx.globalAlpha = 1
@@ -382,6 +449,17 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
       )}
     </div>
   )
+}
+
+/** quadPoint evaluates the quadratic Bezier used for every arc. */
+function quadPoint(
+  x0: number, y0: number, cx: number, cy: number, x1: number, y1: number, t: number,
+): [number, number] {
+  const inv = 1 - t
+  return [
+    inv * inv * x0 + 2 * inv * t * cx + t * t * x1,
+    inv * inv * y0 + 2 * inv * t * cy + t * t * y1,
+  ]
 }
 
 function hashPhase(s: string): number {

@@ -89,7 +89,10 @@ export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, clas
       [...byCoord.values()],
       data?.home ? { lat: data.home.lat, lng: data.home.lng, weight: 1, label: data.home.label } : undefined,
     )
-  }, [merged, data?.home])
+
+    // Light up the countries this network is actually reaching.
+    scene.setCountries(data?.countries ?? [])
+  }, [merged, data?.home, data?.countries])
 
   useEffect(() => {
     if (!onSelect) return

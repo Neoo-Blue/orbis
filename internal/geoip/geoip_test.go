@@ -77,8 +77,12 @@ func TestWellKnownNames(t *testing.T) {
 func TestFallbackKeepsTheGlobePopulated(t *testing.T) {
 	// With no database installed, a public address still has to land
 	// somewhere plausible, flagged as an estimate.
+	//
+	// Deliberately not a public resolver: those are answered from the anycast
+	// table before the fallback is consulted, so one would not exercise this
+	// path at all. See TestAnycastResolversAreNotWhereTheyAreRegistered.
 	r := New()
-	loc := r.Lookup("8.8.8.8")
+	loc := r.Lookup("93.184.216.34")
 	if loc.Lat == 0 && loc.Lon == 0 {
 		t.Error("a public address with no database got no position at all")
 	}

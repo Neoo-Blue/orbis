@@ -296,6 +296,32 @@ func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error
 
 	updates := make([]store.GeoUpdate, 0, len(targets))
 	unresolved := 0
+
+	// Anycast rows need repairing even though they already carry a country and
+	// an operator, because what they carry is the registry's country. A node
+	// resolving over 1.1.1.1 accumulates tens of thousands of rows pointing at
+	// Australia, which makes it the busiest country on the globe by an order of
+	// magnitude. FlowsNeedingGeo will never revisit them: nothing is missing,
+	// it is just wrong.
+	anycastFixed := 0
+	for _, ip := range dests {
+		addr, err := netip.ParseAddr(ip)
+		if err != nil {
+			continue
+		}
+		loc, ok := geoip.LookupAnycast(addr)
+		if !ok {
+			continue
+		}
+		if enriched := a.Geo.LookupAddr(addr); enriched.ASN != 0 {
+			loc.ASN = enriched.ASN
+		}
+		updates = append(updates, store.GeoUpdate{
+			IP: ip, Country: loc.Country, City: loc.City,
+			Lat: loc.Lat, Lon: loc.Lon, ASN: loc.ASN, ASOrg: loc.ASOrg,
+		})
+		anycastFixed++
+	}
 	for _, t := range targets {
 		select {
 		case <-ctx.Done():
@@ -323,12 +349,13 @@ func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	a.log("geoip: backfilled %d address(es) across %d row(s); cleared %d non-routable row(s), %d still unresolved",
-		len(updates), rows, cleared, unresolved)
+	a.log("geoip: backfilled %d address(es) across %d row(s); corrected %d anycast address(es); cleared %d non-routable row(s), %d still unresolved",
+		len(updates), rows, anycastFixed, cleared, unresolved)
 
 	return map[string]any{
 		"addresses_resolved": len(updates),
 		"rows_updated":       rows,
+		"anycast_corrected":  anycastFixed,
 		"local_rows_cleared": cleared,
 		"unresolved":         unresolved,
 	}, nil

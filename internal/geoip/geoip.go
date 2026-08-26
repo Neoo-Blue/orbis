@@ -25,7 +25,10 @@ type Location struct {
 	ASN         int     `json:"asn,omitempty"`
 	ASOrg       string  `json:"as_org,omitempty"`
 	Private     bool    `json:"private"`
-	Accuracy    string  `json:"accuracy"` // "city" | "country" | "region" | "none"
+	// Anycast marks an address served from many sites at once, where the
+	// coordinates are the operator's region rather than a real machine.
+	Anycast  bool   `json:"anycast,omitempty"`
+	Accuracy string `json:"accuracy"` // "city" | "country" | "region" | "anycast" | "none"
 }
 
 type Resolver struct {
@@ -164,6 +167,31 @@ func (r *Resolver) LookupAddr(addr netip.Addr) Location {
 
 	loc := Location{Accuracy: "none"}
 	ip := net.IP(addr.AsSlice())
+
+	// Anycast first. Consulting the database for 1.1.1.1 yields Australia,
+	// because that is where the prefix is registered, and no amount of
+	// post-processing recovers the intent from that answer.
+	if ac, ok := LookupAnycast(addr); ok {
+		loc = ac
+		if asnDB != nil {
+			var rec asnRecord
+			if err := asnDB.Lookup(ip, &rec); err == nil {
+				if rec.Number != 0 {
+					loc.ASN = rec.Number
+				} else {
+					loc.ASN = rec.ASNAlt
+				}
+				if org := firstNonEmpty(rec.Org, rec.OrgAlt); org != "" {
+					loc.ASOrg = org
+				}
+			}
+		}
+		r.mu.Lock()
+		r.cache[addr] = loc
+		r.cacheOrder = append(r.cacheOrder, addr)
+		r.mu.Unlock()
+		return loc
+	}
 
 	if city != nil {
 		var rec cityRecord

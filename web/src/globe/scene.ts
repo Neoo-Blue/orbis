@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import landRings from '../data/land.json'
-import countryRings from '../data/countries.json'
+import countryShapes from '../data/countries.json'
 
 /**
  * The globe renderer.
@@ -30,11 +30,30 @@ export interface ArcSpec {
   active: boolean
   label: string
   /** 'out' = this network opened the connection, 'in' = something outside
-   *  did. The marker travels accordingly, which is the only way to tell an
-   *  ordinary web request from an unsolicited inbound connection at a
-   *  glance. */
+   *  did. The colour gradient flows along the arc in that direction, which is
+   *  the only way to tell an ordinary web request from an unsolicited inbound
+   *  connection at a glance. */
   direction: 'in' | 'out' | 'local'
   meta: Record<string, unknown>
+}
+
+/** CountryShape is one ring of one country, as generated from Natural Earth
+ *  with its ISO 3166-1 alpha-2 code attached. */
+interface CountryShape {
+  /** ISO 3166-1 alpha-2 */
+  c: string
+  /** English name, for debugging the data rather than for display */
+  n: string
+  /** flattened [lng, lat, lng, lat, ...] */
+  r: number[]
+}
+
+/** CountryLoad is the per-country traffic summary the globe endpoint returns. */
+export interface CountryLoad {
+  country: string
+  connections: number
+  bytes: number
+  blocked: number
 }
 
 export interface PointSpec {
@@ -54,6 +73,13 @@ const COLORS = {
   land: new THREE.Color('#1d3550'),
   border: new THREE.Color('#152740'),
   atmosphere: new THREE.Color('#2a6f8f'),
+  // The bright crest of the travelling gradient. Outbound runs cool (the
+  // network reaching out), inbound runs warm (something reaching in) — so
+  // direction is readable from a still frame, not only from the motion.
+  flowOut: new THREE.Color('#eafffb'),
+  flowIn: new THREE.Color('#ffd9a0'),
+  countryLit: new THREE.Color('#4ee8c0'),
+  countryBlocked: new THREE.Color('#ff6b7a'),
 }
 
 function verdictColor(v: string): THREE.Color {
@@ -61,8 +87,8 @@ function verdictColor(v: string): THREE.Color {
 }
 
 /** arcColor keeps verdict as the primary encoding but tints inbound arcs
- *  toward the inbound hue, so direction is legible with the animation paused
- *  and for anyone who cannot perceive the motion. */
+ *  toward the inbound hue, so direction survives a paused animation and is
+ *  legible to anyone who cannot perceive the motion. */
 function arcColor(spec: { verdict: string; direction: string }): THREE.Color {
   const base = verdictColor(spec.verdict)
   if (spec.direction !== 'in') return base
@@ -93,6 +119,73 @@ function arcCurve(start: THREE.Vector3, end: THREE.Vector3): THREE.QuadraticBezi
   return new THREE.QuadraticBezierCurve3(start, mid, end)
 }
 
+/**
+ * arcFlowMaterial builds the shader that replaces the old travelling dot.
+ *
+ * The dot was a poor encoding: at any moment it occupies one point on the
+ * line, so a glance catches at most a handful of them and direction has to be
+ * inferred from motion that may be off-screen. A gradient running along the
+ * whole arc is readable everywhere at once, reads as direction even in a
+ * screenshot, and costs one draw call instead of a second mesh per connection.
+ *
+ * `aProgress` is 0 at the home end and 1 at the remote end. The crest travels
+ * toward 1 for outbound and toward 0 for inbound, so an unsolicited inbound
+ * connection visibly runs the other way.
+ */
+function arcFlowMaterial(spec: ArcSpec, weight: number): THREE.ShaderMaterial {
+  const inbound = spec.direction === 'in'
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    uniforms: {
+      uBase: { value: arcColor(spec) },
+      uCrest: { value: inbound ? COLORS.flowIn : COLORS.flowOut },
+      uTime: { value: 0 },
+      // Negative speed runs the crest from the remote end back to home.
+      uSpeed: { value: (inbound ? -1 : 1) * (0.16 + Math.min(0.3, spec.bytes / 6_000_000)) },
+      uPhase: { value: hashPhase(spec.id) },
+      uOpacity: { value: 0.2 + weight * 0.5 },
+      // An idle flow keeps its line but loses the crest, so "still connected"
+      // and "actively moving data" are distinguishable.
+      uActive: { value: spec.active ? 1 : 0 },
+    },
+    vertexShader: `
+      attribute float aProgress;
+      varying float vProgress;
+      void main() {
+        vProgress = aProgress;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform vec3 uBase;
+      uniform vec3 uCrest;
+      uniform float uTime;
+      uniform float uSpeed;
+      uniform float uPhase;
+      uniform float uOpacity;
+      uniform float uActive;
+      varying float vProgress;
+
+      void main() {
+        // Position of the crest, wrapped into 0..1 and travelling in the
+        // direction of the connection.
+        float head = fract(uTime * uSpeed + uPhase);
+        // Distance behind the crest, wrapped so the tail is continuous across
+        // the seam rather than popping when the crest laps the arc.
+        float d = fract(vProgress - head + 1.0);
+        // A comet: bright at the crest, fading over roughly a third of the arc.
+        float tail = smoothstep(0.34, 0.0, d) * uActive;
+        // Taper both ends so an arc emerges from its endpoints instead of
+        // stopping dead against the globe.
+        float ends = smoothstep(0.0, 0.06, vProgress) * smoothstep(1.0, 0.94, vProgress);
+        vec3 col = mix(uBase, uCrest, tail * 0.85);
+        float alpha = uOpacity * (0.42 + tail * 1.25) * ends;
+        gl_FragColor = vec4(col, alpha);
+      }`,
+  })
+}
+
 export class GlobeScene {
   readonly scene = new THREE.Scene()
   readonly camera: THREE.PerspectiveCamera
@@ -102,8 +195,18 @@ export class GlobeScene {
   private globeGroup = new THREE.Group()
   private arcGroup = new THREE.Group()
   private pointGroup = new THREE.Group()
+  private countryGroup = new THREE.Group()
 
-  private arcs: Array<{ spec: ArcSpec; line: THREE.Line; head?: THREE.Mesh; birth: number }> = []
+  /** One highlight layer per ISO country code, eased toward `target`. */
+  private countryLayers = new Map<string, {
+    lines: THREE.LineSegments
+    mat: THREE.LineBasicMaterial
+    current: number
+    target: number
+    blocked: boolean
+  }>()
+
+  private arcs: Array<{ spec: ArcSpec; line: THREE.Line; birth: number }> = []
   private arcById = new Map<string, number>()
 
   private raycaster = new THREE.Raycaster()
@@ -152,6 +255,7 @@ export class GlobeScene {
     container.appendChild(this.renderer.domElement)
 
     this.scene.add(this.globeGroup)
+    this.globeGroup.add(this.countryGroup)
     this.globeGroup.add(this.arcGroup)
     this.globeGroup.add(this.pointGroup)
 
@@ -204,7 +308,113 @@ export class GlobeScene {
     // Coastlines and borders, drawn slightly above the surface so they are
     // not z-fought by the body sphere.
     this.globeGroup.add(this.buildRings(landRings as number[][], COLORS.land, 0.62, GLOBE_RADIUS * 1.001))
-    this.globeGroup.add(this.buildRings(countryRings as number[][], COLORS.border, 0.3, GLOBE_RADIUS * 1.0015))
+    this.buildCountries()
+  }
+
+  /**
+   * buildCountries draws every border once and, separately, a per-country
+   * highlight layer that starts invisible.
+   *
+   * Two layers rather than one recoloured layer: the borders are a single
+   * merged LineSegments (285 outlines as 285 objects would be 285 draw calls),
+   * and a merged buffer cannot be recoloured per country without rewriting
+   * vertex colours every frame. The highlight layer is built once per country
+   * and only its material opacity changes, which is free.
+   */
+  private buildCountries() {
+    const shapes = countryShapes as CountryShape[]
+
+    // Borders: one merged object for the whole world.
+    const border: number[] = []
+    for (const shape of shapes) {
+      const flat = shape.r
+      for (let i = 0; i + 3 < flat.length; i += 2) {
+        const a = latLngToVector(flat[i + 1], flat[i], GLOBE_RADIUS * 1.0015)
+        const b = latLngToVector(flat[i + 3], flat[i + 2], GLOBE_RADIUS * 1.0015)
+        border.push(a.x, a.y, a.z, b.x, b.y, b.z)
+      }
+    }
+    const borderGeom = new THREE.BufferGeometry()
+    borderGeom.setAttribute('position', new THREE.Float32BufferAttribute(border, 3))
+    this.globeGroup.add(new THREE.LineSegments(
+      borderGeom,
+      new THREE.LineBasicMaterial({ color: COLORS.border, transparent: true, opacity: 0.3 }),
+    ))
+
+    // Highlight: one object per country, all rings of that country merged.
+    const byCode = new Map<string, number[]>()
+    for (const shape of shapes) {
+      const flat = shape.r
+      const acc = byCode.get(shape.c) ?? []
+      for (let i = 0; i + 3 < flat.length; i += 2) {
+        // Lifted slightly above the border layer so the glow is not z-fought
+        // into invisibility by the line it traces.
+        const a = latLngToVector(flat[i + 1], flat[i], GLOBE_RADIUS * 1.004)
+        const b = latLngToVector(flat[i + 3], flat[i + 2], GLOBE_RADIUS * 1.004)
+        acc.push(a.x, a.y, a.z, b.x, b.y, b.z)
+      }
+      byCode.set(shape.c, acc)
+    }
+    for (const [code, positions] of byCode) {
+      const geom = new THREE.BufferGeometry()
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+      const mat = new THREE.LineBasicMaterial({
+        color: COLORS.countryLit,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+      const lines = new THREE.LineSegments(geom, mat)
+      lines.visible = false
+      this.countryGroup.add(lines)
+      this.countryLayers.set(code, { lines, mat, current: 0, target: 0, blocked: false })
+    }
+  }
+
+  /**
+   * setCountries lights up the countries this network is talking to, scaled by
+   * share of traffic. A country carrying blocked traffic is lit red, because
+   * "where is my network reaching" and "where is it being stopped" are the two
+   * questions this view exists to answer.
+   */
+  setCountries(rows: CountryLoad[]) {
+    for (const layer of this.countryLayers.values()) {
+      layer.target = 0
+      layer.blocked = false
+    }
+    if (!rows.length) return
+
+    // Scale against the busiest country so the map adapts to the network
+    // rather than to an absolute byte count that means nothing on its own.
+    let peak = 0
+    for (const r of rows) peak = Math.max(peak, r.connections)
+    if (peak <= 0) return
+
+    for (const r of rows) {
+      const layer = this.countryLayers.get((r.country || '').toUpperCase())
+      if (!layer) continue
+      // Log scale: without it one busy country flattens every other to nothing.
+      const share = Math.log10(1 + r.connections) / Math.log10(1 + peak)
+      layer.target = clamp(0.18 + share * 0.72, 0, 0.9)
+      layer.blocked = r.blocked > 0 && r.blocked >= r.connections * 0.4
+    }
+  }
+
+  /** updateCountryGlow eases each country toward its target and adds a slow
+   *  breath so a lit country reads as live rather than as a static fill. */
+  private updateCountryGlow(t: number) {
+    const breath = 0.9 + Math.sin(t * 1.1) * 0.1
+    for (const layer of this.countryLayers.values()) {
+      layer.current += (layer.target - layer.current) * 0.06
+      if (layer.current < 0.004) {
+        if (layer.lines.visible) layer.lines.visible = false
+        continue
+      }
+      layer.lines.visible = true
+      layer.mat.color.copy(layer.blocked ? COLORS.countryBlocked : COLORS.countryLit)
+      layer.mat.opacity = layer.current * (this.reducedMotion ? 1 : breath)
+    }
   }
 
   private buildGraticule(): THREE.LineSegments {
@@ -232,8 +442,8 @@ export class GlobeScene {
     )
   }
 
-  /** buildRings merges every polyline into one LineSegments object — 285
-   *  country outlines as 285 objects would be 285 draw calls per frame. */
+  /** buildRings merges every polyline into one LineSegments object, because
+   *  one object per outline would be one draw call per outline. */
   private buildRings(rings: number[][], color: THREE.Color, opacity: number, radius: number): THREE.LineSegments {
     const positions: number[] = []
     for (const flat of rings) {
@@ -277,9 +487,18 @@ export class GlobeScene {
       if (existing !== undefined) {
         // Update only what can change on a live flow.
         const entry = this.arcs[existing]
+        const wasInbound = entry.spec.direction === 'in'
         entry.spec = spec
-        const mat = entry.line.material as THREE.LineBasicMaterial
-        mat.color.copy(arcColor(spec))
+        const mat = entry.line.material as THREE.ShaderMaterial
+        mat.uniforms.uBase.value = arcColor(spec)
+        mat.uniforms.uActive.value = spec.active ? 1 : 0
+        // A flow that reverses direction mid-life is rare but real (a peer
+        // dialling back). Flip the crest rather than leaving it running the
+        // wrong way until the flow expires.
+        if (wasInbound !== (spec.direction === 'in') && !this.reducedMotion) {
+          mat.uniforms.uSpeed.value = -mat.uniforms.uSpeed.value
+          mat.uniforms.uCrest.value = spec.direction === 'in' ? COLORS.flowIn : COLORS.flowOut
+        }
         continue
       }
       this.addArc(spec, now)
@@ -294,43 +513,34 @@ export class GlobeScene {
     if (start.distanceTo(end) < 1.5) return
 
     const curve = arcCurve(start, end)
-    const points = curve.getPoints(48)
+    // A denser sample than the old dot path needed: the gradient is evaluated
+    // per fragment, but the progress attribute is interpolated between
+    // vertices, so too few segments makes the crest visibly faceted.
+    const segments = 96
+    const points = curve.getPoints(segments)
     const geom = new THREE.BufferGeometry().setFromPoints(points)
 
-    // Thicker line for heavier flows, expressed as opacity because WebGL
-    // ignores linewidth on most platforms.
+    // aProgress runs 0 (home) to 1 (remote) so the shader knows which way
+    // along the line it is looking.
+    const progress = new Float32Array(points.length)
+    for (let i = 0; i < points.length; i++) progress[i] = i / (points.length - 1)
+    geom.setAttribute('aProgress', new THREE.BufferAttribute(progress, 1))
+
+    // Heavier flows read brighter, expressed as opacity because WebGL ignores
+    // linewidth on most platforms.
     const weight = Math.min(1, Math.log10(Math.max(spec.bytes, 1)) / 8)
-    const mat = new THREE.LineBasicMaterial({
-      color: arcColor(spec),
-      transparent: true,
-      opacity: 0.22 + weight * 0.55,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    })
+    const mat = arcFlowMaterial(spec, weight)
+    // With motion suppressed the crest would sit frozen at an arbitrary point,
+    // which reads as a rendering fault. Park it at the remote end instead so
+    // the arc still shows a direction.
+    if (this.reducedMotion) mat.uniforms.uSpeed.value = 0
+
     const line = new THREE.Line(geom, mat)
     line.userData.curve = curve
     line.userData.id = spec.id
     this.arcGroup.add(line)
 
-    // A travelling head shows which way the connection was opened. Colour is
-    // already spent on the verdict, so direction is carried by motion — and
-    // motion is what the eye picks up without being told to look.
-    let head: THREE.Mesh | undefined
-    if (spec.active && !this.reducedMotion) {
-      head = new THREE.Mesh(
-        new THREE.SphereGeometry(0.9 + weight * 1.4, 8, 8),
-        new THREE.MeshBasicMaterial({
-          color: arcColor(spec),
-          transparent: true,
-          opacity: 0.9,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-        }),
-      )
-      this.arcGroup.add(head)
-    }
-
-    this.arcs.push({ spec, line, head, birth })
+    this.arcs.push({ spec, line, birth })
     this.arcById.set(spec.id, this.arcs.length - 1)
   }
 
@@ -339,11 +549,6 @@ export class GlobeScene {
     this.arcGroup.remove(entry.line)
     entry.line.geometry.dispose()
     ;(entry.line.material as THREE.Material).dispose()
-    if (entry.head) {
-      this.arcGroup.remove(entry.head)
-      entry.head.geometry.dispose()
-      ;(entry.head.material as THREE.Material).dispose()
-    }
     this.arcs.splice(index, 1)
   }
 
@@ -513,24 +718,17 @@ export class GlobeScene {
     this.globeGroup.rotation.y = this.rotation.y
     this.camera.position.z = this.distance
 
-    // Animate the travelling heads along their curves.
+    // Advance every arc's gradient. Each arc carries its own phase and signed
+    // speed, so this is one uniform write per arc rather than any geometry
+    // work, and a burst of new connections does not produce a synchronised rank.
     for (const entry of this.arcs) {
-      if (!entry.head) continue
-      const curve = entry.line.userData.curve as THREE.QuadraticBezierCurve3
-      // Each arc gets its own phase from a hash of its id, so a burst of new
-      // connections does not produce a rank of synchronised dots.
-      const phase = hashPhase(entry.spec.id)
-      const speed = 0.22 + Math.min(0.35, entry.spec.bytes / 5_000_000)
-      let p = ((t - entry.birth) * speed + phase) % 1
-      // The curve runs home → remote. An inbound connection is the same arc
-      // travelled the other way, so the parameter is simply reversed rather
-      // than building a second geometry.
-      if (entry.spec.direction === 'in') p = 1 - p
-      curve.getPoint(p, entry.head.position)
-      const mat = entry.head.material as THREE.MeshBasicMaterial
-      // Fade in and out at the endpoints so the dot appears to launch and land.
-      mat.opacity = 0.9 * Math.sin(p * Math.PI)
+      const mat = entry.line.material as THREE.ShaderMaterial
+      mat.uniforms.uTime.value = t - entry.birth
     }
+
+    // Countries fade toward their target intensity rather than snapping, so a
+    // poll that changes the traffic mix does not flash the whole map.
+    this.updateCountryGlow(t)
 
     this.renderer.render(this.scene, this.camera)
   }

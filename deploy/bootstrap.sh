@@ -62,7 +62,7 @@ install_inplace() {
   fi
 
   local tmp; tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  trap 'rm -rf "${tmp:-}"' EXIT
 
   c_say "Downloading orbisd"
   curl -fsSL -o "$tmp/orbisd" "$(binary_url)" \

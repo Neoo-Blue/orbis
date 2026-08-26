@@ -11,6 +11,7 @@ import (
 
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
+	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
 	"github.com/Neoo-Blue/orbis/internal/intercept"
@@ -580,4 +581,24 @@ func portOfAddr(addr string) int {
 		n = n*10 + int(r-'0')
 	}
 	return n
+}
+
+// ReloadRecords rebuilds the local DNS record index from configuration. Called
+// at startup and after any change through the API.
+func (a *App) ReloadRecords() {
+	cfg := a.Cfg.Snapshot()
+	recs := make([]dnsproxy.LocalRecord, 0, len(cfg.DNS.Records))
+	for _, r := range cfg.DNS.Records {
+		recs = append(recs, dnsproxy.LocalRecord{
+			Name: r.Name, Type: r.Type, Value: r.Value, TTL: r.TTL,
+			Priority: r.Priority, Weight: r.Weight, Port: r.Port,
+		})
+	}
+	rs := dnsproxy.BuildRecordSet(recs)
+	a.recordsMu.Lock()
+	a.records = rs
+	a.recordsMu.Unlock()
+	if a.DNS != nil {
+		a.DNS.Cache().Flush()
+	}
 }

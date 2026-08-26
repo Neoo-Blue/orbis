@@ -5,6 +5,8 @@ import { Banner, Card, Empty, Icons, Loading, Search, Segmented, Stat, useToast 
 import { clientName, clock, compact, pct } from '../format'
 import type { Client, DNSQuery } from '../types'
 
+import { DNSRecordsCard } from './DNSRecords'
+
 export function DNSPage({ events }: { events: LiveEvent[] }) {
   const [query, setQuery] = useState('')
   const [blockedOnly, setBlockedOnly] = useState(false)
@@ -161,7 +163,9 @@ export function DNSPage({ events }: { events: LiveEvent[] }) {
 
       <div className="toolbar" style={{ marginBottom: 0 }}>
         <Search value={query} onChange={setQuery} placeholder="Filter by domain…" />
-        <Segmented value={blockedOnly ? 'blocked' : 'all'}
+        <DNSRecordsCard />
+
+      <Segmented value={blockedOnly ? 'blocked' : 'all'}
           onChange={(v) => setBlockedOnly(v === 'blocked')}
           options={[{ value: 'all', label: 'All' }, { value: 'blocked', label: 'Blocked only' }]} />
         <select className="select" style={{ width: 180 }} value={clientId} onChange={(e) => setClientId(e.target.value)}>

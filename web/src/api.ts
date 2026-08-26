@@ -6,7 +6,7 @@ import type {
   NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
   ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
-  OnboardingState, PlacementCheck, TopoGraph, InterceptStatus,
+  OnboardingState, PlacementCheck, TopoGraph, InterceptStatus, DNSRecord,
 } from './types'
 
 export class ApiError extends Error {
@@ -405,6 +405,12 @@ export const api = {
       post<InterceptStatus>('/intercept/settings', b),
     enroll: (ip: string, mac: string) => post<InterceptStatus>('/intercept/enroll', { ip, mac }),
     remove: (ip: string) => post<InterceptStatus>('/intercept/remove', { ip }),
+  },
+
+  dnsRecords: {
+    list: () => get<{ records: DNSRecord[]; local_domain: string }>('/dns/records'),
+    save: (rec: DNSRecord) => post<{ records: DNSRecord[] }>('/dns/records', rec),
+    remove: (rec: DNSRecord) => post<{ records: DNSRecord[] }>('/dns/records/delete', rec),
   },
 
   config: {

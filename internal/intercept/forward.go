@@ -85,6 +85,13 @@ func renderForwarding(cfg ForwardConfig) string {
 	}
 	members := strings.Join(clientSet, ", ")
 
+	// Replace, never merge. nft -f with a bare table block adds to an existing
+	// table, which is how the client set accumulates stale members and the
+	// chains gain duplicate rules. add-then-delete guarantees the delete has a
+	// target (a no-op add is harmless) so the script never aborts, and what
+	// follows is a fresh table.
+	w("add table ip %s", forwardTable)
+	w("delete table ip %s", forwardTable)
 	w("table ip %s {", forwardTable)
 
 	// A named set makes the client list one atom, so matching is a set lookup

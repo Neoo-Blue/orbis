@@ -708,3 +708,15 @@ export interface InterceptStatus {
   stats: InterceptStats
   gateway: string
 }
+
+// ---- local DNS records ----
+
+export interface DNSRecord {
+  name: string
+  type: string
+  value: string
+  ttl?: number
+  priority?: number
+  weight?: number
+  port?: number
+}

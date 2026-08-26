@@ -254,6 +254,21 @@ type DNSConfig struct {
 	// Encrypted serves DoH/DoT to clients on this network. Without it clients
 	// reach this resolver over plaintext port 53.
 	Encrypted EncryptedDNSConfig `yaml:"encrypted" json:"encrypted"`
+	// Records are operator-defined local DNS records, which make Orbis
+	// authoritative for your own names alongside filtering everything else.
+	Records []DNSRecord `yaml:"records" json:"records"`
+}
+
+// DNSRecord is one operator-defined answer. Type is A, AAAA, CNAME, TXT, MX,
+// NS, SRV or PTR; Priority/Weight/Port are only read for MX and SRV.
+type DNSRecord struct {
+	Name     string `yaml:"name" json:"name"`
+	Type     string `yaml:"type" json:"type"`
+	Value    string `yaml:"value" json:"value"`
+	TTL      uint32 `yaml:"ttl" json:"ttl"`
+	Priority uint16 `yaml:"priority" json:"priority"`
+	Weight   uint16 `yaml:"weight" json:"weight"`
+	Port     uint16 `yaml:"port" json:"port"`
 }
 
 // DNSRewrite pins a name to an answer. Answer may be an IP (producing A/AAAA),

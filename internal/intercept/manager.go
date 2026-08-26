@@ -59,6 +59,13 @@ func (m *Manager) Apply(ctx context.Context, cfg Config) error {
 
 	if !cfg.Enabled || len(cfg.Clients) == 0 {
 		m.stopLocked()
+		// nftables state outlives this process, so a table left by a previous
+		// run has to be removed explicitly even when this run never engaged.
+		ctx := m.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		_ = RemoveForwarding(ctx)
 		return nil
 	}
 

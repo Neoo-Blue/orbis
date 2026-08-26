@@ -91,6 +91,9 @@ type App struct {
 	policyMu sync.RWMutex
 	policies map[string]*store.Policy
 
+	recordsMu sync.RWMutex
+	records   *dnsproxy.RecordSet
+
 	startedAt time.Time
 }
 
@@ -220,6 +223,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 
 	// Encrypted DNS for clients (DoT/DoH), sharing the resolver's policy path.
 	a.DNSCrypt = dnsproxy.NewEncrypted(a.DNS, logf)
+	a.ReloadRecords()
 
 	// DHCP.
 	a.DHCP = dhcp.New(cfg, st, dhcp.Hooks{OnLease: a.onLease}, logf)
@@ -659,6 +663,18 @@ func (a *App) onLease(lease store.Lease, fingerprint, vendorClass string) {
 // devices resolve each other by hostname without any extra configuration.
 func (a *App) localRecords(qname string, qtype uint16) []dns.RR {
 	cfg := a.Cfg.Snapshot()
+
+	// Operator-defined records win over everything: they are an explicit
+	// instruction, and are checked before the DHCP-derived names below.
+	a.recordsMu.RLock()
+	rs := a.records
+	a.recordsMu.RUnlock()
+	if rs != nil {
+		if rrs := rs.Lookup(qname, qtype); len(rrs) > 0 {
+			return rrs
+		}
+	}
+
 	domain := strings.ToLower(cfg.DNS.LocalDomain)
 	name := strings.ToLower(strings.TrimSuffix(qname, "."))
 

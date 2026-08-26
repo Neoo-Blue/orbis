@@ -1,0 +1,42 @@
+services:
+  orbis:
+    image: ghcr.io/neoo-blue/orbis:latest
+    # Or build locally:
+    # build: { context: ., args: { VERSION: dev } }
+    container_name: orbis
+    restart: unless-stopped
+
+    # Host networking is not a shortcut here, it is the only arrangement that
+    # works. Orbis reads raw frames off an interface to pull SNI out of a
+    # ClientHello; inside a bridge network the only frames it would ever see are
+    # its own. It also loads an nftables ruleset for the host's forwarding path,
+    # which has no meaning from inside a namespace.
+    network_mode: host
+
+    cap_add:
+      - NET_ADMIN   # nftables, routing, interface configuration
+      - NET_RAW     # AF_PACKET capture
+      - SYS_MODULE  # nft_* and conntrack modules, if the host has not loaded them
+
+    volumes:
+      - orbis-config:/etc/orbis
+      - orbis-data:/var/lib/orbis
+      # Conntrack byte counters are read over netlink, but the module has to be
+      # loaded on the host; this lets the container load it if it is missing.
+      - /lib/modules:/lib/modules:ro
+
+    environment:
+      - TZ=UTC
+
+    # WireGuard needs the TUN device. Comment this out if you are not using the
+    # VPN server; everything else works without it.
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+
+volumes:
+  orbis-config:
+  orbis-data:

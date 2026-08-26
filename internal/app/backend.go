@@ -484,3 +484,13 @@ func (a *App) SetConsentEnrolled(ids []string) {
 	a.Consent.SetEnrolled(ids)
 	a.Store.Audit("api", "consent.enrol", fmt.Sprint(len(ids))+" device(s)", "", "", "ok")
 }
+
+// PolicyForClient resolves the policy attached to a device id, or nil. The DNS
+// tooling needs this to explain a block that only applies to one device.
+func (a *App) PolicyForClient(clientID string) *store.Policy {
+	c, err := a.Store.Client(clientID)
+	if err != nil || c == nil || c.PolicyID == "" {
+		return nil
+	}
+	return a.policyByID(c.PolicyID)
+}

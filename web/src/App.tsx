@@ -10,6 +10,7 @@ import { FlowsPage } from './pages/Flows'
 import { DNSPage } from './pages/DNS'
 import { AdBlockPage } from './pages/AdBlock'
 import { YouTubePage } from './pages/YouTube'
+import { DNSToolsPage } from './pages/DNSTools'
 import { GatewayPage } from './pages/Gateway'
 import { ConsentPage } from './pages/Consent'
 import { FirewallPage } from './pages/Firewall'
@@ -23,7 +24,7 @@ import { ErrorBoundary } from './ErrorBoundary'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools'
 
 const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
@@ -32,6 +33,7 @@ const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?
   { id: 'clients', label: 'Devices', icon: 'devices' },
   { id: 'dns', label: 'DNS', icon: 'dns', group: 'Filtering' },
   { id: 'adblock', label: 'Ad blocking', icon: 'block' },
+  { id: 'dnstools', label: 'Domain tester', icon: 'search' },
   { id: 'youtube', label: 'YouTube', icon: 'tv' },
   { id: 'consent', label: 'Ask first', icon: 'shield' },
   { id: 'firewall', label: 'Firewall', icon: 'shield', group: 'Network' },
@@ -209,6 +211,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {route === 'clients' && <ClientsPage />}
           {route === 'dns' && <DNSPage events={liveEvents} />}
           {route === 'adblock' && <AdBlockPage />}
+          {route === 'dnstools' && <DNSToolsPage />}
           {route === 'youtube' && <YouTubePage />}
           {route === 'consent' && <ConsentPage />}
           {route === 'gateway' && <GatewayPage />}

@@ -5,7 +5,7 @@ import type {
   YouTubeStatus, DiscoveredScreen, LoungeDevice,
   NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
   ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
-  SpeedResult, ConsentStatus, ConsentRule,
+  SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
 } from './types'
 
 export class ApiError extends Error {
@@ -372,6 +372,18 @@ export const api = {
     forget: (client_id: string, host: string, scope: string) =>
       post<{ ok: boolean }>('/consent/forget', { client_id, host, scope }),
     clear: () => post<{ cleared: number }>('/consent/clear'),
+  },
+
+  dnstools: {
+    diagnose: (domain: string, opts: { client_id?: string; resolve?: boolean } = {}) =>
+      post<Diagnosis>('/dnstools/diagnose', { domain, resolve: true, ...opts }),
+    allow: (domain: string, note?: string) =>
+      post<{ ok: boolean }>('/dnstools/allow', { domain, note }),
+    block: (domain: string, wildcard = false, note?: string) =>
+      post<{ ok: boolean }>('/dnstools/block', { domain, wildcard, note }),
+    unblock: (domain: string) => post<{ ok: boolean }>('/dnstools/unblock', { domain }),
+    importList: (text: string, opts: { action?: 'block' | 'allow'; dry_run?: boolean; note?: string } = {}) =>
+      post<ImportResult>('/dnstools/import', { text, ...opts }),
   },
 
   config: {

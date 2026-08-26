@@ -124,6 +124,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountOps(r)
 	s.mountGateway(r)
 	s.mountConsent(r)
+	s.mountDNSTools(r)
 
 	r.Route("/events", func(r chi.Router) {
 		r.Get("/", s.handleEvents)

@@ -581,3 +581,35 @@ export interface ConsentRule {
 export interface ConsentStatus {
   enrolled: string[]; pending: ConsentRequest[]; rules: ConsentRule[]
 }
+
+// ---- DNS tooling ----
+
+export interface DiagnoseStep {
+  stage: string
+  hit: boolean
+  verdict: 'allow' | 'block' | 'none'
+  detail: string
+  rule?: string
+  source?: string
+}
+
+export interface Diagnosis {
+  domain: string
+  verdict: 'allow' | 'block'
+  reason: string
+  steps: DiagnoseStep[]
+  cname_chain: string[] | null
+  answers: string[] | null
+  policy: string
+}
+
+export interface ImportResult {
+  exact: number
+  wildcard: number
+  total: number
+  sample: string[]
+  risky: string[] | null
+  action: string
+  dry_run: boolean
+  imported: number
+}

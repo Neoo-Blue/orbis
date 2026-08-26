@@ -372,6 +372,18 @@ func renderRuleset(cfg config.Config, rules []store.Rule) (string, error) {
 	}
 	w("    ct state established,related accept")
 	w("    ct state invalid drop")
+	if cfg.MITM.Enabled && cfg.MITM.Filters.YouTube && cfg.MITM.BlockQUIC {
+		// YouTube and Chrome default to HTTP/3 over QUIC, which walks straight
+		// past a TCP-only intercept proxy. Rejecting UDP/443 for intercepted
+		// zones forces the well-behaved TCP fallback the filter can see. Reject
+		// (not drop) so the client fails over immediately instead of stalling.
+		for _, z := range cfg.Firewall.Zones {
+			if z.Trust == "wan" || len(z.Interfaces) == 0 {
+				continue
+			}
+			w("    iifname @zone_%s udp dport 443 counter reject comment \"force QUIC to TCP for filtering\"", sanitize(z.Name))
+		}
+	}
 	// Runtime blocks take effect before any user rule can allow them.
 	w("    ip daddr @orbis_blocked_v4 counter reject with icmp type admin-prohibited comment \"orbis dynamic block\"")
 	w("    ip6 daddr @orbis_blocked_v6 counter reject with icmpv6 type admin-prohibited comment \"orbis dynamic block\"")

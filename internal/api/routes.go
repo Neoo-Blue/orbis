@@ -120,6 +120,8 @@ func (s *Server) mount(r chi.Router) {
 		r.Post("/{action}", s.handleProxyAction)
 	})
 
+	s.mountYouTube(r)
+
 	r.Route("/events", func(r chi.Router) {
 		r.Get("/", s.handleEvents)
 		r.Post("/{id}/ack", s.handleAckEvent)

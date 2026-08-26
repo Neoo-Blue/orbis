@@ -2,6 +2,7 @@ import type {
   AdCandidate, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery,
   EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule,
   Summary, SysctlStatus, SystemStatus, TailscaleStatus, WGPeer,
+  YouTubeStatus, DiscoveredScreen, LoungeDevice,
 } from './types'
 
 export class ApiError extends Error {
@@ -298,6 +299,21 @@ export const api = {
       ),
     history: (id: string) => get<{ messages: import('./types').ChatMessage[] }>(`/chat/conversations/${id}`),
     remove: (id: string) => del<{ ok: boolean }>(`/chat/conversations/${id}`),
+  },
+
+  youtube: {
+    status: () => get<YouTubeStatus>('/youtube/status'),
+    discover: () => post<DiscoveredScreen[]>('/youtube/discover'),
+    pair: (code: string, name?: string) => post<LoungeDevice>('/youtube/pair', { code, name }),
+    adopt: (screen_id: string, name?: string, offset?: number) =>
+      post<YouTubeStatus>('/youtube/adopt', { screen_id, name, offset }),
+    forget: (screen_id: string) => post<YouTubeStatus>('/youtube/forget', { screen_id }),
+    settings: (
+      body: Partial<{
+        enabled: boolean; auto_discover: boolean; skip_ads: boolean
+        mute_ads: boolean; categories: string[]; min_skip_length: number
+      }>,
+    ) => post<YouTubeStatus>('/youtube/settings', body),
   },
 
   config: {

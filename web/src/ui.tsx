@@ -42,6 +42,7 @@ export const Icons = {
   chevron: svg(<path d="M9 6l6 6-6 6" />),
   route: svg(<><circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M6 9v4a5 5 0 0 0 5 5h4" /></>),
   spark: svg(<path d="M13 2L4.5 13H11l-1 9 8.5-11H12z" />),
+  tv: svg(<><rect x="2.5" y="4" width="19" height="13" rx="1.8" /><path d="M8 21h8M12 17v4" /><path d="M10.5 8.5l4 2.5-4 2.5z" /></>),
 }
 
 /* ---------- toasts ---------- */

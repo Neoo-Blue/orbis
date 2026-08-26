@@ -431,3 +431,53 @@ export interface AppConfig {
   }
   geoip: { city_db: string; asn_db: string }
 }
+
+// ---- YouTube (Lounge engine) ----
+
+export interface LoungeDeviceStats {
+  screen_id: string
+  name: string
+  connected: boolean
+  video_id: string
+  position: number
+  ad_active: boolean
+  ads_handled: number
+  segments_skipped: number
+  segments_loaded: number
+  last_error?: string
+  last_event?: string
+}
+
+export interface DiscoveredScreen {
+  name: string
+  model: string
+  location: string
+  host: string
+  screen_id: string
+  app_state: string
+}
+
+export interface CoverageRow {
+  device_class: string
+  engine: string
+  no_ca: boolean
+  covered: boolean
+  note: string
+}
+
+export interface YouTubeStatus {
+  enabled: boolean
+  auto_discover: boolean
+  skip_ads: boolean
+  mute_ads: boolean
+  categories: string[]
+  devices: LoungeDeviceStats[]
+  discovered: DiscoveredScreen[]
+  coverage: CoverageRow[]
+}
+
+export interface LoungeDevice {
+  screen_id: string
+  name: string
+  offset: number
+}

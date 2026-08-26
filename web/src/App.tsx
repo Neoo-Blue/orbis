@@ -9,6 +9,7 @@ import { ClientsPage } from './pages/Clients'
 import { FlowsPage } from './pages/Flows'
 import { DNSPage } from './pages/DNS'
 import { AdBlockPage } from './pages/AdBlock'
+import { YouTubePage } from './pages/YouTube'
 import { FirewallPage } from './pages/Firewall'
 import { NetworkPage } from './pages/Network'
 import { VPNPage } from './pages/VPN'
@@ -20,7 +21,7 @@ import { ErrorBoundary } from './ErrorBoundary'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube'
 
 const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
@@ -29,6 +30,7 @@ const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?
   { id: 'clients', label: 'Devices', icon: 'devices' },
   { id: 'dns', label: 'DNS', icon: 'dns', group: 'Filtering' },
   { id: 'adblock', label: 'Ad blocking', icon: 'block' },
+  { id: 'youtube', label: 'YouTube', icon: 'tv' },
   { id: 'firewall', label: 'Firewall', icon: 'shield', group: 'Network' },
   { id: 'network', label: 'DHCP & LAN', icon: 'route' },
   { id: 'vpn', label: 'VPN', icon: 'key' },
@@ -203,6 +205,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {route === 'clients' && <ClientsPage />}
           {route === 'dns' && <DNSPage events={liveEvents} />}
           {route === 'adblock' && <AdBlockPage />}
+          {route === 'youtube' && <YouTubePage />}
           {route === 'firewall' && <FirewallPage status={status} />}
           {route === 'network' && <NetworkPage status={status} />}
           {route === 'vpn' && <VPNPage />}

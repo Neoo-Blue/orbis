@@ -41,6 +41,7 @@ type Config struct {
 	DNS       DNSConfig       `yaml:"dns" json:"dns"`
 	AdBlock   AdBlockConfig   `yaml:"adblock" json:"adblock"`
 	MITM      MITMConfig      `yaml:"mitm" json:"mitm"`
+	YouTube   YouTubeConfig   `yaml:"youtube" json:"youtube"`
 	Firewall  FirewallConfig  `yaml:"firewall" json:"firewall"`
 	DHCP      DHCPConfig      `yaml:"dhcp" json:"dhcp"`
 	VPN       VPNConfig       `yaml:"vpn" json:"vpn"`
@@ -250,6 +251,11 @@ type MITMConfig struct {
 	// OnlyClients limits interception to specific IP/MACs. Empty = all
 	// clients whose traffic is redirected here.
 	OnlyClients []string `yaml:"only_clients" json:"only_clients"`
+	// BlockQUIC rejects UDP/443 for intercepted zones so YouTube and Chrome,
+	// which default to HTTP/3 over QUIC, fall back to the TCP path the proxy
+	// can actually see. Without it the InnerTube filter silently does nothing
+	// on modern clients even with the CA installed.
+	BlockQUIC bool `yaml:"block_quic" json:"block_quic"`
 	// Filters toggles the individual response rewriters.
 	Filters MITMFilters `yaml:"filters" json:"filters"`
 }
@@ -266,6 +272,41 @@ type MITMFilters struct {
 	HTMLCosmetic bool `yaml:"html_cosmetic" json:"html_cosmetic"`
 	// TrackerBeacons drops known analytics/beacon requests outright.
 	TrackerBeacons bool `yaml:"tracker_beacons" json:"tracker_beacons"`
+}
+
+// YouTubeConfig groups the YouTube-specific ad controls that do not belong to
+// the generic MITM proxy. The Lounge engine is the no-CA path: it drives the
+// player on cast-capable devices (TVs, Apple TV, consoles) instead of rewriting
+// the encrypted stream, so it needs nothing installed on the device.
+type YouTubeConfig struct {
+	Lounge LoungeConfig `yaml:"lounge" json:"lounge"`
+}
+
+type LoungeConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// AutoDiscover scans the LAN for cast-capable screens and adopts the ones
+	// that expose a screen id over DIAL, with no manual pairing.
+	AutoDiscover bool `yaml:"auto_discover" json:"auto_discover"`
+	// SkipAds sends the skip command as soon as an ad becomes skippable.
+	SkipAds bool `yaml:"skip_ads" json:"skip_ads"`
+	// MuteAds silences the player for the (often unskippable) opening seconds.
+	MuteAds bool `yaml:"mute_ads" json:"mute_ads"`
+	// SkipCategories are SponsorBlock categories to seek past (in-video
+	// sponsor reads, intros, self-promo). Separate from Google's own ads.
+	SkipCategories []string `yaml:"skip_categories" json:"skip_categories"`
+	// MinSkipLength drops SponsorBlock segments shorter than this many seconds.
+	MinSkipLength float64 `yaml:"min_skip_length" json:"min_skip_length"`
+	// SponsorBlockAPI overrides the segment database base URL.
+	SponsorBlockAPI string `yaml:"sponsorblock_api" json:"sponsorblock_api"`
+	// Devices are the paired/adopted screens. ScreenID is a durable control
+	// credential, which is why the config file is mode 0600.
+	Devices []LoungeDevice `yaml:"devices" json:"devices"`
+}
+
+type LoungeDevice struct {
+	ScreenID string  `yaml:"screen_id" json:"screen_id"`
+	Name     string  `yaml:"name" json:"name"`
+	Offset   float64 `yaml:"offset" json:"offset"`
 }
 
 type FirewallConfig struct {
@@ -558,11 +599,26 @@ func Default() *Config {
 				"*.apple.com", "*.icloud.com", "*.windowsupdate.com",
 				"*.bank*", "*.chase.com", "*.paypal.com", "*.gov",
 			},
+			BlockQUIC: true,
 			Filters: MITMFilters{
 				YouTube:        true,
 				GenericJSONAds: true,
 				HTMLCosmetic:   false,
 				TrackerBeacons: true,
+			},
+		},
+		YouTube: YouTubeConfig{
+			Lounge: LoungeConfig{
+				Enabled:      false,
+				AutoDiscover: true,
+				SkipAds:      true,
+				MuteAds:      true,
+				SkipCategories: []string{
+					"sponsor", "selfpromo", "interaction",
+					"intro", "outro", "preview", "music_offtopic",
+				},
+				MinSkipLength:   1,
+				SponsorBlockAPI: "https://sponsor.ajay.app/api/",
 			},
 		},
 		Firewall: FirewallConfig{

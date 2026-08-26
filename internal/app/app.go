@@ -22,6 +22,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/flows"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
+	"github.com/Neoo-Blue/orbis/internal/lounge"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
 	"github.com/Neoo-Blue/orbis/internal/store"
@@ -54,6 +55,7 @@ type App struct {
 	Net       *netconf.Manager
 	MITM      *mitm.Proxy
 	CA        *mitm.CA
+	Lounge    *lounge.Manager
 
 	AI        *ai.Client
 	Assistant *ai.Assistant
@@ -172,6 +174,10 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	// DHCP.
 	a.DHCP = dhcp.New(cfg, st, dhcp.Hooks{OnLease: a.onLease}, logf)
 
+	// Native YouTube ad control (Lounge engine): no CA, drives the player on
+	// cast-capable devices.
+	a.Lounge = lounge.New(cfg, logf)
+
 	// Capture.
 	a.Capture = flows.NewCapturer(a.Tracker, cfg.Capture.SnapLen, cfg.Capture.Interfaces, logf)
 	a.Capture.SetHTTPHook(func(clientIP netip.Addr, req *dpi.HTTPRequest) {
@@ -286,6 +292,10 @@ func (a *App) Start() {
 		}
 	}
 
+	// The Lounge manager always runs so the UI can discover and pair devices;
+	// it starts controllers only when the feature is enabled.
+	a.Lounge.Start(a.ctx)
+
 	if cfg.AI.Enabled && cfg.AI.Anomaly.Enabled {
 		a.wg.Add(1)
 		go func() { defer a.wg.Done(); a.Analyzer.Run(a.ctx) }()
@@ -336,6 +346,9 @@ func (a *App) Stop() {
 	a.stop()
 	if a.MITM != nil {
 		a.MITM.Stop()
+	}
+	if a.Lounge != nil {
+		a.Lounge.Stop()
 	}
 	a.DNS.Stop()
 	a.DHCP.Stop()

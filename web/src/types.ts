@@ -636,3 +636,46 @@ export interface OnboardingState {
   adblock: boolean
   lounge_enabled: boolean
 }
+
+// ---- topology ----
+
+export interface TopoNode {
+  id: string
+  ip: string
+  mac?: string
+  hostname?: string
+  label: string
+  vendor?: string
+  role: string
+  platform?: string
+  confidence: 'confirmed' | 'inferred' | 'guessed'
+  evidence?: string[]
+  virtual: boolean
+  parent_id?: string
+  parent_basis?: string
+  services?: string[]
+  online: boolean
+  bytes_in: number
+  bytes_out: number
+  conns_in: number
+  conns_out: number
+  external_conns: number
+  last_seen?: string
+}
+
+export interface TopoEdge {
+  from: string
+  to: string
+  kind: 'hosts' | 'traffic'
+  bytes?: number
+  conns?: number
+  direction?: string
+}
+
+export interface TopoGraph {
+  nodes: TopoNode[]
+  edges: TopoEdge[]
+  subnet?: string
+  scanned_at?: string
+  notes?: string[]
+}

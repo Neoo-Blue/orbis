@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -493,4 +494,20 @@ func (a *App) PolicyForClient(clientID string) *store.Policy {
 		return nil
 	}
 	return a.policyByID(c.PolicyID)
+}
+
+// DefaultGateway reports the next hop this node routes through, which the
+// topology map treats as a fact rather than an inference.
+func (a *App) DefaultGateway() string {
+	out, err := exec.Command("ip", "-4", "route", "show", "default").Output()
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(string(out))
+	for i, f := range fields {
+		if f == "via" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
 }

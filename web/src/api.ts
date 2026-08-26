@@ -6,7 +6,7 @@ import type {
   NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
   ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
-  OnboardingState, PlacementCheck,
+  OnboardingState, PlacementCheck, TopoGraph,
 } from './types'
 
 export class ApiError extends Error {
@@ -392,6 +392,11 @@ export const api = {
     apply: (body: Record<string, unknown>) =>
       post<{ ok: boolean; onboarded: boolean; placement: PlacementCheck[] }>('/onboarding/apply', body),
     reset: () => post<{ ok: boolean }>('/onboarding/reset'),
+  },
+
+  topology: {
+    get: () => get<TopoGraph>('/topology'),
+    scan: () => post<TopoGraph>('/topology/scan'),
   },
 
   config: {

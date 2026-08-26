@@ -11,6 +11,7 @@ import { DNSPage } from './pages/DNS'
 import { AdBlockPage } from './pages/AdBlock'
 import { YouTubePage } from './pages/YouTube'
 import { DNSToolsPage } from './pages/DNSTools'
+import { TopologyPage } from './pages/Topology'
 import { GatewayPage } from './pages/Gateway'
 import { ConsentPage } from './pages/Consent'
 import { FirewallPage } from './pages/Firewall'
@@ -25,13 +26,14 @@ import { ErrorBoundary } from './ErrorBoundary'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology'
 
 const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
   { id: 'globe', label: 'Globe', icon: 'globe' },
   { id: 'flows', label: 'Connections', icon: 'activity' },
   { id: 'clients', label: 'Devices', icon: 'devices' },
+  { id: 'topology', label: 'Topology', icon: 'grid' },
   { id: 'dns', label: 'DNS', icon: 'dns', group: 'Filtering' },
   { id: 'adblock', label: 'Ad blocking', icon: 'block' },
   { id: 'dnstools', label: 'Domain tester', icon: 'search' },
@@ -233,6 +235,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {route === 'globe' && <GlobePage events={liveEvents} />}
           {route === 'flows' && <FlowsPage events={liveEvents} />}
           {route === 'clients' && <ClientsPage />}
+          {route === 'topology' && <TopologyPage />}
           {route === 'dns' && <DNSPage events={liveEvents} />}
           {route === 'adblock' && <AdBlockPage />}
           {route === 'dnstools' && <DNSToolsPage />}

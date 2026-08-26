@@ -29,6 +29,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/notify"
 	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"github.com/Neoo-Blue/orbis/internal/store"
+	"github.com/Neoo-Blue/orbis/internal/topology"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
 	"github.com/google/uuid"
 	"github.com/miekg/dns"
@@ -59,6 +60,7 @@ type App struct {
 	Net       *netconf.Manager
 	WAN       *netconf.WANMonitor
 	PortMap   *portmap.Server
+	Topology  *topology.Scanner
 	MITM      *mitm.Proxy
 	CA        *mitm.CA
 	Lounge    *lounge.Manager
@@ -183,6 +185,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Egress = vpn.NewEgressManager(logf)
 	a.Net = netconf.NewManager(logf)
 	a.WAN = netconf.NewWANMonitor(logf)
+	a.Topology = topology.NewScanner()
 	a.PortMap = portmap.New(func() portmap.Config {
 		return cfg.Snapshot().Network.PortMap
 	}, logf)

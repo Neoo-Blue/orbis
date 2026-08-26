@@ -109,7 +109,7 @@ func (f *FilterChain) FilterResponse(host, path string, req *http.Request, resp 
 	modified := false
 
 	switch {
-	case c.MITM.Filters.YouTube && isYouTubeHost(host) && isJSON:
+	case c.MITM.Filters.YouTube && isYouTubeHost(host) && isJSON && wantsYouTubeFilter(path):
 		if out, n := stripYouTubeAds(body); n > 0 {
 			body = out
 			modified = true
@@ -188,6 +188,40 @@ var youtubeAdEndpoints = []string{
 	"/youtubei/v1/player/ad_break", "/pcs/activeview", "/aclk",
 	"/pagead/viewthroughconversion", "/api/stats/qoe?ad",
 	"/youtubei/v1/att/get", "/generate_204?", "/csi_204",
+	// The ad-serving and measurement paths the player retries against when
+	// it cannot place an ad. Dropping them stops the retry loop rather than
+	// leaving it spinning.
+	"/youtubei/v1/log_interaction", "/api/stats/atr",
+	"/doubleclick", "/googleads", "/adservice",
+}
+
+// youtubeFilterPaths are the responses worth rewriting. Everything else on a
+// YouTube host — thumbnails, video segments, the static bundle — is passed
+// through untouched, which is what keeps the interception cheap.
+var youtubeFilterPaths = []string{
+	"/youtubei/v1/player",
+	"/youtubei/v1/next",
+	"/youtubei/v1/browse",
+	"/youtubei/v1/search",
+	"/youtubei/v1/reel/reel_item_watch",
+	"/youtubei/v1/reel/reel_watch_sequence",
+	"/youtubei/v1/guide",
+	"/get_video_info",
+	"/watch",
+	"/results",
+	"/shorts",
+}
+
+// wantsYouTubeFilter reports whether a path is one of the responses that
+// carries ad structures.
+func wantsYouTubeFilter(path string) bool {
+	lp := strings.ToLower(path)
+	for _, p := range youtubeFilterPaths {
+		if strings.HasPrefix(lp, p) || strings.Contains(lp, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // beaconPathFragments are analytics endpoints across the wider web.
@@ -225,16 +259,30 @@ var youtubeAdKeys = []string{
 	"adServingDataEntity",
 	"adsEngagementPanels",
 	"importantForAds",
+	// Newer response shapes. YouTube renames and relocates these regularly,
+	// which is why the filter removes a set of keys rather than matching one
+	// exact document layout — a rename should cost one line here, not a
+	// rewrite, and an unrecognised key simply is not removed rather than
+	// corrupting the response.
+	"adBreakParams",
+	"adRequestParams",
+	"playerAdParams",
+	"adsData",
+	"clientForcedAdParams",
+	"instreamAdPlayerOverlayRenderer",
+	"adNotify",
 }
 
 // stripYouTubeAds removes ad structures from an InnerTube JSON response and
 // reports how many were removed.
 func stripYouTubeAds(body []byte) ([]byte, int) {
 	// A cheap prefilter: most responses are not player responses at all, and
-	// unmarshalling a 2 MB JSON blob for nothing is wasteful.
-	if !bytes.Contains(body, []byte("adPlacements")) &&
-		!bytes.Contains(body, []byte("playerAds")) &&
-		!bytes.Contains(body, []byte("adSlots")) {
+	// unmarshalling a multi-megabyte JSON blob for nothing is wasteful. The
+	// probe set has to include every key the walker removes, or a response
+	// carrying only a newer key would be skipped entirely.
+	if !containsAnyKey(body, youtubeAdKeys) &&
+		!bytes.Contains(body, []byte("adSlotRenderer")) &&
+		!bytes.Contains(body, []byte("promotedSparklesWebRenderer")) {
 		return body, 0
 	}
 	var doc map[string]any
@@ -248,8 +296,12 @@ func stripYouTubeAds(body []byte) ([]byte, int) {
 			removed++
 		}
 	}
-	// Nested locations used by the newer response shape.
+	// Nested locations used by the newer response shapes.
 	removed += removeNested(doc, []string{"playerResponse"}, youtubeAdKeys)
+	// The watch page (/youtubei/v1/next) and Shorts (reel_item_watch) carry
+	// ads in their own containers, which the player-response keys miss.
+	removed += walkRemoveKeys(doc, youtubeAdKeys, 0)
+	removed += walkRemoveRenderers(doc, 0)
 	removed += removeNested(doc, []string{"playerConfig", "adConfig"}, nil)
 	removed += removeNested(doc, []string{"playbackTracking", "atrUrl"}, nil)
 	removed += removeNested(doc, []string{"playbackTracking", "ptrackingUrl"}, nil)
@@ -270,6 +322,119 @@ func stripYouTubeAds(body []byte) ([]byte, int) {
 		return body, 0
 	}
 	return out, removed
+}
+
+// containsAnyKey is the prefilter: a cheap byte scan for any of the keys the
+// walker would remove.
+func containsAnyKey(body []byte, keys []string) bool {
+	for _, k := range keys {
+		if bytes.Contains(body, []byte(`"`+k+`"`)) {
+			return true
+		}
+	}
+	return false
+}
+
+// walkRemoveKeys removes the named keys wherever they appear, not only at the
+// top level. YouTube moves them between response shapes, and a filter that
+// only knows one layout stops working the week the layout changes.
+func walkRemoveKeys(node any, keys []string, depth int) int {
+	if depth > 40 {
+		return 0
+	}
+	removed := 0
+	switch v := node.(type) {
+	case map[string]any:
+		for _, k := range keys {
+			if _, ok := v[k]; ok {
+				delete(v, k)
+				removed++
+			}
+		}
+		for _, child := range v {
+			removed += walkRemoveKeys(child, keys, depth+1)
+		}
+	case []any:
+		for _, child := range v {
+			removed += walkRemoveKeys(child, keys, depth+1)
+		}
+	}
+	return removed
+}
+
+// adRenderers are the container types YouTube uses for promoted items in feed
+// and watch-page responses. Removing the item that holds one leaves a gap the
+// client handles as an unfilled slot.
+var adRenderers = []string{
+	"adSlotRenderer",
+	"promotedSparklesWebRenderer",
+	"promotedSparklesTextSearchRenderer",
+	"promotedVideoRenderer",
+	"displayAdRenderer",
+	"searchPyvRenderer",
+	"compactPromotedVideoRenderer",
+	"instreamVideoAdRenderer",
+	"bannerPromoRenderer",
+	"statementBannerRenderer",
+	"backgroundPromoRenderer",
+	"brandVideoSingletonRenderer",
+	"brandVideoShelfRenderer",
+	"inFeedAdLayoutRenderer",
+}
+
+// walkRemoveRenderers drops array entries whose sole content is an ad
+// renderer. Removing the entry rather than blanking it is what makes the
+// surrounding list close up instead of showing an empty card.
+func walkRemoveRenderers(node any, depth int) int {
+	if depth > 40 {
+		return 0
+	}
+	removed := 0
+	switch v := node.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if arr, ok := child.([]any); ok {
+				filtered := arr[:0]
+				for _, item := range arr {
+					if isAdItem(item) {
+						removed++
+						continue
+					}
+					filtered = append(filtered, item)
+				}
+				v[key] = filtered
+			}
+			removed += walkRemoveRenderers(child, depth+1)
+		}
+	case []any:
+		for _, child := range v {
+			removed += walkRemoveRenderers(child, depth+1)
+		}
+	}
+	return removed
+}
+
+func isAdItem(item any) bool {
+	m, ok := item.(map[string]any)
+	if !ok || len(m) == 0 {
+		return false
+	}
+	// Only treat an entry as an ad when every key it has is an ad renderer;
+	// a mixed object is content that happens to carry a promotion, and
+	// deleting it would remove real results from the page.
+	for k := range m {
+		matched := false
+		for _, r := range adRenderers {
+			if k == r {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 // clearAdState normalises the flags the player checks before deciding to run

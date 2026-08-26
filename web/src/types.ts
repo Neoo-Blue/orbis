@@ -283,6 +283,9 @@ export interface SystemStatus {
 export interface GlobeArc {
   id: string
   client_id?: string
+  direction: 'in' | 'out' | 'local'
+  bytes_in: number
+  bytes_out: number
   start_lat: number
   start_lng: number
   end_lat: number

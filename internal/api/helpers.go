@@ -43,6 +43,12 @@ type InterfaceInfo struct {
 	Virtual   bool     `json:"virtual"`
 }
 
+// loopbackOrVirtual marks the interfaces a VLAN should not be built on:
+// stacking a tag on a tunnel or another VLAN is almost never intended.
+func (i InterfaceInfo) loopbackOrVirtual() bool {
+	return i.Loopback || i.Virtual || strings.Contains(i.Name, ".")
+}
+
 func listInterfaces() []InterfaceInfo {
 	ifaces, err := net.Interfaces()
 	if err != nil {

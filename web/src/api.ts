@@ -217,8 +217,65 @@ export const api = {
     acceptRoutes: (enabled: boolean) => post<TailscaleStatus>('/tailscale/accept-routes', { enabled }),
   },
 
+  egress: {
+    status: () =>
+      get<{
+        tunnels: Array<{
+          name: string; enabled: boolean; interface: string; addresses: string[]
+          dns: string[]; mtu: number; peer_public_key: string; endpoint: string
+          allowed_ips: string[]; keepalive: number; route_table: number
+          kill_switch: boolean; note: string; has_preshared_key: boolean
+        }>
+        targets: Array<{
+          id: string; name: string; kind: string; interface: string
+          route_table: number; up: boolean; kill_switch: boolean; detail: string
+        }>
+        routes: Array<{ source: string; target: string; label: string; client_id: string }>
+        status: { assignments: unknown[]; applied: string[]; active_rules: string[]; last_error: string }
+        lan: string[]
+        warnings: string[]
+      }>('/vpn/out'),
+    importTunnel: (body: { name: string; config: string; kill_switch: boolean; enable: boolean }) =>
+      post<{ saved: boolean; ignored?: string[]; warning?: string }>('/vpn/out/tunnels/import', body),
+    updateTunnel: (name: string, body: Record<string, unknown>) =>
+      put<{ ok: boolean }>(`/vpn/out/tunnels/${encodeURIComponent(name)}`, body),
+    deleteTunnel: (name: string) => del<{ ok: boolean }>(`/vpn/out/tunnels/${encodeURIComponent(name)}`),
+    tunnelAction: (name: string, action: 'start' | 'stop') =>
+      post<Record<string, unknown>>(`/vpn/out/tunnels/${encodeURIComponent(name)}/${action}`),
+    assign: (client_id: string, target: string) =>
+      post<{ ok: boolean }>('/vpn/out/assign', { client_id, target }),
+    assignAll: (target: string) => post<{ ok: boolean }>('/vpn/out/assign-all', { target }),
+  },
+
+  network: {
+    vlans: () =>
+      get<{
+        vlans: Array<{
+          name: string; parent: string; id: number; address: string; mtu: number
+          enabled: boolean; zone: string; description: string
+          present: boolean; up: boolean; addresses: string[]
+          rx_bytes: number; tx_bytes: number; error?: string
+        }>
+        available: boolean; reason: string; last_error: string; parents: string[]
+      }>('/network/vlans'),
+    saveVLAN: (v: Record<string, unknown>, name?: string) =>
+      name
+        ? put<{ saved: boolean; warning?: string }>(`/network/vlans/${encodeURIComponent(name)}`, v)
+        : post<{ saved: boolean; warning?: string }>('/network/vlans', v),
+    deleteVLAN: (name: string) => del<{ ok: boolean }>(`/network/vlans/${encodeURIComponent(name)}`),
+  },
+
   proxy: {
     status: () => get<Record<string, unknown>>('/proxy/status'),
+    readiness: () =>
+      get<{
+        checks: Array<{ name: string; ok: boolean; detail: string; fix?: string }>
+        next_step: string
+        stats: Record<string, unknown>
+        intercept_hosts: string[]
+        only_clients: string[]
+        mode: string
+      }>('/proxy/readiness'),
     ca: () =>
       get<{
         ca: Record<string, unknown>

@@ -339,7 +339,18 @@ func (t *Tailscale) Status(ctx context.Context) *Status {
 	lastErr := t.lastError
 	t.mu.Unlock()
 
-	st := &Status{Available: t.available, LastError: lastErr, Peers: []Node{}, AvailableExitNodes: []Node{}}
+	// Every slice is initialised, not left nil. A nil Go slice marshals to
+	// JSON null, and `null.length` in the browser takes the whole page down —
+	// which is exactly what happened on a node whose routes had never been
+	// advertised.
+	st := &Status{
+		Available: t.available, LastError: lastErr,
+		Peers:              []Node{},
+		AvailableExitNodes: []Node{},
+		AdvertisedRoutes:   []string{},
+		ApprovedRoutes:     []string{},
+		PendingRoutes:      []string{},
+	}
 	if !t.available {
 		return st
 	}
@@ -378,7 +389,9 @@ func (t *Tailscale) Status(ctx context.Context) *Status {
 				break
 			}
 		}
-		st.ApprovedRoutes = raw.Self.PrimaryRoutes
+		if raw.Self.PrimaryRoutes != nil {
+			st.ApprovedRoutes = raw.Self.PrimaryRoutes
+		}
 	}
 
 	for _, p := range raw.Peer {
@@ -439,16 +452,26 @@ func (t *Tailscale) Status(ctx context.Context) *Status {
 }
 
 func convertNode(n *rawNode) Node {
+	// Same reasoning as Status: a peer with no routes must serialise as an
+	// empty array, not null.
 	name := n.HostName
 	if name == "" {
 		name = strings.TrimSuffix(n.DNSName, ".")
 	}
+	addrs := n.TailscaleIPs
+	if addrs == nil {
+		addrs = []string{}
+	}
+	routes := n.PrimaryRoutes
+	if routes == nil {
+		routes = []string{}
+	}
 	return Node{
 		ID: n.ID, Name: name, DNSName: strings.TrimSuffix(n.DNSName, "."),
-		Addresses: n.TailscaleIPs, OS: n.OS, Online: n.Online,
+		Addresses: addrs, OS: n.OS, Online: n.Online,
 		ExitNodeOption: n.ExitNodeOption, IsExitNode: n.ExitNode,
 		LastSeen: n.LastSeen, RxBytes: n.RxBytes, TxBytes: n.TxBytes,
-		Routes: n.PrimaryRoutes,
+		Routes: routes,
 	}
 }
 
@@ -485,6 +508,9 @@ func (t *Tailscale) OverlappingRoutes(ctx context.Context) []string {
 		}
 	}
 	sort.Strings(out)
+	if out == nil {
+		out = []string{}
+	}
 	return out
 }
 
@@ -685,7 +711,7 @@ func (t *Tailscale) SteeringActive(ctx context.Context) []string {
 	if err != nil {
 		return nil
 	}
-	var active []string
+	active := []string{}
 	for _, line := range strings.Split(out, "\n") {
 		if !strings.HasPrefix(strings.TrimSpace(line), fmt.Sprint(steerPriority)+":") {
 			continue

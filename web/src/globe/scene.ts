@@ -29,6 +29,11 @@ export interface ArcSpec {
   risk: number
   active: boolean
   label: string
+  /** 'out' = this network opened the connection, 'in' = something outside
+   *  did. The marker travels accordingly, which is the only way to tell an
+   *  ordinary web request from an unsolicited inbound connection at a
+   *  glance. */
+  direction: 'in' | 'out' | 'local'
   meta: Record<string, unknown>
 }
 
@@ -45,6 +50,7 @@ const COLORS = {
   filtered: new THREE.Color('#a98bff'),
   pending: new THREE.Color('#ffc266'),
   home: new THREE.Color('#7fd3ff'),
+  inbound: new THREE.Color('#ffc266'),
   land: new THREE.Color('#1d3550'),
   border: new THREE.Color('#152740'),
   atmosphere: new THREE.Color('#2a6f8f'),
@@ -52,6 +58,15 @@ const COLORS = {
 
 function verdictColor(v: string): THREE.Color {
   return COLORS[v as keyof typeof COLORS] ?? COLORS.allow
+}
+
+/** arcColor keeps verdict as the primary encoding but tints inbound arcs
+ *  toward the inbound hue, so direction is legible with the animation paused
+ *  and for anyone who cannot perceive the motion. */
+function arcColor(spec: { verdict: string; direction: string }): THREE.Color {
+  const base = verdictColor(spec.verdict)
+  if (spec.direction !== 'in') return base
+  return base.clone().lerp(COLORS.inbound, 0.45)
 }
 
 /** latLngToVector places a geographic coordinate on the sphere. */
@@ -264,7 +279,7 @@ export class GlobeScene {
         const entry = this.arcs[existing]
         entry.spec = spec
         const mat = entry.line.material as THREE.LineBasicMaterial
-        mat.color.copy(verdictColor(spec.verdict))
+        mat.color.copy(arcColor(spec))
         continue
       }
       this.addArc(spec, now)
@@ -286,7 +301,7 @@ export class GlobeScene {
     // ignores linewidth on most platforms.
     const weight = Math.min(1, Math.log10(Math.max(spec.bytes, 1)) / 8)
     const mat = new THREE.LineBasicMaterial({
-      color: verdictColor(spec.verdict),
+      color: arcColor(spec),
       transparent: true,
       opacity: 0.22 + weight * 0.55,
       blending: THREE.AdditiveBlending,
@@ -297,14 +312,15 @@ export class GlobeScene {
     line.userData.id = spec.id
     this.arcGroup.add(line)
 
-    // A travelling head marks direction and makes the view feel alive even
-    // when the connection count is static.
+    // A travelling head shows which way the connection was opened. Colour is
+    // already spent on the verdict, so direction is carried by motion — and
+    // motion is what the eye picks up without being told to look.
     let head: THREE.Mesh | undefined
     if (spec.active && !this.reducedMotion) {
       head = new THREE.Mesh(
         new THREE.SphereGeometry(0.9 + weight * 1.4, 8, 8),
         new THREE.MeshBasicMaterial({
-          color: verdictColor(spec.verdict),
+          color: arcColor(spec),
           transparent: true,
           opacity: 0.9,
           blending: THREE.AdditiveBlending,
@@ -505,7 +521,11 @@ export class GlobeScene {
       // connections does not produce a rank of synchronised dots.
       const phase = hashPhase(entry.spec.id)
       const speed = 0.22 + Math.min(0.35, entry.spec.bytes / 5_000_000)
-      const p = ((t - entry.birth) * speed + phase) % 1
+      let p = ((t - entry.birth) * speed + phase) % 1
+      // The curve runs home → remote. An inbound connection is the same arc
+      // travelled the other way, so the parameter is simply reversed rather
+      // than building a second geometry.
+      if (entry.spec.direction === 'in') p = 1 - p
       curve.getPoint(p, entry.head.position)
       const mat = entry.head.material as THREE.MeshBasicMaterial
       // Fade in and out at the endpoints so the dot appears to launch and land.

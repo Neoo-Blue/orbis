@@ -44,14 +44,44 @@ type TunnelConfig struct {
 	AllowLANAccess bool
 	// LANInterfaces is what "the local network" means for the rule above.
 	LANInterfaces []string
+	// Egress lists outbound tunnel interfaces — the ones LAN devices are
+	// routed *into*, as opposed to the ones remote clients arrive on. They
+	// need forwarding and NAT in the opposite direction.
+	Egress []string
+	// LANSubnets are the source ranges that may be steered into an outbound
+	// tunnel.
+	LANSubnets []string
 	// IPv6 adds the equivalent v6 rules.
 	IPv6 bool
+
+	// FilterProxy redirects web traffic into the intercepting proxy. This
+	// lives here rather than in the main ruleset because enabling the proxy
+	// should route traffic to it, full stop — tying the redirect to the
+	// firewall being enabled meant the proxy ran and saw nothing, which
+	// looks exactly like "the ad blocking does not work".
+	FilterProxy bool
+	ProxyHTTP   int
+	ProxyTLS    int
+	// ProxyClients limits redirection to specific sources. Intercepting a
+	// device that has not been given the CA breaks its browsing rather than
+	// filtering it, so when this is set only these are redirected.
+	ProxyClients []string
+	// ProxyZoneIfaces are LAN interfaces to redirect. Only populated when the
+	// node is inline; otherwise LAN traffic does not pass through it anyway.
+	ProxyZoneIfaces []string
 }
 
 // Active reports whether there is anything to install.
 func (t TunnelConfig) Active() bool {
+	if t.FilterProxy && (len(t.ProxyZoneIfaces) > 0 || len(t.Interfaces) > 0) {
+		return true
+	}
 	return len(t.Interfaces) > 0 && t.WAN != ""
 }
+
+// hasEgress reports whether any outbound tunnel needs the LAN-into-tunnel
+// rules.
+func (t TunnelConfig) hasEgress() bool { return len(t.Egress) > 0 }
 
 // TunnelStatus is surfaced in the UI so an operator can see exactly why their
 // exit node does or does not work.
@@ -100,6 +130,14 @@ func BuildTunnelConfig(cfg config.Config) TunnelConfig {
 			tc.Subnets = append(tc.Subnets, cfg.VPN.Server.Address)
 		}
 	}
+	// Outbound tunnels need forwarding too, but in the other direction: LAN
+	// devices steered into them are forwarded out of the tunnel, not the WAN.
+	for _, t := range cfg.VPN.Tunnels {
+		if t.Enabled && t.Interface != "" {
+			add(t.Interface)
+			tc.Egress = append(tc.Egress, t.Interface)
+		}
+	}
 	// A Tailscale node that is advertising itself as an exit node, acting as
 	// a subnet router, or steering clients all need the same forwarding and
 	// NAT treatment.
@@ -114,6 +152,23 @@ func BuildTunnelConfig(cfg config.Config) TunnelConfig {
 	for _, z := range cfg.Firewall.Zones {
 		if z.Trust == "lan" {
 			tc.LANInterfaces = append(tc.LANInterfaces, z.Interfaces...)
+			tc.LANSubnets = append(tc.LANSubnets, z.Subnets...)
+		}
+	}
+
+	if cfg.MITM.Enabled {
+		tc.FilterProxy = true
+		tc.ProxyHTTP = portOf(cfg.MITM.ListenHTTP)
+		tc.ProxyTLS = portOf(cfg.MITM.ListenTLS)
+		tc.ProxyClients = cfg.MITM.OnlyClients
+		// LAN traffic only reaches this node when it is the gateway, so
+		// redirecting it in observe mode would be a rule that never matches.
+		if cfg.Mode == config.ModeInline {
+			for _, z := range cfg.Firewall.Zones {
+				if z.Trust != "wan" {
+					tc.ProxyZoneIfaces = append(tc.ProxyZoneIfaces, z.Interfaces...)
+				}
+			}
 		}
 	}
 	// With no zones configured, the WAN interface is usually also the LAN
@@ -173,9 +228,13 @@ func (e *Engine) FlushTunnel(ctx context.Context) error {
 // TunnelStatus reports what is installed and what is stopping it working.
 func (e *Engine) TunnelStatus() TunnelStatus {
 	e.mu.Lock()
+	interfaces := e.tunnelCfg.Interfaces
+	if interfaces == nil {
+		interfaces = []string{}
+	}
 	st := TunnelStatus{
 		Applied:     e.tunnelApplied,
-		Interfaces:  e.tunnelCfg.Interfaces,
+		Interfaces:  interfaces,
 		WAN:         e.tunnelCfg.WAN,
 		Masquerade:  e.tunnelApplied && e.tunnelCfg.WAN != "",
 		DNSRedirect: e.tunnelApplied && e.tunnelCfg.RedirectDNS,
@@ -199,6 +258,9 @@ func (e *Engine) TunnelStatus() TunnelStatus {
 	}
 	if !e.available {
 		st.Blockers = append(st.Blockers, "nft is not installed")
+	}
+	if st.Blockers == nil {
+		st.Blockers = []string{}
 	}
 	return st
 }
@@ -271,6 +333,13 @@ func renderTunnelRuleset(tc TunnelConfig) string {
 		// so the behaviour is the same in observe and inline mode.
 		w("    iifname @tunnel_ifaces oifname { %s } counter drop comment \"tunnel is internet-only\"", quoteJoin(tc.LANInterfaces))
 	}
+	if tc.hasEgress() {
+		// LAN devices steered into an outbound tunnel. Without these the
+		// policy route selects the tunnel and the forward chain then drops
+		// the packet, which looks exactly like "the VPN broke my internet".
+		w("    oifname { %s } counter accept comment \"lan into outbound tunnel\"", quoteJoin(tc.Egress))
+		w("    iifname { %s } counter accept comment \"outbound tunnel replies\"", quoteJoin(tc.Egress))
+	}
 	w("    tcp flags syn tcp option maxseg size set rt mtu comment \"clamp mss for the tunnel path\"")
 	w("  }")
 	w("")
@@ -289,8 +358,45 @@ func renderTunnelRuleset(tc TunnelConfig) string {
 	// Catch-all for anything that came in on a tunnel interface, in case a
 	// peer uses an address outside the configured subnets.
 	w("    iifname @tunnel_ifaces oifname \"%s\" counter masquerade comment \"nat any tunnel source\"", tc.WAN)
+	if tc.hasEgress() {
+		// A LAN address arriving at a provider would have no route back, so
+		// steered traffic is NATed to the tunnel's own address.
+		w("    oifname { %s } counter masquerade comment \"nat lan into outbound tunnel\"", quoteJoin(tc.Egress))
+	}
 	w("  }")
 	w("")
+
+	if tc.FilterProxy && (len(tc.ProxyZoneIfaces) > 0 || len(tc.Interfaces) > 0) {
+		w("  chain proxy_redirect {")
+		w("    type nat hook prerouting priority dstnat - 20;")
+		if len(tc.ProxyClients) > 0 {
+			// An explicit client list means only those devices have been
+			// given the CA; intercepting anything else would break it.
+			v4, v6 := splitFamilies(tc.ProxyClients)
+			if len(v4) > 0 {
+				w("    ip saddr != { %s } return comment \"only redirect opted-in clients\"", strings.Join(v4, ", "))
+			}
+			if len(v6) > 0 && tc.IPv6 {
+				w("    ip6 saddr != { %s } return", strings.Join(v6, ", "))
+			}
+		}
+		// Never redirect the node's own outbound traffic into its own proxy;
+		// that is an immediate loop.
+		w("    fib saddr type local return")
+		ifaces := append([]string{}, tc.ProxyZoneIfaces...)
+		ifaces = append(ifaces, tc.Interfaces...)
+		w("    iifname { %s } tcp dport 80 redirect to :%d comment \"filter proxy (http)\"",
+			quoteJoin(dedupe(ifaces)), tc.ProxyHTTP)
+		w("    iifname { %s } tcp dport 443 redirect to :%d comment \"filter proxy (tls)\"",
+			quoteJoin(dedupe(ifaces)), tc.ProxyTLS)
+		w("  }")
+		w("")
+		w("  chain proxy_input {")
+		w("    type filter hook input priority filter - 20; policy accept;")
+		w("    tcp dport { %d, %d } accept comment \"filter proxy listeners\"", tc.ProxyHTTP, tc.ProxyTLS)
+		w("  }")
+		w("")
+	}
 
 	if tc.RedirectDNS {
 		// Force tunnel clients onto this resolver. A remote device inherits
@@ -305,4 +411,19 @@ func renderTunnelRuleset(tc TunnelConfig) string {
 
 	w("}")
 	return b.String()
+}
+
+// dedupe keeps an interface set from listing the same device twice, which
+// nftables rejects outright.
+func dedupe(in []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }

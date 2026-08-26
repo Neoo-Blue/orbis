@@ -24,6 +24,7 @@ interface Props {
 }
 
 const COLORS = {
+  inbound: '#ffc266',
   allow: '#4ee8c0',
   block: '#ff6b7a',
   filtered: '#a98bff',
@@ -36,6 +37,24 @@ const COLORS = {
 
 function verdictColor(v: string): string {
   return (COLORS as Record<string, string>)[v] ?? COLORS.allow
+}
+
+/** Verdict stays the primary colour encoding; inbound arcs are tinted toward
+ *  the inbound hue so direction is readable with the animation paused. */
+function arcColor(a: { verdict: string; direction?: string }): string {
+  if (a.direction !== 'in') return verdictColor(a.verdict)
+  return mix(verdictColor(a.verdict), COLORS.inbound, 0.45)
+}
+
+function mix(a: string, b: string, t: number): string {
+  const pa = parseInt(a.slice(1), 16)
+  const pb = parseInt(b.slice(1), 16)
+  const ch = (shift: number) => {
+    const va = (pa >> shift) & 0xff
+    const vb = (pb >> shift) & 0xff
+    return Math.round(va + (vb - va) * t)
+  }
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`
 }
 
 interface View {
@@ -179,7 +198,7 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
 
         const weight = Math.min(1, Math.log10(Math.max(a.bytes, 1)) / 8)
         const isHovered = hoverRef.current?.id === a.id
-        ctx.strokeStyle = verdictColor(a.verdict)
+        ctx.strokeStyle = arcColor(a)
         ctx.globalAlpha = isHovered ? 0.95 : 0.16 + weight * 0.4
         ctx.lineWidth = isHovered ? 2.2 : 0.7 + weight * 1.1
         ctx.beginPath()
@@ -192,12 +211,16 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
           // connections does not produce a synchronised rank of dots.
           const phase = hashPhase(a.id)
           const speed = 0.2 + Math.min(0.3, a.bytes / 5_000_000)
-          const p = (t * speed + phase) % 1
+          // The curve runs home → remote; an inbound connection is the same
+          // path travelled the other way. Motion is what makes direction
+          // legible at a glance, since colour is already spent on the verdict.
+          let p = (t * speed + phase) % 1
+          if (a.direction === 'in') p = 1 - p
           const inv = 1 - p
           const px = inv * inv * hx + 2 * inv * p * cx + p * p * ex
           const py = inv * inv * hy + 2 * inv * p * cy + p * p * ey
           ctx.globalAlpha = 0.9 * Math.sin(p * Math.PI)
-          ctx.fillStyle = verdictColor(a.verdict)
+          ctx.fillStyle = arcColor(a)
           ctx.beginPath()
           ctx.arc(px, py, 1.4 + weight * 1.6, 0, Math.PI * 2)
           ctx.fill()
@@ -345,8 +368,11 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
         >
           <div className="host">{hover.arc.label}</div>
           <div className="meta">
-            {hover.arc.app && <>{hover.arc.app} · </>}
-            {hover.arc.proto}/{hover.arc.port} · {bytes(hover.arc.bytes)}
+            {hover.arc.direction === 'in' ? '← inbound' : '→ outbound'}
+            {hover.arc.app && <> · {hover.arc.app}</>} · {hover.arc.proto}/{hover.arc.port}
+          </div>
+          <div className="meta">
+            ↓ {bytes(hover.arc.bytes_in ?? 0)} received · ↑ {bytes(hover.arc.bytes_out ?? 0)} sent
           </div>
           <div className="meta">
             {hover.arc.country && <>{countryFlag(hover.arc.country)} {hover.arc.city || hover.arc.country} · </>}

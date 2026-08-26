@@ -185,3 +185,110 @@ func TestInjectCosmeticCSSIsIdempotent(t *testing.T) {
 		t.Error("injected into a document with no head")
 	}
 }
+
+// The watch page and Shorts carry ads in containers the player-response keys
+// do not cover. A filter that only knows one layout stops working the week
+// YouTube changes it, which is exactly what "it still shows ads sometimes"
+// looks like from the outside.
+func TestStripYouTubeAdsHandlesFeedRenderers(t *testing.T) {
+	next := `{
+	  "contents": {
+	    "twoColumnWatchNextResults": {
+	      "secondaryResults": {
+	        "secondaryResults": {
+	          "results": [
+	            {"compactVideoRenderer": {"videoId": "real1"}},
+	            {"adSlotRenderer": {"adSlotMetadata": {"slotId": "1"}}},
+	            {"compactVideoRenderer": {"videoId": "real2"}},
+	            {"promotedSparklesWebRenderer": {"impressionUrl": "https://ad"}},
+	            {"compactPromotedVideoRenderer": {"videoId": "ad1"}}
+	          ]
+	        }
+	      }
+	    }
+	  }
+	}`
+	out, removed := stripYouTubeAds([]byte(next))
+	if removed == 0 {
+		t.Fatal("no ad renderers were removed from the watch-page response")
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	results := doc["contents"].(map[string]any)["twoColumnWatchNextResults"].(map[string]any)["secondaryResults"].(map[string]any)["secondaryResults"].(map[string]any)["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("results has %d entries, want the 2 real videos", len(results))
+	}
+	// The surrounding list has to close up, not leave empty cards behind.
+	for _, r := range results {
+		if _, isAd := r.(map[string]any)["adSlotRenderer"]; isAd {
+			t.Error("an ad renderer survived")
+		}
+	}
+	if !strings.Contains(string(out), "real1") || !strings.Contains(string(out), "real2") {
+		t.Error("real content was removed alongside the ads")
+	}
+}
+
+func TestAdRemovalKeepsMixedObjects(t *testing.T) {
+	// An entry that carries both content and a promotion is content. Removing
+	// it would delete real search results, which is far worse than showing
+	// one promoted item.
+	if isAdItem(map[string]any{"videoRenderer": map[string]any{}, "adSlotRenderer": map[string]any{}}) {
+		t.Error("a mixed object was treated as an ad and would be deleted whole")
+	}
+	if !isAdItem(map[string]any{"adSlotRenderer": map[string]any{}}) {
+		t.Error("a pure ad entry was not recognised")
+	}
+	if isAdItem(map[string]any{}) {
+		t.Error("an empty object was treated as an ad")
+	}
+	if isAdItem("not an object") {
+		t.Error("a non-object was treated as an ad")
+	}
+}
+
+func TestNestedAdKeysAreRemovedAtAnyDepth(t *testing.T) {
+	// YouTube relocates these between response shapes; a top-level-only
+	// filter silently stops working when it does.
+	body := `{"a":{"b":{"c":{"playerAds":[{"x":1}],"keep":"yes"}}},"adBreakParams":{"y":2}}`
+	out, removed := stripYouTubeAds([]byte(body))
+	if removed < 2 {
+		t.Errorf("removed %d keys, want both the nested and the top-level one", removed)
+	}
+	if strings.Contains(string(out), "playerAds") || strings.Contains(string(out), "adBreakParams") {
+		t.Error("an ad key survived")
+	}
+	if !strings.Contains(string(out), `"keep":"yes"`) {
+		t.Error("a sibling key was removed alongside the ad key")
+	}
+}
+
+func TestWantsYouTubeFilterSkipsBulkContent(t *testing.T) {
+	// Buffering a video segment to look for ad JSON would be pointless and
+	// would add latency to the thing people actually came to watch.
+	for _, p := range []string{"/youtubei/v1/player", "/youtubei/v1/next", "/watch?v=abc", "/shorts/xyz"} {
+		if !wantsYouTubeFilter(p) {
+			t.Errorf("%q should be filtered", p)
+		}
+	}
+	for _, p := range []string{"/videoplayback?range=0-100", "/vi/abc/hqdefault.jpg", "/s/player/base.js"} {
+		if wantsYouTubeFilter(p) {
+			t.Errorf("%q should pass through untouched", p)
+		}
+	}
+}
+
+func TestPrefilterCoversEveryRemovedKey(t *testing.T) {
+	// If the walker can remove a key the prefilter does not probe for, a
+	// response carrying only that key is skipped entirely — the exact bug
+	// that lets ads through after a YouTube rename.
+	for _, k := range youtubeAdKeys {
+		body := []byte(`{"` + k + `":[1]}`)
+		if _, removed := stripYouTubeAds(body); removed == 0 {
+			t.Errorf("key %q is removed by the walker but missed by the prefilter", k)
+		}
+	}
+}

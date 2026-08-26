@@ -23,6 +23,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/flows"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
+	"github.com/Neoo-Blue/orbis/internal/netconf"
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
 	"github.com/google/uuid"
@@ -49,6 +50,8 @@ type App struct {
 	Firewall  *firewall.Engine
 	VPN       *vpn.Manager
 	Tailscale *vpn.Tailscale
+	Egress    *vpn.EgressManager
+	Net       *netconf.Manager
 	MITM      *mitm.Proxy
 	CA        *mitm.CA
 
@@ -138,6 +141,8 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Tracker.SetEnforcer(a.Firewall)
 	a.VPN = vpn.New(cfg, st, logf)
 	a.Tailscale = vpn.NewTailscale(cfg, logf)
+	a.Egress = vpn.NewEgressManager(logf)
+	a.Net = netconf.NewManager(logf)
 
 	// Filter proxy.
 	ca, err := mitm.LoadOrCreateCA(cfg.MITM.CADir)
@@ -196,6 +201,15 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 // explains the problem.
 func (a *App) Start() {
 	cfg := a.Cfg.Snapshot()
+
+	// VLANs come first: zones, DHCP scopes and capture all refer to
+	// interfaces that have to exist before anything else looks for them.
+	if len(cfg.Network.VLANs) > 0 {
+		if err := a.SyncVLANs(); err != nil {
+			a.log("network: %v", err)
+			a.raise(store.SevWarning, "network", "Some VLANs could not be configured", err.Error())
+		}
+	}
 
 	a.Tracker.Start()
 	a.Registry.Start()
@@ -302,6 +316,14 @@ func (a *App) Start() {
 	// Tunnel traffic makes this node a gateway for that traffic whatever the
 	// mode says about the LAN, so the tunnel rules go in either way.
 	a.SyncTunnelRules()
+
+	// Outbound tunnels and the device routing that depends on them.
+	if len(cfg.VPN.Tunnels) > 0 || len(cfg.VPN.Routes) > 0 {
+		if err := a.SyncEgress(a.ctx); err != nil {
+			a.log("vpn: outbound routing: %v", err)
+			a.raise(store.SevWarning, "vpn", "Outbound VPN routing is incomplete", err.Error())
+		}
+	}
 
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.maintenanceLoop() }()

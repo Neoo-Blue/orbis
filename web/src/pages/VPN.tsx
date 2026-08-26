@@ -6,8 +6,9 @@ import {
 } from '../ui'
 import { ago, bytes, clientName } from '../format'
 import type { Client, WGPeer } from '../types'
+import { VPNOutPage } from './VPNOut'
 
-type Tab = 'wireguard' | 'tailscale'
+type Tab = 'wireguard' | 'tailscale' | 'out'
 
 export function VPNPage() {
   const [tab, setTab] = useState<Tab>('wireguard')
@@ -16,11 +17,14 @@ export function VPNPage() {
       <div className="toolbar" style={{ marginBottom: 0 }}>
         <Segmented value={tab} onChange={setTab}
           options={[
-            { value: 'wireguard', label: 'WireGuard' },
+            { value: 'wireguard', label: 'Remote access' },
             { value: 'tailscale', label: 'Tailscale' },
+            { value: 'out', label: 'Route through a VPN' },
           ]} />
       </div>
-      {tab === 'wireguard' ? <WireGuard /> : <Tailscale />}
+      {tab === 'wireguard' && <WireGuard />}
+      {tab === 'tailscale' && <Tailscale />}
+      {tab === 'out' && <VPNOutPage />}
     </div>
   )
 }
@@ -398,14 +402,14 @@ function Tailscale() {
                   ).then(() => setRouteDraft(null))}>Save</button>
                 </div>
               </Field>
-              {st.pending_routes.length > 0 && (
+              {(st.pending_routes?.length ?? 0) > 0 && (
                 <div className="hint" style={{ color: 'var(--amber)', marginTop: 6 }}>
-                  Awaiting approval: {st.pending_routes.join(', ')}
+                  Awaiting approval: {(st.pending_routes ?? []).join(', ')}
                 </div>
               )}
-              {st.approved_routes.length > 0 && (
+              {(st.approved_routes?.length ?? 0) > 0 && (
                 <div className="hint" style={{ color: 'var(--accent)', marginTop: 6 }}>
-                  Active: {st.approved_routes.join(', ')}
+                  Active: {(st.approved_routes ?? []).join(', ')}
                 </div>
               )}
             </div>
@@ -420,14 +424,14 @@ function Tailscale() {
                 onChange={(e) => run(() => api.tailscale.setExitNode(e.target.value),
                   e.target.value ? `Egress now via ${e.target.value}` : 'Egress restored to the WAN')}>
                 <option value="">None — go out the WAN directly</option>
-                {st.available_exit_nodes.map((n) => (
+                {(st.available_exit_nodes ?? []).map((n) => (
                   <option key={n.id} value={n.dns_name || n.name}>
                     {n.name} {n.online ? '' : '(offline)'}
                   </option>
                 ))}
               </select>
             </Field>
-            {st.available_exit_nodes.length === 0 && (
+            {(st.available_exit_nodes ?? []).length === 0 && (
               <div className="hint">
                 No peer on this tailnet is offering itself as an exit node yet.
               </div>
@@ -463,7 +467,7 @@ function Tailscale() {
       </div>
 
       <Card title="Tailnet peers" flush>
-        {st.peers.length === 0 ? <Empty title="No peers" /> : (
+        {(st.peers ?? []).length === 0 ? <Empty title="No peers" /> : (
           <div className="table-wrap">
             <table className="t">
               <thead>
@@ -471,7 +475,7 @@ function Tailscale() {
                   <th className="num">Down</th><th className="num">Up</th><th>Seen</th></tr>
               </thead>
               <tbody>
-                {st.peers.map((p) => (
+                {(st.peers ?? []).map((p) => (
                   <tr key={p.id}>
                     <td>
                       <span className={`dot ${p.online ? 'on' : 'off'}`} style={{ marginRight: 8 }} />

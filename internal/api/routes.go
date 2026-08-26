@@ -111,6 +111,8 @@ func (s *Server) mount(r chi.Router) {
 	})
 
 	s.mountTailscale(r)
+	s.mountEgress(r)
+	s.mountNetwork(r)
 
 	r.Route("/proxy", func(r chi.Router) {
 		r.Get("/status", s.handleProxyStatus)
@@ -357,11 +359,19 @@ func (s *Server) handleGlobe(w http.ResponseWriter, r *http.Request) {
 		if label == "" {
 			label = f.DstIP
 		}
+		// The arc is always drawn between this network and the remote end;
+		// direction says which way the traffic actually initiated, which the
+		// renderer uses to run the marker the right way. Without it every
+		// connection looks outbound, and an unsolicited inbound connection —
+		// the one worth noticing — is indistinguishable from a web request.
 		arcs = append(arcs, map[string]any{
 			"id": f.ID, "client_id": f.ClientID,
 			"start_lat": home[0], "start_lng": home[1],
 			"end_lat": f.Lat, "end_lng": f.Lon,
-			"label": label, "app": f.App, "country": f.Country, "city": f.City,
+			"direction": f.Direction,
+			"bytes_in":  f.BytesIn,
+			"bytes_out": f.BytesOut,
+			"label":     label, "app": f.App, "country": f.Country, "city": f.City,
 			"org": f.ASOrg, "verdict": f.Verdict, "bytes": f.BytesIn + f.BytesOut,
 			"port": f.DstPort, "proto": f.Proto, "risk": f.Risk,
 			"started": f.StartedAt.Unix(), "active": f.Active(),

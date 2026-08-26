@@ -68,6 +68,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
         label: flowTarget(f), app: f.app, country: f.country, city: f.city,
         org: f.as_org, verdict: f.verdict, bytes: f.bytes_in + f.bytes_out,
         port: f.dst_port, proto: f.proto, risk: f.risk,
+        direction: f.direction, bytes_in: f.bytes_in, bytes_out: f.bytes_out,
         started: Math.floor(new Date(f.started_at).getTime() / 1000),
         active: !f.ended_at, src: f.src_ip, dst: f.dst_ip,
       })
@@ -188,6 +189,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
             <span><i style={{ background: 'var(--red)' }} />blocked</span>
             <span><i style={{ background: 'var(--violet)' }} />filtered</span>
             <span><i style={{ background: 'var(--blue)' }} />this network</span>
+            <span><i style={{ background: 'var(--amber)' }} />inbound</span>
           </div>
         </div>
 
@@ -304,6 +306,9 @@ function ArcDetail({ arc, onClose, onBlock }: { arc: GlobeArc; onClose: () => vo
     <div className="globe-detail">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: '1px solid var(--line-soft)' }}>
         <span className={`tag ${arc.verdict}`}>{arc.verdict}</span>
+        <span className={`tag ${arc.direction === 'in' ? 'warn' : ''}`}>
+          {arc.direction === 'in' ? '← inbound' : '→ outbound'}
+        </span>
         <div className="spacer" style={{ flex: 1 }} />
         <button className="btn icon" onClick={onClose} aria-label="Close"><Icons.close /></button>
       </div>
@@ -319,7 +324,8 @@ function ArcDetail({ arc, onClose, onBlock }: { arc: GlobeArc; onClose: () => vo
           {arc.country && (
             <><dt>Location</dt><dd>{countryFlag(arc.country)} {arc.city || arc.country}</dd></>
           )}
-          <dt>Volume</dt><dd>{bytes(arc.bytes)}</dd>
+          <dt>Received</dt><dd>{bytes(arc.bytes_in ?? 0)}</dd>
+          <dt>Sent</dt><dd>{bytes(arc.bytes_out ?? 0)}</dd>
           <dt>From</dt><dd>{arc.src}</dd>
         </dl>
         {arc.active && arc.verdict === 'allow' && (

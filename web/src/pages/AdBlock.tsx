@@ -466,6 +466,7 @@ function InStream() {
   const { data: config, refresh } = usePoll(() => api.config.get(), 0)
   const { data: proxy } = usePoll(() => api.proxy.status(), 8000)
   const { data: ca } = usePoll(() => api.proxy.ca(), 0)
+  const { data: readiness } = usePoll(() => api.proxy.readiness(), 8000)
   const toast = useToast()
 
   const set = async (key: string, value: unknown) => {
@@ -491,6 +492,35 @@ function InStream() {
         TLS on this node and editing the player response in flight — which requires installing the
         certificate below on every device you want filtered.
       </Banner>
+
+      {readiness && (
+        <Card title="Why am I still seeing ads?">
+          <div className="hint" style={{ marginBottom: 12 }}>
+            Four things all have to be true. The failure of any one of them looks identical from
+            the sofa, so they are checked separately.
+          </div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {readiness.checks.map((c) => (
+              <div key={c.name} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                <span className={`dot ${c.ok ? 'on' : 'err'}`} style={{ marginTop: 5 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5 }}>
+                    {c.name}
+                    <span style={{ color: 'var(--text-faint)', marginLeft: 8, fontSize: 11.5 }}>
+                      {c.detail}
+                    </span>
+                  </div>
+                  {!c.ok && c.fix && (
+                    <div style={{ fontSize: 11.5, color: 'var(--amber)', marginTop: 3, lineHeight: 1.55 }}>
+                      {c.fix}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <div className="grid c2">
         <Card title="Filter proxy" actions={

@@ -67,7 +67,7 @@ export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, clas
       startLat: a.start_lat, startLng: a.start_lng,
       endLat: a.end_lat, endLng: a.end_lng,
       verdict: a.verdict, bytes: a.bytes, risk: a.risk, active: a.active,
-      label: a.label, meta: {},
+      label: a.label, direction: a.direction ?? 'out', meta: {},
     }))
     scene.setArcs(specs)
 
@@ -120,8 +120,11 @@ export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, clas
         >
           <div className="host">{hover.arc.label}</div>
           <div className="meta">
-            {hover.arc.app && <>{hover.arc.app} · </>}
-            {hover.arc.proto}/{hover.arc.port} · {bytes(hover.arc.bytes)}
+            {hover.arc.direction === 'in' ? '← inbound' : '→ outbound'}
+            {hover.arc.app && <> · {hover.arc.app}</>} · {hover.arc.proto}/{hover.arc.port}
+          </div>
+          <div className="meta">
+            ↓ {bytes(hover.arc.bytes_in ?? 0)} received · ↑ {bytes(hover.arc.bytes_out ?? 0)} sent
           </div>
           <div className="meta">
             {hover.arc.country && <>{countryFlag(hover.arc.country)} {hover.arc.city || hover.arc.country} · </>}

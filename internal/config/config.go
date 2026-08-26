@@ -9,10 +9,12 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"github.com/Neoo-Blue/orbis/internal/netconf"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,6 +34,7 @@ const (
 type Config struct {
 	Mode      Mode            `yaml:"mode" json:"mode"`
 	Node      NodeConfig      `yaml:"node" json:"node"`
+	Network   NetworkConfig   `yaml:"network" json:"network"`
 	API       APIConfig       `yaml:"api" json:"api"`
 	Store     StoreConfig     `yaml:"store" json:"store"`
 	Capture   CaptureConfig   `yaml:"capture" json:"capture"`
@@ -77,6 +80,14 @@ func (c *Config) runlock() {
 // Live reports whether this Config is the daemon's authoritative instance
 // rather than a snapshot.
 func (c *Config) Live() bool { return c.mu != nil }
+
+// NetworkConfig covers interfaces Orbis creates itself, as opposed to ones
+// the host already provides.
+type NetworkConfig struct {
+	// VLANs are 802.1Q tagged interfaces. Each becomes a normal interface
+	// that zones, DHCP scopes and firewall rules can refer to by name.
+	VLANs []netconf.VLAN `yaml:"vlans" json:"vlans"`
+}
 
 type NodeConfig struct {
 	Name     string `yaml:"name" json:"name"`
@@ -307,6 +318,41 @@ type DHCPStatic struct {
 type VPNConfig struct {
 	Server WGServerConfig   `yaml:"server" json:"server"`
 	Client []WGClientConfig `yaml:"clients" json:"clients"`
+	// Tunnels are outbound WireGuard connections this node routes traffic
+	// through. Devices are then assigned to one, so "send the TV through the
+	// VPN and leave everything else alone" is expressible.
+	Tunnels []TunnelConfig `yaml:"tunnels" json:"tunnels"`
+	// Routes assigns sources to tunnels. A source is an address, a CIDR, or
+	// the literal "all" for every LAN prefix.
+	Routes []EgressRoute `yaml:"routes" json:"routes"`
+}
+
+// TunnelConfig is an outbound WireGuard tunnel, normally imported from a
+// provider's wg-quick file.
+type TunnelConfig struct {
+	Name          string   `yaml:"name" json:"name"`
+	Enabled       bool     `yaml:"enabled" json:"enabled"`
+	Interface     string   `yaml:"interface" json:"interface"`
+	PrivateKey    string   `yaml:"private_key" json:"private_key"`
+	Addresses     []string `yaml:"addresses" json:"addresses"`
+	DNS           []string `yaml:"dns" json:"dns"`
+	MTU           int      `yaml:"mtu" json:"mtu"`
+	PeerPublicKey string   `yaml:"peer_public_key" json:"peer_public_key"`
+	PresharedKey  string   `yaml:"preshared_key" json:"preshared_key"`
+	Endpoint      string   `yaml:"endpoint" json:"endpoint"`
+	AllowedIPs    []string `yaml:"allowed_ips" json:"allowed_ips"`
+	Keepalive     int      `yaml:"keepalive" json:"keepalive"`
+	RouteTable    int      `yaml:"route_table" json:"route_table"`
+	// KillSwitch drops steered traffic when the tunnel is down rather than
+	// letting it fall back to the WAN unprotected.
+	KillSwitch bool   `yaml:"kill_switch" json:"kill_switch"`
+	Note       string `yaml:"note" json:"note"`
+}
+
+type EgressRoute struct {
+	Source   string `yaml:"source" json:"source"`
+	TargetID string `yaml:"target" json:"target"`
+	Label    string `yaml:"label" json:"label"`
 }
 
 type WGServerConfig struct {
@@ -637,9 +683,57 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("dhcp scope %q: range_start/range_end must be IPs", s.Name)
 		}
 	}
+	seenVLAN := map[string]bool{}
+	seenTag := map[string]bool{}
+	for _, v := range c.Network.VLANs {
+		if err := v.Validate(); err != nil {
+			return fmt.Errorf("network.vlans: %w", err)
+		}
+		name := v.DefaultName()
+		if seenVLAN[name] {
+			return fmt.Errorf("two VLANs would both be called %q", name)
+		}
+		seenVLAN[name] = true
+		// The same tag twice on one parent is a configuration mistake that
+		// the kernel reports as a confusing "file exists".
+		key := fmt.Sprintf("%s/%d", v.Parent, v.ID)
+		if seenTag[key] {
+			return fmt.Errorf("VLAN %d is defined twice on %s", v.ID, v.Parent)
+		}
+		seenTag[key] = true
+	}
+
 	if c.Firewall.DefaultForward != "accept" && c.Firewall.DefaultForward != "drop" {
 		return fmt.Errorf("firewall.default_forward must be accept or drop")
 	}
+	seenTunnels := map[string]bool{}
+	for _, t := range c.VPN.Tunnels {
+		if t.Name == "" {
+			return fmt.Errorf("every VPN tunnel needs a name")
+		}
+		if seenTunnels[t.Name] {
+			return fmt.Errorf("two VPN tunnels are both named %q", t.Name)
+		}
+		seenTunnels[t.Name] = true
+		for _, a := range t.Addresses {
+			if _, err := netip.ParsePrefix(a); err != nil {
+				if _, err2 := netip.ParseAddr(a); err2 != nil {
+					return fmt.Errorf("tunnel %q address %q is not an address or CIDR", t.Name, a)
+				}
+			}
+		}
+	}
+	for _, r := range c.VPN.Routes {
+		// "all" and the Tailscale pseudo-target are both valid without a
+		// matching tunnel entry.
+		if r.TargetID == "" || r.TargetID == "wan" || r.TargetID == "tailscale" {
+			continue
+		}
+		if !seenTunnels[r.TargetID] {
+			return fmt.Errorf("a device is routed through %q, which is not a configured tunnel", r.TargetID)
+		}
+	}
+
 	// Steering clients with no exit node selected silently does nothing,
 	// which reads to an operator as "the feature is broken".
 	if c.Tailscale.Enabled && len(c.Tailscale.SteerClients) > 0 && c.Tailscale.ExitNode == "" {
@@ -735,6 +829,14 @@ func (c *Config) Redacted() Config {
 	}
 	if cp.Tailscale.AuthKey != "" {
 		cp.Tailscale.AuthKey = mask
+	}
+	for i := range cp.VPN.Tunnels {
+		if cp.VPN.Tunnels[i].PrivateKey != "" {
+			cp.VPN.Tunnels[i].PrivateKey = mask
+		}
+		if cp.VPN.Tunnels[i].PresharedKey != "" {
+			cp.VPN.Tunnels[i].PresharedKey = mask
+		}
 	}
 	for i := range cp.VPN.Client {
 		if cp.VPN.Client[i].PrivateKey != "" {

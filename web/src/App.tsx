@@ -20,6 +20,7 @@ import { AssistantPage } from './pages/Assistant'
 import { EventsPage } from './pages/Events'
 import { SettingsPage } from './pages/Settings'
 import { Login } from './pages/Login'
+import { Onboarding } from './pages/Onboarding'
 import { ErrorBoundary } from './ErrorBoundary'
 
 type Route =
@@ -81,9 +82,32 @@ export default function App() {
   }
   return (
     <ToastProvider>
-      <Shell setupRequired={setupRequired} onAuthChange={checkAuth} />
+      <Gate setupRequired={setupRequired} onAuthChange={checkAuth} />
     </ToastProvider>
   )
+}
+
+/** Gate shows the first-run wizard until it has been completed or skipped.
+ *  It sits inside ToastProvider because the wizard reports failures that way. */
+function Gate({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuthChange: () => void }) {
+  const [onboarded, setOnboarded] = useState<boolean | null>(null)
+
+  const check = useCallback(async () => {
+    try {
+      const s = await api.onboarding.get()
+      setOnboarded(s.onboarded)
+    } catch {
+      // A node whose onboarding endpoint is unavailable should still be usable;
+      // failing open here beats locking the operator out of their own UI.
+      setOnboarded(true)
+    }
+  }, [])
+
+  useEffect(() => { check() }, [check])
+
+  if (onboarded === null) return <div className="login"><Spinner /></div>
+  if (!onboarded) return <Onboarding onDone={() => setOnboarded(true)} />
+  return <Shell setupRequired={setupRequired} onAuthChange={onAuthChange} />
 }
 
 function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuthChange: () => void }) {

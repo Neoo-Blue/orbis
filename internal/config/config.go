@@ -105,6 +105,14 @@ type NetworkConfig struct {
 
 type NodeConfig struct {
 	Name     string `yaml:"name" json:"name"`
+	// Onboarded records that the first-run wizard has been completed. Kept
+	// separate from whether a password is set: an operator can set a password
+	// and still not have chosen how the node sits on the network, and that
+	// second decision is the one that determines whether Orbis sees anything.
+	Onboarded bool `yaml:"onboarded" json:"onboarded"`
+	// OnboardedMode is "simple" or "advanced", remembered so re-running the
+	// wizard starts where the operator left off.
+	OnboardedMode string `yaml:"onboarded_mode" json:"onboarded_mode"`
 	DataDir  string `yaml:"data_dir" json:"data_dir"`
 	Timezone string `yaml:"timezone" json:"timezone"`
 	// Latitude/Longitude pin this node on the globe. When both are zero the

@@ -613,3 +613,26 @@ export interface ImportResult {
   dry_run: boolean
   imported: number
 }
+
+// ---- onboarding ----
+
+export interface PlacementCheck {
+  name: string
+  status: 'ok' | 'warn' | 'fail'
+  detail: string
+  fix?: string
+}
+
+export interface OnboardingState {
+  onboarded: boolean
+  mode: string
+  password_set: boolean
+  node_name: string
+  current_mode: string
+  placement: PlacementCheck[]
+  interfaces: InterfaceInfo[]
+  dns_enabled: boolean
+  dhcp_enabled: boolean
+  adblock: boolean
+  lounge_enabled: boolean
+}

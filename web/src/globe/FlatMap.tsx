@@ -272,20 +272,26 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
           // Canvas has no shader, so the comet is drawn as a short run of
           // segments whose alpha falls off behind the crest. Twelve is enough
           // to read as continuous without costing a full re-stroke per arc.
-          const steps = 12
-          const span = 0.3
+          // A train of pulses, matching the globe. One crest per arc spends
+          // most of its life off the part of the line you are looking at, and
+          // teleports when it laps; several make direction readable anywhere.
+          const steps = 40
+          const repeat = 3
           ctx.lineWidth = 0.9 + weight * 1.5
           for (let i = 0; i < steps; i++) {
             const t0 = i / steps
             const t1 = (i + 1) / steps
-            // Distance behind the crest, in the direction the flow travels.
-            const d = inbound ? (head - t0 + 1) % 1 : (t0 - head + 1) % 1
-            if (d > span) continue
-            const fade = 1 - d / span
+            const phase = t0 * repeat - (inbound ? -1 : 1) * head * repeat
+            const f = phase - Math.floor(phase)
+            // Distance behind the crest, measured against travel direction, so
+            // the tail trails the crest rather than leading it.
+            const behind = inbound ? f : 1 - f
+            const tail = Math.pow(1 - Math.min(behind / 0.55, 1), 3)
+            if (tail < 0.02) continue
             const pt0 = quadPoint(hx, hy, cx, cy, ex, ey, t0)
             const pt1 = quadPoint(hx, hy, cx, cy, ex, ey, t1)
             ctx.strokeStyle = crest
-            ctx.globalAlpha = Math.min(0.95, fade * fade * (0.35 + weight * 0.5))
+            ctx.globalAlpha = Math.min(0.95, tail * (0.4 + weight * 0.55))
             ctx.beginPath()
             ctx.moveTo(pt0[0], pt0[1])
             ctx.lineTo(pt1[0], pt1[1])
@@ -296,24 +302,58 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
       ctx.globalAlpha = 1
 
       // Destination markers, deduplicated by rounded coordinate.
-      const seen = new Map<string, { x: number; y: number; weight: number; verdict: string }>()
+      const seen = new Map<string, {
+        x: number; y: number; weight: number; verdict: string
+        inBytes: number; outBytes: number; inbound: boolean
+      }>()
       for (const a of arcs) {
         const key = `${a.end_lat.toFixed(1)},${a.end_lng.toFixed(1)}`
         const [x, y] = project(a.end_lat, a.end_lng)
+        const inb = a.direction === 'in' ? a.bytes : 0
+        const outb = a.direction === 'in' ? 0 : a.bytes
         const existing = seen.get(key)
         if (existing) {
           existing.weight += a.bytes
+          existing.inBytes += inb
+          existing.outBytes += outb
           if (a.verdict === 'block') existing.verdict = 'block'
         } else {
-          seen.set(key, { x, y, weight: Math.max(a.bytes, 1), verdict: a.verdict })
+          seen.set(key, {
+            x, y, weight: Math.max(a.bytes, 1), verdict: a.verdict,
+            inBytes: inb, outBytes: outb, inbound: false,
+          })
         }
       }
+      for (const p of seen.values()) p.inbound = p.inBytes > p.outBytes
       for (const p of seen.values()) {
-        const r = 1.6 + Math.min(4, Math.log10(p.weight) * 0.6)
-        ctx.fillStyle = verdictColor(p.verdict)
-        ctx.globalAlpha = 0.55
+        // A target, not a blob: the core stays a constant 1.5px so two nearby
+        // destinations remain two dots, and volume moves the ring instead.
+        const reach = 3 + Math.min(5, Math.log10(p.weight) * 0.7)
+        const col = verdictColor(p.verdict)
+
+        // Expanding (or collapsing) pulse showing traffic direction.
+        if (autoAnimate) {
+          const cycle = ((t / 2.4) + hashPhase(String(p.x) + p.y)) % 1
+          const k = p.inbound ? 1 - cycle : cycle
+          ctx.strokeStyle = p.inbound ? COLORS.flowIn : COLORS.flowOut
+          ctx.globalAlpha = 0.5 * Math.sin(cycle * Math.PI)
+          ctx.lineWidth = 1.1
+          ctx.beginPath()
+          ctx.arc(p.x, p.y, 1.5 + k * reach, 0, Math.PI * 2)
+          ctx.stroke()
+        }
+
+        ctx.strokeStyle = col
+        ctx.globalAlpha = 0.42
+        ctx.lineWidth = 1
         ctx.beginPath()
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+        ctx.arc(p.x, p.y, reach, 0, Math.PI * 2)
+        ctx.stroke()
+
+        ctx.fillStyle = col
+        ctx.globalAlpha = 0.95
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2)
         ctx.fill()
       }
       ctx.globalAlpha = 1

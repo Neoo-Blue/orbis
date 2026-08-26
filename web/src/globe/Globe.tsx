@@ -74,17 +74,28 @@ export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, clas
     // Destination points are deduplicated by coordinate: forty connections to
     // one CDN edge should be one marker sized by total traffic, not forty
     // markers stacked on the same pixel.
-    const byCoord = new Map<string, PointSpec>()
+    const byCoord = new Map<string, PointSpec & { inBytes: number; outBytes: number }>()
     for (const a of merged) {
       if (!a.end_lat && !a.end_lng) continue
       const key = `${a.end_lat.toFixed(1)},${a.end_lng.toFixed(1)}`
+      const inb = a.direction === 'in' ? a.bytes : 0
+      const outb = a.direction === 'in' ? 0 : a.bytes
       const existing = byCoord.get(key)
       if (existing) {
         existing.weight += a.bytes
+        existing.inBytes += inb
+        existing.outBytes += outb
       } else {
-        byCoord.set(key, { lat: a.end_lat, lng: a.end_lng, weight: Math.max(a.bytes, 1), label: a.label })
+        byCoord.set(key, {
+          lat: a.end_lat, lng: a.end_lng, weight: Math.max(a.bytes, 1),
+          label: a.label, inBytes: inb, outBytes: outb,
+        })
       }
     }
+    // A destination's pulse follows whichever direction moved more bytes there,
+    // so a marker that is mostly receiving our uploads reads differently from
+    // one that is mostly sending us data.
+    for (const p of byCoord.values()) p.inbound = p.inBytes > p.outBytes
     scene.setPoints(
       [...byCoord.values()],
       data?.home ? { lat: data.home.lat, lng: data.home.lng, weight: 1, label: data.home.label } : undefined,

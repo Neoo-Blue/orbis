@@ -6,6 +6,7 @@ import type {
   NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
   ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
+  OnboardingState, PlacementCheck,
 } from './types'
 
 export class ApiError extends Error {
@@ -384,6 +385,13 @@ export const api = {
     unblock: (domain: string) => post<{ ok: boolean }>('/dnstools/unblock', { domain }),
     importList: (text: string, opts: { action?: 'block' | 'allow'; dry_run?: boolean; note?: string } = {}) =>
       post<ImportResult>('/dnstools/import', { text, ...opts }),
+  },
+
+  onboarding: {
+    get: () => get<OnboardingState>('/onboarding'),
+    apply: (body: Record<string, unknown>) =>
+      post<{ ok: boolean; onboarded: boolean; placement: PlacementCheck[] }>('/onboarding/apply', body),
+    reset: () => post<{ ok: boolean }>('/onboarding/reset'),
   },
 
   config: {

@@ -1001,3 +1001,51 @@ func (s *Store) DeleteConsentRule(clientID, host, scope string) error {
 		clientID, host, scope)
 	return err
 }
+
+// ---------- onboarding placement checks ----------
+
+// DNSClientCount reports how many distinct addresses have queried this
+// resolver. One (or zero) means nothing but the node itself is using it, which
+// is the single most common reason a new install appears to do nothing.
+func (s *Store) DNSClientCount() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(DISTINCT client_ip) FROM dns_queries
+		WHERE client_ip NOT IN ('', '127.0.0.1', '::1')`).Scan(&n)
+	return n, err
+}
+
+// ForeignFlowShare reports how many recent flows came from a device other than
+// this node, ignoring broadcast and multicast. On a switched network a node
+// that is not the gateway sees only its own traffic plus that noise, so this
+// ratio is what distinguishes "installed" from "actually inline".
+func (s *Store) ForeignFlowShare() (foreign, total int, err error) {
+	const window = 5000
+	row := s.db.QueryRow(`
+		SELECT
+		  SUM(CASE WHEN is_foreign = 1 THEN 1 ELSE 0 END),
+		  COUNT(*)
+		FROM (
+		  SELECT CASE
+		    WHEN dst_ip LIKE '%.255' OR dst_ip LIKE '224.%' OR dst_ip LIKE 'ff0%'
+		      OR dst_port IN (1900, 5353, 15600, 67, 68, 137, 138) THEN 0
+		    WHEN src_ip IN (SELECT ip FROM clients WHERE ip != '') AND src_ip != ''
+		      AND dst_ip NOT LIKE '192.168.%' AND dst_ip NOT LIKE '10.%' THEN 1
+		    ELSE 0
+		  END AS is_foreign
+		  FROM flows ORDER BY started_at DESC LIMIT ?)`, window)
+	var f, t any
+	if err = row.Scan(&f, &t); err != nil {
+		return 0, 0, err
+	}
+	return toInt(f), toInt(t), nil
+}
+
+func toInt(v any) int {
+	switch n := v.(type) {
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}

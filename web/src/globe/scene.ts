@@ -61,6 +61,9 @@ export interface PointSpec {
   lng: number
   weight: number
   label: string
+  /** true when the dominant traffic at this destination was inbound, which
+   *  makes its pulse collapse onto the marker instead of expanding away. */
+  inbound?: boolean
 }
 
 const COLORS = {
@@ -142,12 +145,18 @@ function arcFlowMaterial(spec: ArcSpec, weight: number): THREE.ShaderMaterial {
       uBase: { value: arcColor(spec) },
       uCrest: { value: inbound ? COLORS.flowIn : COLORS.flowOut },
       uTime: { value: 0 },
-      // Negative speed runs the crest from the remote end back to home.
-      uSpeed: { value: (inbound ? -1 : 1) * (0.16 + Math.min(0.3, spec.bytes / 6_000_000)) },
+      // Speed is a magnitude; direction is carried by uForward so the shader
+      // can put the tail on the correct side of the crest.
+      uSpeed: { value: 0.22 + Math.min(0.34, spec.bytes / 6_000_000) },
+      uForward: { value: inbound ? -1 : 1 },
       uPhase: { value: hashPhase(spec.id) },
       uOpacity: { value: 0.2 + weight * 0.5 },
-      // An idle flow keeps its line but loses the crest, so "still connected"
-      // and "actively moving data" are distinguishable.
+      // Several pulses per arc rather than one. A single crest spends most of
+      // its life somewhere you are not looking, and when it laps the arc it
+      // visibly teleports; a train of them means motion is legible anywhere on
+      // the line at any moment, and the wrap is hidden because a new pulse
+      // enters as the last one leaves.
+      uRepeat: { value: 3.0 },
       uActive: { value: spec.active ? 1 : 0 },
     },
     vertexShader: `
@@ -162,25 +171,37 @@ function arcFlowMaterial(spec: ArcSpec, weight: number): THREE.ShaderMaterial {
       uniform vec3 uCrest;
       uniform float uTime;
       uniform float uSpeed;
+      uniform float uForward;
       uniform float uPhase;
       uniform float uOpacity;
+      uniform float uRepeat;
       uniform float uActive;
       varying float vProgress;
 
       void main() {
-        // Position of the crest, wrapped into 0..1 and travelling in the
-        // direction of the connection.
-        float head = fract(uTime * uSpeed + uPhase);
-        // Distance behind the crest, wrapped so the tail is continuous across
-        // the seam rather than popping when the crest laps the arc.
-        float d = fract(vProgress - head + 1.0);
-        // A comet: bright at the crest, fading over roughly a third of the arc.
-        float tail = smoothstep(0.34, 0.0, d) * uActive;
-        // Taper both ends so an arc emerges from its endpoints instead of
-        // stopping dead against the globe.
-        float ends = smoothstep(0.0, 0.06, vProgress) * smoothstep(1.0, 0.94, vProgress);
-        vec3 col = mix(uBase, uCrest, tail * 0.85);
-        float alpha = uOpacity * (0.42 + tail * 1.25) * ends;
+        // A repeating sawtooth along the arc. Crests sit where fract(phase)
+        // is 0; subtracting time moves them toward +progress, and uForward
+        // flips that for an inbound connection.
+        float phase = vProgress * uRepeat - uForward * uTime * uSpeed + uPhase;
+        float f = fract(phase);
+
+        // Distance BEHIND the crest, measured against the direction of travel.
+        // This is the part that makes direction readable: the tail has to trail
+        // the crest, so which side of it is "behind" depends on which way the
+        // crest is moving. Measuring it the same way for both directions makes
+        // inbound and outbound look identical, which is the bug this replaces.
+        float behind = uForward > 0.0 ? 1.0 - f : f;
+
+        // Comet profile: a sharp crest with a tail fading over most of the gap
+        // between pulses. Cubed so the leading edge stays crisp at any speed.
+        float tail = pow(1.0 - clamp(behind / 0.55, 0.0, 1.0), 3.0) * uActive;
+
+        // Taper the ends so an arc lifts off and lands rather than stopping
+        // dead against the globe.
+        float ends = smoothstep(0.0, 0.05, vProgress) * smoothstep(1.0, 0.95, vProgress);
+
+        vec3 col = mix(uBase, uCrest, tail * 0.9);
+        float alpha = uOpacity * (0.35 + tail * 1.5) * ends;
         gl_FragColor = vec4(col, alpha);
       }`,
   })
@@ -196,6 +217,15 @@ export class GlobeScene {
   private arcGroup = new THREE.Group()
   private pointGroup = new THREE.Group()
   private countryGroup = new THREE.Group()
+
+  /** Expanding rings at destination markers, one per marker. */
+  private pulses: Array<{
+    mesh: THREE.Mesh
+    mat: THREE.MeshBasicMaterial
+    reach: number
+    inbound: boolean
+    phase: number
+  }> = []
 
   /** One highlight layer per ISO country code, eased toward `target`. */
   private countryLayers = new Map<string, {
@@ -496,7 +526,7 @@ export class GlobeScene {
         // dialling back). Flip the crest rather than leaving it running the
         // wrong way until the flow expires.
         if (wasInbound !== (spec.direction === 'in') && !this.reducedMotion) {
-          mat.uniforms.uSpeed.value = -mat.uniforms.uSpeed.value
+          mat.uniforms.uForward.value = spec.direction === 'in' ? -1 : 1
           mat.uniforms.uCrest.value = spec.direction === 'in' ? COLORS.flowIn : COLORS.flowOut
         }
         continue
@@ -517,11 +547,17 @@ export class GlobeScene {
     // per fragment, but the progress attribute is interpolated between
     // vertices, so too few segments makes the crest visibly faceted.
     const segments = 96
-    const points = curve.getPoints(segments)
+    // getSpacedPoints, not getPoints: the latter samples at uniform curve
+    // PARAMETER, and on a lifted quadratic Bezier equal steps in t cover very
+    // unequal distances. The pulse would then visibly accelerate through the
+    // apex and crawl near the endpoints, which reads as stuttering rather than
+    // as flow. Sampling by arc length makes the speed constant.
+    const points = curve.getSpacedPoints(segments)
     const geom = new THREE.BufferGeometry().setFromPoints(points)
 
     // aProgress runs 0 (home) to 1 (remote) so the shader knows which way
-    // along the line it is looking.
+    // along the line it is looking. With arc-length sampling this is also
+    // proportional to real distance, which is what keeps the motion even.
     const progress = new Float32Array(points.length)
     for (let i = 0; i < points.length; i++) progress[i] = i / (points.length - 1)
     geom.setAttribute('aProgress', new THREE.BufferAttribute(progress, 1))
@@ -530,9 +566,8 @@ export class GlobeScene {
     // linewidth on most platforms.
     const weight = Math.min(1, Math.log10(Math.max(spec.bytes, 1)) / 8)
     const mat = arcFlowMaterial(spec, weight)
-    // With motion suppressed the crest would sit frozen at an arbitrary point,
-    // which reads as a rendering fault. Park it at the remote end instead so
-    // the arc still shows a direction.
+    // With motion suppressed the pulses hold still. They stay visible and
+    // still slope the right way, so direction survives without animation.
     if (this.reducedMotion) mat.uniforms.uSpeed.value = 0
 
     const line = new THREE.Line(geom, mat)
@@ -557,7 +592,16 @@ export class GlobeScene {
     this.arcs.forEach((a, i) => this.arcById.set(a.spec.id, i))
   }
 
-  /** setPoints draws destination markers sized by traffic volume. */
+  /**
+   * setPoints draws destination markers.
+   *
+   * These used to be spheres scaled by traffic, which meant a busy CDN edge
+   * became a ball wide enough to hide the arcs landing on it, and the globe
+   * read as blobs rather than as a map. A target reads as a location at any
+   * size: a small fixed core with a thin ring around it, where volume changes
+   * the ring rather than the footprint. Activity is shown by a pulse expanding
+   * out of the marker instead of by making it bigger.
+   */
   setPoints(points: PointSpec[], home?: PointSpec) {
     while (this.pointGroup.children.length) {
       const child = this.pointGroup.children[0] as THREE.Mesh
@@ -565,36 +609,101 @@ export class GlobeScene {
       child.geometry.dispose()
       ;(child.material as THREE.Material).dispose()
     }
+    this.pulses = []
 
     for (const p of points) {
-      const size = 0.9 + Math.min(3.2, Math.log10(Math.max(p.weight, 1)) * 0.55)
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(size, 10, 10),
+      const pos = latLngToVector(p.lat, p.lng, GLOBE_RADIUS * 1.004)
+      // Volume moves the ring from 1.6 to about 3 units. The core never grows,
+      // so two adjacent destinations stay two destinations.
+      const reach = 1.6 + Math.min(1.5, Math.log10(Math.max(p.weight, 1)) * 0.26)
+
+      const core = new THREE.Mesh(
+        new THREE.SphereGeometry(0.55, 8, 8),
         new THREE.MeshBasicMaterial({
-          color: COLORS.allow, transparent: true, opacity: 0.5,
+          color: COLORS.allow, transparent: true, opacity: 0.95,
           blending: THREE.AdditiveBlending, depthWrite: false,
         }),
       )
-      mesh.position.copy(latLngToVector(p.lat, p.lng, GLOBE_RADIUS * 1.004))
-      mesh.userData.label = p.label
-      this.pointGroup.add(mesh)
+      core.position.copy(pos)
+      core.userData.label = p.label
+      this.pointGroup.add(core)
+
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(reach, reach + 0.28, 28),
+        new THREE.MeshBasicMaterial({
+          color: COLORS.allow, transparent: true, opacity: 0.4,
+          side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+        }),
+      )
+      ring.position.copy(pos)
+      // Lay the ring flat against the sphere; facing the centre makes it a disc
+      // seen edge-on from orbit, which is invisible.
+      ring.lookAt(0, 0, 0)
+      this.pointGroup.add(ring)
+
+      // One expanding pulse per destination, phase-offset so a busy map does
+      // not blink in unison. Direction decides which way it travels: outward
+      // for data leaving, inward for data arriving.
+      this.spawnPulse(pos, reach, p.inbound === true, hashPhase(p.label + p.lat))
     }
 
     if (home) {
+      const pos = latLngToVector(home.lat, home.lng, GLOBE_RADIUS * 1.006)
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(2.4, 3.4, 24),
+        new THREE.RingGeometry(2.4, 3.0, 28),
         new THREE.MeshBasicMaterial({
           color: COLORS.home, transparent: true, opacity: 0.85,
           side: THREE.DoubleSide, depthWrite: false,
         }),
       )
-      const pos = latLngToVector(home.lat, home.lng, GLOBE_RADIUS * 1.006)
       ring.position.copy(pos)
       ring.lookAt(0, 0, 0)
       ring.userData.isHome = true
       this.pointGroup.add(ring)
+
+      const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(0.7, 10, 10),
+        new THREE.MeshBasicMaterial({
+          color: COLORS.home, transparent: true, opacity: 1,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }),
+      )
+      dot.position.copy(pos)
+      this.pointGroup.add(dot)
     }
   }
+
+  /** spawnPulse adds an expanding (or contracting) ring at a marker. */
+  private spawnPulse(pos: THREE.Vector3, reach: number, inbound: boolean, phase: number) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: inbound ? COLORS.flowIn : COLORS.flowOut,
+      transparent: true, opacity: 0,
+      side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+    const mesh = new THREE.Mesh(new THREE.RingGeometry(1, 1.18, 28), mat)
+    mesh.position.copy(pos)
+    mesh.lookAt(0, 0, 0)
+    this.pointGroup.add(mesh)
+    this.pulses.push({ mesh, mat, reach, inbound, phase })
+  }
+
+  /**
+   * updatePulses animates the rings. Outbound expands away from the marker and
+   * fades, which reads as something leaving; inbound starts wide and collapses
+   * onto it, which reads as something arriving.
+   */
+  private updatePulses(t: number) {
+    for (const p of this.pulses) {
+      // One pulse every ~2.4s, offset per marker.
+      const cycle = ((t / 2.4) + p.phase) % 1
+      const k = p.inbound ? 1 - cycle : cycle
+      const scale = 0.35 + k * (p.reach + 1.4)
+      p.mesh.scale.setScalar(scale)
+      // Fade at both ends so it emerges and dissolves rather than popping.
+      p.mat.opacity = 0.5 * Math.sin(cycle * Math.PI)
+    }
+  }
+
 
   // ---- interaction ----
 
@@ -729,6 +838,7 @@ export class GlobeScene {
     // Countries fade toward their target intensity rather than snapping, so a
     // poll that changes the traffic mix does not flash the whole map.
     this.updateCountryGlow(t)
+    if (!this.reducedMotion) this.updatePulses(t)
 
     this.renderer.render(this.scene, this.camera)
   }

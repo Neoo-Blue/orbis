@@ -63,6 +63,11 @@ export function Chart({ series, height = 160 }: {
           stroke="var(--line-soft)" strokeWidth="0.5" opacity="0.5" />
       ))}
       {prepared.map((s, i) => {
+        // A series can be empty while another in the same chart has data (a
+        // metric with no samples yet, or a cumulative counter that had one
+        // point and became zero after the rate diff). Skip it rather than
+        // index into an empty array.
+        if (s.pts.length < 2) return null
         const line = s.pts.map((p, j) => `${j ? 'L' : 'M'}${x(p.t).toFixed(1)} ${y(p.v).toFixed(1)}`).join(' ')
         const area = `${line} L${x(s.pts[s.pts.length - 1].t).toFixed(1)} ${H - padB} L${x(s.pts[0].t).toFixed(1)} ${H - padB} Z`
         return (

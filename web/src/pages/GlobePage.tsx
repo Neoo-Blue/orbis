@@ -171,7 +171,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
 
       <div className="globe-overlay">
         {homeIsGuessed && (
-          <div style={{ maxWidth: 520, marginBottom: 10 }}>
+          <div style={{ maxWidth: 520, marginBottom: 10, flex: 'none' }}>
             <Banner tone="info" action={
               <button className="btn sm" onClick={locateSelf} disabled={locating}>
                 {locating ? 'Locating…' : 'Locate me'}
@@ -182,7 +182,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
             </Banner>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap', flex: 'none' }}>
           <div className="globe-legend">
             <span><i style={{ background: 'var(--accent)' }} />allowed</span>
             <span><i style={{ background: 'var(--red)' }} />blocked</span>
@@ -272,11 +272,7 @@ function CountryPanel({ countries, onFocus }: {
   const top = countries.slice(0, 8)
   const max = Math.max(...top.map((c) => c.bytes), 1)
   return (
-    <div style={{
-      position: 'absolute', right: 16, bottom: 16, width: 226,
-      background: 'rgba(8,11,18,.72)', backdropFilter: 'blur(10px)',
-      border: '1px solid var(--line-soft)', borderRadius: 'var(--radius)', padding: 11,
-    }}>
+    <div className="globe-country-panel">
       <div style={{
         fontSize: 10, letterSpacing: '.11em', textTransform: 'uppercase',
         color: 'var(--text-faint)', fontWeight: 600, marginBottom: 8,
@@ -305,12 +301,7 @@ function CountryPanel({ countries, onFocus }: {
 
 function ArcDetail({ arc, onClose, onBlock }: { arc: GlobeArc; onClose: () => void; onBlock: () => void }) {
   return (
-    <div style={{
-      position: 'absolute', left: 16, top: 66, width: 320, zIndex: 8,
-      background: 'rgba(8,11,18,.93)', backdropFilter: 'blur(12px)',
-      border: '1px solid var(--line)', borderRadius: 'var(--radius)',
-      boxShadow: 'var(--shadow)', overflow: 'hidden',
-    }}>
+    <div className="globe-detail">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: '1px solid var(--line-soft)' }}>
         <span className={`tag ${arc.verdict}`}>{arc.verdict}</span>
         <div className="spacer" style={{ flex: 1 }} />

@@ -244,6 +244,10 @@ function Tailscale() {
   const st = data.status
   const cfg = data.config as Record<string, unknown>
   const steered = new Set(data.steering_active ?? [])
+  const gw = data.gateway ?? {
+    applied: false, interfaces: [], wan: '', ip_forwarding: false,
+    masquerade: false, dns_redirect: false,
+  }
 
   const run = async (fn: () => Promise<unknown>, okMsg: string) => {
     setBusy(true)
@@ -333,6 +337,24 @@ function Tailscale() {
         )}
       </div>
 
+      <Card title="Gateway path">
+        <div className="hint" style={{ marginBottom: 12, lineHeight: 1.7 }}>
+          Being an approved exit node is not enough on its own — this node also has to forward and
+          NAT the traffic. These are the pieces that make it actually work, and they are installed
+          whether or not Orbis is inline for the LAN, because for tunnel traffic it <em>is</em> the
+          gateway.
+        </div>
+        <div className="grid c4">
+          <GatewayCheck ok={gw.applied} label="Tunnel rules" detail={gw.applied ? `on ${(gw.interfaces || []).join(', ')}` : 'not installed'} />
+          <GatewayCheck ok={gw.ip_forwarding} label="IP forwarding" detail={gw.ip_forwarding ? 'enabled' : 'off — nothing can be routed'} />
+          <GatewayCheck ok={gw.masquerade} label="NAT" detail={gw.masquerade ? `out via ${gw.wan}` : 'no WAN interface set'} />
+          <GatewayCheck ok={gw.dns_redirect} label="DNS filtering" detail={gw.dns_redirect ? 'tunnel clients forced onto this resolver' : 'clients keep their own DNS'} />
+        </div>
+        {gw.last_error && (
+          <div className="hint" style={{ color: 'var(--red)', marginTop: 10 }}>{gw.last_error}</div>
+        )}
+      </Card>
+
       <div className="grid c2">
         <Card title="Serve this network as an exit node">
           <div style={{ display: 'grid', gap: 12 }}>
@@ -346,7 +368,12 @@ function Tailscale() {
             />
             <div className="hint">
               Devices anywhere on your tailnet can route their internet traffic through this
-              network, which means they get this node's ad blocking and firewall policy too.
+              network. Their connections are captured and filtered here like any LAN device — but
+              their <em>DNS</em> goes through Tailscale's MagicDNS on the client and never reaches
+              this resolver. To filter that too, set{' '}
+              <code>{st.self?.addresses?.[0] ?? "this node's tailnet address"}</code> as the global
+              nameserver under DNS → Nameservers in the Tailscale admin console, with "Override
+              local DNS" on.
               {st.advertising_exit_node && !st.exit_node_approved && (
                 <strong style={{ color: 'var(--amber)', display: 'block', marginTop: 5 }}>
                   Advertised, but not yet approved. Open the Tailscale admin console → Machines →
@@ -472,6 +499,18 @@ function Tailscale() {
         )}
       </Card>
     </>
+  )
+}
+
+function GatewayCheck({ ok, label, detail }: { ok: boolean; label: string; detail: string }) {
+  return (
+    <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+      <span className={`dot ${ok ? 'on' : 'err'}`} style={{ marginTop: 5 }} />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 12.5 }}>{label}</div>
+        <div style={{ fontSize: 11, color: ok ? 'var(--text-faint)' : 'var(--amber)' }}>{detail}</div>
+      </div>
+    </div>
   )
 }
 

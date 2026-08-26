@@ -136,10 +136,10 @@ func TestKeyCanonicalIsDirectionStable(t *testing.T) {
 func TestIsLocalUsesConfiguredPrefixes(t *testing.T) {
 	tr, _ := newTestTracker(t)
 	cases := map[string]bool{
-		"192.168.1.50": true,  // configured prefix
-		"10.4.4.4":     true,  // RFC1918
-		"127.0.0.1":    true,  // loopback
-		"100.70.0.1":   true,  // CGNAT
+		"192.168.1.50": true, // configured prefix
+		"10.4.4.4":     true, // RFC1918
+		"127.0.0.1":    true, // loopback
+		"100.70.0.1":   true, // CGNAT
 		"8.8.8.8":      false,
 		"1.1.1.1":      false,
 	}
@@ -266,8 +266,8 @@ func TestByteDirectionFollowsOrientation(t *testing.T) {
 	in := Key{Proto: 6, SrcIP: remote, SrcPort: 443, DstIP: local, DstPort: 51234}
 
 	tr.Observe(Observation{Key: out, TCPFlags: tcpSYN, Bytes: 60, At: time.Now()})
-	tr.Observe(Observation{Key: out, Bytes: 500, At: time.Now()})   // request
-	tr.Observe(Observation{Key: in, Bytes: 9000, At: time.Now()})   // response
+	tr.Observe(Observation{Key: out, Bytes: 500, At: time.Now()}) // request
+	tr.Observe(Observation{Key: in, Bytes: 9000, At: time.Now()}) // response
 	tr.Observe(Observation{Key: in, Bytes: 9000, At: time.Now()})
 
 	flows := tr.Active(10)

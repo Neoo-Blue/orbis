@@ -31,12 +31,13 @@ type Capturer struct {
 	// without the capture layer importing it.
 	onHTTP func(clientIP netip.Addr, req *dpi.HTTPRequest)
 
-	mu      sync.Mutex
-	socks   []int
-	running bool
-	wg      sync.WaitGroup
-	stop    chan struct{}
-	log     func(string, ...any)
+	mu       sync.Mutex
+	socks    []int
+	watching []string
+	running  bool
+	wg       sync.WaitGroup
+	stop     chan struct{}
+	log      func(string, ...any)
 
 	stats CaptureStats
 }
@@ -62,6 +63,47 @@ func NewCapturer(t *Tracker, snapLen int, ifaces []string, log func(string, ...a
 }
 
 func (c *Capturer) SetHTTPHook(fn func(netip.Addr, *dpi.HTTPRequest)) { c.onHTTP = fn }
+
+// AddInterfaces starts capturing on interfaces that appeared after startup —
+// a WireGuard or Tailscale device is created when the tunnel comes up, long
+// after the initial scan. Without this, a VPN client's traffic is forwarded
+// correctly and never shows up in the flow table.
+func (c *Capturer) AddInterfaces(names []string) {
+	c.mu.Lock()
+	if !c.running {
+		c.mu.Unlock()
+		return
+	}
+	existing := make(map[string]bool, len(c.watching))
+	for _, n := range c.watching {
+		existing[n] = true
+	}
+	c.mu.Unlock()
+
+	filter, err := buildFilter(c.snapLen)
+	if err != nil {
+		c.log("capture: cannot build filter for new interfaces: %v", err)
+		return
+	}
+	for _, name := range names {
+		if name == "" || existing[name] {
+			continue
+		}
+		fd, err := c.openSocket(name, filter)
+		if err != nil {
+			c.log("capture: could not watch %s: %v", name, err)
+			continue
+		}
+		c.mu.Lock()
+		c.socks = append(c.socks, fd)
+		c.watching = append(c.watching, name)
+		c.stats.Interfaces = len(c.watching)
+		c.mu.Unlock()
+		c.wg.Add(1)
+		go c.readLoop(fd, name)
+		c.log("capture: now watching %s", name)
+	}
+}
 
 // Start opens one socket per interface. Missing interfaces are reported and
 // skipped rather than aborting the whole capture.
@@ -103,6 +145,7 @@ func (c *Capturer) Start() error {
 		}
 		c.mu.Lock()
 		c.socks = append(c.socks, fd)
+		c.watching = append(c.watching, name)
 		c.mu.Unlock()
 		opened++
 		c.wg.Add(1)

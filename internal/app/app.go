@@ -299,6 +299,10 @@ func (a *App) Start() {
 		go func() { defer a.wg.Done(); a.Self.Run(a.ctx) }()
 	}
 
+	// Tunnel traffic makes this node a gateway for that traffic whatever the
+	// mode says about the LAN, so the tunnel rules go in either way.
+	a.SyncTunnelRules()
+
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.maintenanceLoop() }()
 
@@ -358,6 +362,51 @@ func (a *App) maintenanceLoop() {
 			}
 		}
 	}
+}
+
+// SyncTunnelRules installs, updates or removes the tunnel gateway ruleset to
+// match the current configuration. Called at startup and whenever a VPN or
+// Tailscale setting changes.
+func (a *App) SyncTunnelRules() {
+	cfg := a.Cfg.Snapshot()
+	tc := firewall.BuildTunnelConfig(cfg)
+
+	if tc.Active() {
+		// Routing anything requires forwarding; enabling it here rather than
+		// leaving it to the operator is the difference between the VPN
+		// working and appearing to connect but moving nothing.
+		if err := enableForwarding(tc.IPv6); err != nil {
+			a.log("firewall: could not enable IP forwarding (%v) — tunnel clients will connect but reach nothing", err)
+			a.raise(store.SevWarning, "vpn", "IP forwarding is off",
+				"Tunnel clients can connect but cannot reach anything through this node. "+
+					"On a container, set net.ipv4.ip_forward=1 on the host.")
+		}
+	}
+
+	if err := a.Firewall.ApplyTunnel(a.ctx, tc); err != nil {
+		a.log("firewall: tunnel rules: %v", err)
+		return
+	}
+	if tc.Active() {
+		// Tunnel interfaces carry real client traffic, so they belong in the
+		// capture set; otherwise a VPN client's connections never appear.
+		a.Capture.AddInterfaces(tc.Interfaces)
+		a.Tracker.SetLocalNets(append(flows.LocalPrefixes(), tc.Subnets...))
+	}
+}
+
+// enableForwarding turns on routing. It is idempotent and reports the failure
+// rather than hiding it, because in an unprivileged container this is owned
+// by the host and the operator needs to know.
+func enableForwarding(ipv6 bool) error {
+	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0o644); err != nil {
+		return err
+	}
+	if ipv6 {
+		// A v6 failure is not fatal: plenty of networks are v4-only.
+		_ = os.WriteFile("/proc/sys/net/ipv6/conf/all/forwarding", []byte("1"), 0o644)
+	}
+	return nil
 }
 
 func (a *App) recordStats() {

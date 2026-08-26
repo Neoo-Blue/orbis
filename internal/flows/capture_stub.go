@@ -38,6 +38,7 @@ func NewCapturer(t *Tracker, snapLen int, ifaces []string, log func(string, ...a
 }
 
 func (c *Capturer) SetHTTPHook(fn func(netip.Addr, *dpi.HTTPRequest)) {}
+func (c *Capturer) AddInterfaces(names []string)                      {}
 
 func (c *Capturer) Start() error {
 	return errors.New("packet capture requires Linux (AF_PACKET)")

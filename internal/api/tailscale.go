@@ -44,6 +44,10 @@ func (s *Server) handleTSStatus(w http.ResponseWriter, r *http.Request) {
 		},
 		"steering_active":    s.app.Tailscale.SteeringActive(r.Context()),
 		"overlapping_routes": s.app.Tailscale.OverlappingRoutes(r.Context()),
+		// The gateway block is what tells an operator whether an approved
+		// exit node can actually move traffic, rather than only whether
+		// Tailscale thinks it is one.
+		"gateway": s.app.Firewall.TunnelStatus(),
 	}
 	if !st.Available {
 		out["install_hint"] = vpn.InstallHint()
@@ -60,6 +64,11 @@ func (s *Server) handleTSStatus(w http.ResponseWriter, r *http.Request) {
 		warnings = append(warnings,
 			"Subnet routes "+strings.Join(st.PendingRoutes, ", ")+" are advertised but not approved in the admin console.")
 	}
+	if gw := s.app.Firewall.TunnelStatus(); len(gw.Blockers) > 0 {
+		for _, b := range gw.Blockers {
+			warnings = append(warnings, b)
+		}
+	}
 	if cfg.ExitNode != "" && len(cfg.SteerClients) == 0 {
 		warnings = append(warnings,
 			"An exit node is selected, but no LAN clients are steered through it — only this node's own traffic uses it.")
@@ -73,6 +82,21 @@ func (s *Server) handleTSStatus(w http.ResponseWriter, r *http.Request) {
 			"A tailnet peer advertises "+strings.Join(overlap, ", ")+", which covers this node's own "+
 				"network. Accepting routes while that is true would send local traffic into the "+
 				"tunnel and take this node off the LAN, so route acceptance is being held off.")
+	}
+	// Exit-node clients resolve through MagicDNS on the client itself, so
+	// their queries never reach the nftables redirect. Their traffic is
+	// filtered; their DNS is not. Saying so beats letting an operator believe
+	// otherwise.
+	if st.AdvertisingExitNode && st.ExitNodeApproved && st.Self != nil && len(st.Self.Addresses) > 0 {
+		warnings = append(warnings,
+			"Devices using this node as an exit node have their connections captured and filtered "+
+				"here, but their DNS goes through Tailscale's MagicDNS and bypasses this resolver. "+
+				"To filter that too, set "+st.Self.Addresses[0]+" as the tailnet's global nameserver "+
+				"under DNS \u2192 Nameservers in the Tailscale admin console, with \"Override local "+
+				"DNS\" turned on.")
+	}
+	for _, b := range s.app.Firewall.TunnelStatus().Blockers {
+		warnings = append(warnings, b)
 	}
 	out["warnings"] = warnings
 	writeOK(w, out)
@@ -118,6 +142,7 @@ func (s *Server) handleTSUp(w http.ResponseWriter, r *http.Request) {
 	if err := s.app.Tailscale.ApplySteering(r.Context()); err != nil {
 		s.app.Log("tailscale: steering: %v", err)
 	}
+	s.app.SyncTunnelRules()
 	s.app.Store.Audit(r.RemoteAddr, "tailscale.up", "", "", "", "ok")
 	writeOK(w, s.app.Tailscale.Status(r.Context()))
 }
@@ -128,6 +153,7 @@ func (s *Server) handleTSDown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.cfg.Update(func(c *config.Config) { c.Tailscale.Enabled = false })
+	s.app.SyncTunnelRules()
 	s.app.Store.Audit(r.RemoteAddr, "tailscale.down", "", "", "", "ok")
 	writeOK(w, s.app.Tailscale.Status(r.Context()))
 }
@@ -176,6 +202,7 @@ func (s *Server) handleTSSetExitNode(w http.ResponseWriter, r *http.Request) {
 	if err := s.app.Tailscale.ApplySteering(r.Context()); err != nil {
 		s.app.Log("tailscale: steering: %v", err)
 	}
+	s.app.SyncTunnelRules()
 	s.app.Store.Audit(r.RemoteAddr, "tailscale.exit_node", req.Node, "", "", "ok")
 	writeOK(w, s.app.Tailscale.Status(r.Context()))
 }
@@ -193,6 +220,7 @@ func (s *Server) handleTSAdvertiseExitNode(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	s.app.SyncTunnelRules()
 	s.app.Store.Audit(r.RemoteAddr, "tailscale.advertise_exit_node", "", "", boolWord(req.Enabled), "ok")
 	st := s.app.Tailscale.Status(r.Context())
 	out := map[string]any{"status": st}
@@ -215,6 +243,7 @@ func (s *Server) handleTSRoutes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	s.app.SyncTunnelRules()
 	s.app.Store.Audit(r.RemoteAddr, "tailscale.routes", strings.Join(req.Routes, ","), "", "", "ok")
 	writeOK(w, s.app.Tailscale.Status(r.Context()))
 }
@@ -236,6 +265,7 @@ func (s *Server) handleTSSteer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	s.app.SyncTunnelRules()
 	s.app.Store.Audit(r.RemoteAddr, "tailscale.steer", strings.Join(req.Clients, ","), "", "", "ok")
 	writeOK(w, map[string]any{
 		"steering_active":    s.app.Tailscale.SteeringActive(r.Context()),

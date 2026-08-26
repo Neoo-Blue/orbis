@@ -172,11 +172,11 @@ func TestScheduleMatch(t *testing.T) {
 
 func TestSanitizeProducesValidIdentifiers(t *testing.T) {
 	cases := map[string]string{
-		"lan":          "lan",
-		"Guest WiFi":   "guest_wifi",
-		"2nd-floor":    "z2nd_floor",
-		"":             "zone",
-		"a.b/c":        "a_b_c",
+		"lan":        "lan",
+		"Guest WiFi": "guest_wifi",
+		"2nd-floor":  "z2nd_floor",
+		"":           "zone",
+		"a.b/c":      "a_b_c",
 	}
 	for in, want := range cases {
 		if got := sanitize(in); got != want {
@@ -195,9 +195,9 @@ func TestTailscaleRulesAppearOnlyWhenEnabled(t *testing.T) {
 	cfg.Tailscale.Enabled = true
 	out, _ = renderRuleset(cfg, nil)
 	for _, want := range []string{
-		`iifname "tailscale0" accept`,          // input: reach this node over the tailnet
-		`iifname "tailscale0" counter accept`,  // forward: act as an exit node
-		`oifname "tailscale0" counter accept`,  // forward: steer clients out
+		`iifname "tailscale0" accept`,             // input: reach this node over the tailnet
+		`iifname "tailscale0" counter accept`,     // forward: act as an exit node
+		`oifname "tailscale0" counter accept`,     // forward: steer clients out
 		`oifname "tailscale0" counter masquerade`, // NAT steered LAN sources
 		"udp dport 41641 accept",
 	} {

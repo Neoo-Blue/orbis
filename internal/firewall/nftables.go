@@ -38,6 +38,12 @@ type Engine struct {
 	lastApply time.Time
 	available bool
 	version   string
+
+	// Tunnel gateway state is tracked separately from the main ruleset
+	// because it is applied on a different trigger and in a different table.
+	tunnelApplied bool
+	tunnelCfg     TunnelConfig
+	tunnelErr     string
 }
 
 func New(cfg *config.Config, st *store.Store, log func(string, ...any)) *Engine {
@@ -68,13 +74,15 @@ func (e *Engine) Status() map[string]any {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return map[string]any{
-		"available":  e.available,
-		"version":    e.version,
-		"applied":    e.applied,
-		"last_apply": e.lastApply,
-		"last_error": e.lastError,
-		"mode":       string(e.cfg.Snapshot().Mode),
-		"enabled":    e.cfg.Snapshot().Firewall.Enabled,
+		"available":      e.available,
+		"version":        e.version,
+		"applied":        e.applied,
+		"last_apply":     e.lastApply,
+		"last_error":     e.lastError,
+		"mode":           string(e.cfg.Snapshot().Mode),
+		"enabled":        e.cfg.Snapshot().Firewall.Enabled,
+		"tunnel_applied": e.tunnelApplied,
+		"tunnel_error":   e.tunnelErr,
 	}
 }
 

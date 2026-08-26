@@ -974,12 +974,16 @@ func (s *Server) handleVPNServerAction(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// The wg interface only exists once the server is up, so the tunnel
+		// rules and the capture set have to be built after, not before.
+		s.app.SyncTunnelRules()
 	case "stop":
 		if err := s.app.VPN.StopServer(r.Context()); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		_ = s.cfg.Update(func(c *config.Config) { c.VPN.Server.Enabled = false })
+		s.app.SyncTunnelRules()
 	case "keys":
 		pub, err := s.app.VPN.EnsureServerKeys()
 		if err != nil {
@@ -1003,6 +1007,7 @@ func (s *Server) handleVPNClientAction(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		s.app.SyncTunnelRules()
 	case "stop":
 		if err := s.app.VPN.StopClient(r.Context(), name); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
@@ -1187,6 +1192,11 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			if err := s.app.DNS.ReloadUpstreams(); err != nil {
 				s.app.Log("dns: reload upstreams: %v", err)
 			}
+		case strings.HasPrefix(key, "vpn."), strings.HasPrefix(key, "tailscale."),
+			key == "firewall.wan_interface":
+			// Anything that changes which interfaces carry tunnel traffic,
+			// or where it egresses, invalidates the tunnel ruleset.
+			s.app.SyncTunnelRules()
 		}
 	}
 	writeOK(w, map[string]any{"applied": applied, "config": s.cfg.Redacted()})

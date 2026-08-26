@@ -196,6 +196,11 @@ export const api = {
         config: Record<string, unknown>
         steering_active: string[]
         overlapping_routes: string[]
+        gateway: {
+          applied: boolean; interfaces: string[]; wan: string
+          ip_forwarding: boolean; masquerade: boolean; dns_redirect: boolean
+          last_error?: string; blockers?: string[]
+        }
         warnings: string[]
         install_hint?: string
       }>('/tailscale/status'),

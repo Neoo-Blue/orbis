@@ -515,6 +515,33 @@ func autoInterfaces() ([]string, error) {
 
 // LocalPrefixes reports the CIDRs configured on this host, used to decide
 // which side of a flow is "inside".
+// LocalPrefixesExcluding is LocalPrefixes with named interfaces left out,
+// used where tunnel addresses must not be treated as part of the LAN.
+func LocalPrefixesExcluding(skip map[string]bool) []string {
+	var out []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, i := range ifaces {
+		if i.Flags&net.FlagLoopback != 0 || skip[i.Name] {
+			continue
+		}
+		addrs, err := i.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if ipnet, ok := a.(*net.IPNet); ok {
+				if p, err := netip.ParsePrefix(ipnet.String()); err == nil {
+					out = append(out, p.Masked().String())
+				}
+			}
+		}
+	}
+	return out
+}
+
 func LocalPrefixes() []string {
 	var out []string
 	ifaces, err := net.Interfaces()

@@ -119,8 +119,24 @@ func (a *App) SyncEgress(ctx context.Context) error {
 func (a *App) LANPrefixes() []string { return a.lanPrefixes() }
 
 func (a *App) lanPrefixes() []string {
+	// Tunnel interfaces are excluded by name. Routing a tunnel's own address
+	// range into another tunnel is a loop, and the tailnet's CGNAT range
+	// passes an IsPrivate check while being anything but a LAN — steering it
+	// into a WireGuard provider would take Tailscale down.
+	tunnelIfaces := map[string]bool{}
+	cfg := a.Cfg.Snapshot()
+	tunnelIfaces["tailscale0"] = true
+	if cfg.VPN.Server.Interface != "" {
+		tunnelIfaces[cfg.VPN.Server.Interface] = true
+	}
+	for _, t := range cfg.VPN.Tunnels {
+		if t.Interface != "" {
+			tunnelIfaces[t.Interface] = true
+		}
+	}
+
 	var out []string
-	for _, cidr := range flows.LocalPrefixes() {
+	for _, cidr := range flows.LocalPrefixesExcluding(tunnelIfaces) {
 		pfx, err := netip.ParsePrefix(cidr)
 		if err != nil || !geoip.IsPrivate(pfx.Addr()) {
 			continue
@@ -128,6 +144,10 @@ func (a *App) lanPrefixes() []string {
 		if pfx.Addr().Is6() {
 			// v6 policy routing through a v4 provider tunnel is a reliable
 			// way to blackhole half the internet; leave it alone.
+			continue
+		}
+		// A /32 is this node's own address, not a network of devices.
+		if pfx.Bits() >= 31 {
 			continue
 		}
 		out = append(out, pfx.Masked().String())

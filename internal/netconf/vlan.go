@@ -107,15 +107,26 @@ func (m *Manager) Available() (bool, string) {
 	if _, err := exec.LookPath("ip"); err != nil {
 		return false, "the ip command is not installed"
 	}
+
+	// The probe has to run against a real interface. Loopback never supports
+	// VLAN tagging, so probing it reports "VLANs not supported on device"
+	// whether or not the module is loaded — which is a false negative that
+	// tells the operator to fix something that is not broken.
+	parent := firstPhysicalInterface()
+	if parent == "" {
+		return false, "no physical interface to build a VLAN on"
+	}
+
 	const probe = "orbisprb0"
-	out, err := exec.Command("ip", "link", "add", "link", "lo", "name", probe,
+	_ = exec.Command("ip", "link", "del", probe).Run()
+	out, err := exec.Command("ip", "link", "add", "link", parent, "name", probe,
 		"type", "vlan", "id", "4094").CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		switch {
 		case strings.Contains(msg, "not permitted"):
 			return false, "creating VLAN interfaces needs CAP_NET_ADMIN; in a container, run it privileged"
-		case strings.Contains(msg, "not supported"), strings.Contains(msg, "Unknown device type"):
+		case strings.Contains(msg, "Unknown device type"), strings.Contains(msg, "not supported"):
 			return false, "the 8021q kernel module is not loaded — run `modprobe 8021q` on the host"
 		case msg == "":
 			return false, err.Error()
@@ -124,6 +135,32 @@ func (m *Manager) Available() (bool, string) {
 	}
 	_ = exec.Command("ip", "link", "del", probe).Run()
 	return true, ""
+}
+
+// firstPhysicalInterface picks something a VLAN can actually be built on:
+// up, not loopback, not itself a tunnel or a tagged interface.
+func firstPhysicalInterface() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	skip := []string{"wg", "tailscale", "docker", "veth", "br-", "tun", "tap", "virbr"}
+	for _, i := range ifaces {
+		if i.Flags&net.FlagLoopback != 0 || strings.Contains(i.Name, ".") {
+			continue
+		}
+		bad := false
+		for _, p := range skip {
+			if strings.HasPrefix(i.Name, p) {
+				bad = true
+				break
+			}
+		}
+		if !bad {
+			return i.Name
+		}
+	}
+	return ""
 }
 
 // Apply reconciles the configured VLANs with what exists: creates what is

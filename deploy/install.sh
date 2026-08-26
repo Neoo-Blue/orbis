@@ -127,6 +127,16 @@ RESOLVED
   printf 'nameserver 127.0.0.1\nnameserver 1.1.1.1\noptions timeout:2\n' > /etc/resolv.conf
 fi
 
+# Tailscale is optional but the exit-node features are inert without it, and
+# installing the daemon changes nothing until someone authenticates it.
+if ! command -v tailscale >/dev/null 2>&1; then
+  if [ "${SKIP_TAILSCALE:-0}" != "1" ]; then
+    say "Installing Tailscale (stays logged out; authenticate from the UI when you want it)"
+    curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1 \
+      || warn "Tailscale install failed; the VPN page will show how to install it by hand"
+  fi
+fi
+
 say "Installing the systemd unit"
 cat > /etc/systemd/system/orbis.service <<'UNIT'
 [Unit]

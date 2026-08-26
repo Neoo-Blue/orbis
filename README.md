@@ -2,6 +2,9 @@
 
 # Orbis
 
+<img width="1913" height="889" alt="image" src="https://github.com/user-attachments/assets/3650f99c-d682-4e5c-a7b6-e938a7d18e13" />
+
+
 **An AI-assisted network firewall, filtering resolver and traffic analyser — in one binary.**
 
 Little Snitch's per-connection visibility, applied to the whole network, with UniFi's

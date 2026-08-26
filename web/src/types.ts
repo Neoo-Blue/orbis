@@ -720,3 +720,32 @@ export interface DNSRecord {
   weight?: number
   port?: number
 }
+
+// ---- alerts & reports ----
+
+export interface AlertRule {
+  id: string
+  name: string
+  enabled: boolean
+  type: string
+  match: string
+  threshold: number
+  severity: string
+  cooldown_minutes: number
+}
+
+export interface ReportData {
+  node: string
+  window: string
+  generated_at: string
+  dns_queries: number
+  dns_blocked: number
+  block_rate: number
+  devices: number
+  new_devices: string[]
+  bytes_in: number
+  bytes_out: number
+  top_talkers: Array<{ label: string; value: number }>
+  top_blocked: Array<{ label: string; value: number }>
+  top_countries: Array<{ label: string; value: number }>
+}

@@ -9,12 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
 	"github.com/Neoo-Blue/orbis/internal/intercept"
+	"github.com/Neoo-Blue/orbis/internal/report"
 	"github.com/Neoo-Blue/orbis/internal/store"
 )
 
@@ -601,4 +603,189 @@ func (a *App) ReloadRecords() {
 	if a.DNS != nil {
 		a.DNS.Cache().Flush()
 	}
+}
+
+// ---- alerts.Backend ----
+
+func (a *App) AlertDevices() []alerts.DeviceSnapshot {
+	out := []alerts.DeviceSnapshot{}
+	cutoff := time.Now().Add(-5 * time.Minute)
+	clients, _ := a.Store.Clients()
+	for _, c := range clients {
+		lbl := c.Label
+		if lbl == "" {
+			lbl = c.Hostname
+		}
+		out = append(out, alerts.DeviceSnapshot{
+			ID: c.ID, IP: c.IP, Label: lbl,
+			LastSeen: c.LastSeen, FirstSeen: c.FirstSeen, Online: c.LastSeen.After(cutoff),
+		})
+	}
+	return out
+}
+
+func (a *App) ThroughputMbps() float64 {
+	var in, out float64
+	for _, r := range a.Tracker.ClientRates() {
+		in += r[0]
+		out += r[1]
+	}
+	return (in + out) * 8 / 1e6
+}
+
+func (a *App) RecentDomains(since time.Time) []string {
+	rows, err := a.Store.DNSLog(since, "", false, "", 2000)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(rows))
+	for _, q := range rows {
+		out = append(out, q.Name)
+	}
+	return out
+}
+
+func (a *App) BlockedPerMinute() float64 {
+	pts, err := a.Store.Series("dns_blocked_total", time.Now().Add(-3*time.Minute))
+	if err != nil || len(pts) < 2 {
+		return 0
+	}
+	a0, _ := pts[len(pts)-2]["v"].(float64)
+	b0, _ := pts[len(pts)-1]["v"].(float64)
+	t0, _ := pts[len(pts)-2]["t"].(int64)
+	t1, _ := pts[len(pts)-1]["t"].(int64)
+	dt := float64(t1-t0) / 60
+	if dt <= 0 {
+		return 0
+	}
+	d := b0 - a0
+	if d < 0 {
+		d = 0
+	}
+	return d / dt
+}
+
+// ---- reports ----
+
+// BuildReport assembles the network summary for a window.
+func (a *App) BuildReport(window string, since time.Time) *report.Report {
+	rep := &report.Report{
+		Node: a.Cfg.Snapshot().Node.Name, GeneratedAt: time.Now(),
+		Since: since, Window: window,
+	}
+	if rep.Node == "" {
+		rep.Node = "orbis"
+	}
+
+	// DNS totals from the query log.
+	if rows, err := a.Store.DNSLog(since, "", false, "", 100000); err == nil {
+		rep.DNSQueries = int64(len(rows))
+		for _, q := range rows {
+			if q.Blocked {
+				rep.DNSBlocked++
+			}
+		}
+		if rep.DNSQueries > 0 {
+			rep.BlockRate = 100 * float64(rep.DNSBlocked) / float64(rep.DNSQueries)
+		}
+	}
+
+	// Devices + top talkers + new devices, from the client table.
+	clients, _ := a.Store.Clients()
+	rep.Devices = len(clients)
+	var talkers []report.Row
+	for _, c := range clients {
+		if c.FirstSeen.After(since) {
+			name := c.Label
+			if name == "" {
+				name = c.Hostname
+			}
+			if name == "" {
+				name = c.IP
+			}
+			rep.NewDevices = append(rep.NewDevices, name)
+		}
+		total := c.RxBytes + c.TxBytes
+		if total > 0 {
+			name := c.Label
+			if name == "" {
+				name = c.Hostname
+			}
+			if name == "" {
+				name = c.IP
+			}
+			talkers = append(talkers, report.Row{Label: name, Value: total})
+			rep.BytesIn += c.RxBytes
+			rep.BytesOut += c.TxBytes
+		}
+	}
+	rep.TopTalkers = report.SortRows(talkers, 10)
+
+	// Most-blocked domains.
+	if tb, err := a.Store.TopBlocked(since, 10); err == nil {
+		for _, row := range tb {
+			name, _ := row["domain"].(string)
+			var n int64
+			switch v := row["count"].(type) {
+			case int64:
+				n = v
+			case float64:
+				n = int64(v)
+			}
+			if name != "" {
+				rep.TopBlocked = append(rep.TopBlocked, report.Row{Label: name, Value: n})
+			}
+		}
+	}
+
+	// Top destination countries.
+	if ct, err := a.Store.CountryTotals(since); err == nil {
+		var rows []report.Row
+		for _, row := range ct {
+			name, _ := row["country"].(string)
+			var n int64
+			switch v := row["connections"].(type) {
+			case int64:
+				n = v
+			case float64:
+				n = int64(v)
+			}
+			if name != "" {
+				rows = append(rows, report.Row{Label: name, Value: n})
+			}
+		}
+		rep.TopCountries = report.SortRows(rows, 10)
+	}
+	return rep
+}
+
+// maybeSendReport emails the scheduled summary at most once per cadence period,
+// at the configured hour. The last-sent day is remembered in memory; a restart
+// can therefore re-send once if it happens to land in the same hour, which is a
+// better failure than silently skipping a day.
+func (a *App) maybeSendReport(now time.Time) {
+	sched := a.Cfg.Snapshot().Notify.Report
+	if !sched.Enabled || now.Hour() != sched.Hour {
+		return
+	}
+	if sched.Cadence == "weekly" && now.Weekday() != time.Monday {
+		return
+	}
+	day := now.Format("2006-01-02")
+	a.reportMu.Lock()
+	if a.lastReport == day {
+		a.reportMu.Unlock()
+		return
+	}
+	a.lastReport = day
+	a.reportMu.Unlock()
+
+	hours := 24
+	window := "daily"
+	if sched.Cadence == "weekly" {
+		hours, window = 168, "weekly"
+	}
+	rep := a.BuildReport(window, now.Add(-time.Duration(hours)*time.Hour))
+	a.Notifier.SendReport("Orbis "+window+" report", rep.TextSummary())
+	a.log("report: sent %s summary", window)
 }

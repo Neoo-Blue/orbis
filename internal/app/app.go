@@ -15,6 +15,7 @@ import (
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
 	"github.com/Neoo-Blue/orbis/internal/ai"
+	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
@@ -73,6 +74,7 @@ type App struct {
 
 	// Notifier delivers events off the box (webhook, email).
 	Notifier *notify.Notifier
+	Alerts   *alerts.Engine
 
 	// Consent is ask-on-first-connection for enrolled devices.
 	Consent *consent.Store
@@ -93,6 +95,9 @@ type App struct {
 
 	recordsMu sync.RWMutex
 	records   *dnsproxy.RecordSet
+
+	reportMu   sync.Mutex
+	lastReport string
 
 	startedAt time.Time
 }
@@ -234,6 +239,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 
 	// Event delivery.
 	a.Notifier = notify.New(cfg, logf)
+	a.Alerts = alerts.NewEngine(func() []alerts.Rule {
+		return a.Cfg.Snapshot().Notify.Rules
+	}, a)
 
 	// Capture.
 	a.Capture = flows.NewCapturer(a.Tracker, cfg.Capture.SnapLen, cfg.Capture.Interfaces, logf)
@@ -501,6 +509,10 @@ func (a *App) maintenanceLoop() {
 
 		case <-stats.C:
 			a.recordStats()
+			for _, f := range a.Alerts.Evaluate(time.Now()) {
+				a.raise(f.Severity, "alert", f.Title, f.Detail)
+			}
+			a.maybeSendReport(time.Now())
 
 		case <-counters.C:
 			if c, err := a.Firewall.Counters(a.ctx); err == nil && len(c) > 0 {

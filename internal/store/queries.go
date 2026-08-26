@@ -1049,3 +1049,43 @@ func toInt(v any) int {
 	}
 	return 0
 }
+
+// SeriesDownsampled returns at most `buckets` points across the window, each the
+// average of the minute samples that fall in it. Charting two weeks of
+// per-minute data raw would ship 20,000 points to draw a few hundred pixels;
+// aggregating server-side keeps the payload and the render cheap while
+// preserving the shape.
+func (s *Store) SeriesDownsampled(metric string, since time.Time, buckets int) ([]map[string]any, error) {
+	if buckets <= 0 {
+		buckets = 200
+	}
+	start := since.Unix()
+	end := time.Now().Unix()
+	span := end - start
+	if span <= 0 {
+		span = 1
+	}
+	width := span / int64(buckets)
+	if width < 60 {
+		width = 60 // never finer than the minute the data is stored at
+	}
+	rows, err := s.db.Query(`
+		SELECT (bucket / ?) * ? AS slot, AVG(value), MAX(value)
+		FROM stats_minute
+		WHERE metric = ? AND bucket >= ?
+		GROUP BY slot ORDER BY slot`, width, width, metric, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var slot int64
+		var avg, max float64
+		if err := rows.Scan(&slot, &avg, &max); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{"t": slot, "v": avg, "max": max})
+	}
+	return out, rows.Err()
+}

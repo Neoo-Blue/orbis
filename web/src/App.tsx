@@ -5,6 +5,9 @@ import { Icons, ToastProvider, Banner, Spinner } from './ui'
 import type { SystemStatus, Summary } from './types'
 import { Dashboard } from './pages/Dashboard'
 import { GlobePage } from './pages/GlobePage'
+import { AnalyticsPage } from './pages/Analytics'
+import { AlertsPage } from './pages/Alerts'
+import { ReportsPage } from './pages/Reports'
 import { ClientsPage } from './pages/Clients'
 import { FlowsPage } from './pages/Flows'
 import { DNSPage } from './pages/DNS'
@@ -28,12 +31,13 @@ import { CommandPalette } from './CommandPalette'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports'
 
 const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
   { id: 'globe', label: 'Globe', icon: 'globe' },
   { id: 'flows', label: 'Connections', icon: 'activity' },
+  { id: 'analytics', label: 'Analytics', icon: 'spark' },
   { id: 'clients', label: 'Devices', icon: 'devices' },
   { id: 'topology', label: 'Topology', icon: 'grid' },
   { id: 'dns', label: 'DNS', icon: 'dns', group: 'Filtering' },
@@ -48,6 +52,8 @@ const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?
   { id: 'vpn', label: 'VPN', icon: 'key' },
   { id: 'assistant', label: 'Assistant', icon: 'chat', group: 'Operate' },
   { id: 'events', label: 'Events', icon: 'bell' },
+  { id: 'alerts', label: 'Alerts', icon: 'alert' },
+  { id: 'reports', label: 'Reports', icon: 'grid' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]
 
@@ -238,8 +244,9 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {route === 'dashboard' && <Dashboard status={status} summary={summary} events={liveEvents} onNavigate={navigate} />}
           {route === 'globe' && <GlobePage events={liveEvents} />}
           {route === 'flows' && <FlowsPage events={liveEvents} />}
+          {route === 'analytics' && <AnalyticsPage />}
           {route === 'clients' && <ClientsPage />}
-          {route === 'topology' && <TopologyPage />}
+          {route === 'topology' && <TopologyPage events={liveEvents} />}
           {route === 'dns' && <DNSPage events={liveEvents} />}
           {route === 'adblock' && <AdBlockPage />}
           {route === 'dnstools' && <DNSToolsPage />}
@@ -252,6 +259,8 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {route === 'vpn' && <VPNPage />}
           {route === 'assistant' && <AssistantPage />}
           {route === 'events' && <EventsPage />}
+          {route === 'alerts' && <AlertsPage />}
+          {route === 'reports' && <ReportsPage />}
           {route === 'settings' && <SettingsPage status={status} onAuthChange={onAuthChange} />}
           </ErrorBoundary>
         </div>

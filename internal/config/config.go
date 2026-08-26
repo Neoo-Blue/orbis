@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
 	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"gopkg.in/yaml.v3"
@@ -133,7 +134,7 @@ type InterceptConfig struct {
 }
 
 type NodeConfig struct {
-	Name     string `yaml:"name" json:"name"`
+	Name string `yaml:"name" json:"name"`
 	// Onboarded records that the first-run wizard has been completed. Kept
 	// separate from whether a password is set: an operator can set a password
 	// and still not have chosen how the node sits on the network, and that
@@ -142,8 +143,8 @@ type NodeConfig struct {
 	// OnboardedMode is "simple" or "advanced", remembered so re-running the
 	// wizard starts where the operator left off.
 	OnboardedMode string `yaml:"onboarded_mode" json:"onboarded_mode"`
-	DataDir  string `yaml:"data_dir" json:"data_dir"`
-	Timezone string `yaml:"timezone" json:"timezone"`
+	DataDir       string `yaml:"data_dir" json:"data_dir"`
+	Timezone      string `yaml:"timezone" json:"timezone"`
 	// Latitude/Longitude pin this node on the globe. When both are zero the
 	// node discovers its own public address and geolocates it locally.
 	Latitude  float64 `yaml:"latitude" json:"latitude"`
@@ -650,9 +651,23 @@ type NotifyConfig struct {
 	MinSeverity string `yaml:"min_severity" json:"min_severity"`
 	// DedupeMinutes collapses repeats of the same category+title. Repeated
 	// identical alerts train people to ignore all alerts.
-	DedupeMinutes int       `yaml:"dedupe_minutes" json:"dedupe_minutes"`
-	Webhooks      []Webhook `yaml:"webhooks" json:"webhooks"`
+	DedupeMinutes int         `yaml:"dedupe_minutes" json:"dedupe_minutes"`
+	Webhooks      []Webhook   `yaml:"webhooks" json:"webhooks"`
 	Email         EmailConfig `yaml:"email" json:"email"`
+	// Rules are user-defined alert triggers, evaluated every minute and routed
+	// to the same sinks as the anomaly detectors.
+	Rules []alerts.Rule `yaml:"rules" json:"rules"`
+	// Report schedules a recurring summary to the email sink.
+	Report ReportSchedule `yaml:"report" json:"report"`
+}
+
+// ReportSchedule emails the network summary on a cadence.
+type ReportSchedule struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Cadence is "daily" or "weekly".
+	Cadence string `yaml:"cadence" json:"cadence"`
+	// Hour is the local hour (0-23) to send at.
+	Hour int `yaml:"hour" json:"hour"`
 }
 
 // Webhook posts an event as JSON. Format selects the body shape: "json"

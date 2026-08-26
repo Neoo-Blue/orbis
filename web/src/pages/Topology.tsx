@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { LiveEvent } from '../hooks'
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Banner, Card, Drawer, Empty, Icons, Loading, Segmented, Stat, useToast } from '../ui'
@@ -18,12 +19,36 @@ const ROLE_ICON: Record<string, keyof typeof Icons> = {
   mobile: 'devices', printer: 'devices', iot: 'spark', unknown: 'search',
 }
 
-export function TopologyPage() {
+export function TopologyPage({ events }: { events: LiveEvent[] }) {
   const { data, refresh } = usePoll<TopoGraph>(() => api.topology.get(), 20000)
   const [scanning, setScanning] = useState(false)
   const [selected, setSelected] = useState<TopoNode | null>(null)
   const [tab, setTab] = useState<'map' | 'list'>('map')
+  const [activeIPs, setActiveIPs] = useState<Set<string>>(new Set())
+  const timers = useRef<Map<string, number>>(new Map())
   const toast = useToast()
+
+  // Light nodes up as flows involving them arrive on the socket, so the map
+  // reflects live traffic between the 20s polls rather than sitting static.
+  useEffect(() => {
+    const last = events[events.length - 1]
+    if (!last || (last.type !== 'flow.new' && last.type !== 'flow.update')) return
+    const f = last.data as { src_ip?: string; dst_ip?: string } | undefined
+    if (!f) return
+    setActiveIPs((prev) => {
+      const next = new Set(prev)
+      for (const ip of [f.src_ip, f.dst_ip]) {
+        if (!ip) continue
+        next.add(ip)
+        const existing = timers.current.get(ip)
+        if (existing) window.clearTimeout(existing)
+        timers.current.set(ip, window.setTimeout(() => {
+          setActiveIPs((p2) => { const n = new Set(p2); n.delete(ip); return n })
+        }, 2200))
+      }
+      return next
+    })
+  }, [events])
 
   const grouped = useMemo(() => {
     const out = new Map<string, TopoNode[]>()
@@ -94,7 +119,7 @@ export function TopologyPage() {
         </Empty>
       ) : tab === 'map' ? (
         <>
-          <NetworkMap graph={data} onSelect={setSelected} selectedId={selected?.id} />
+          <NetworkMap graph={data} onSelect={setSelected} selectedId={selected?.id} activeIPs={activeIPs} />
           {top.length > 0 && (
             <Card title="Top talkers">
               <div style={{ display: 'grid', gap: 7 }}>

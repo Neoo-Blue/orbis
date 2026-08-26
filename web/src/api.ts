@@ -7,6 +7,7 @@ import type {
   ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
   OnboardingState, PlacementCheck, TopoGraph, InterceptStatus, DNSRecord,
+  AlertRule, ReportData,
 } from './types'
 
 export class ApiError extends Error {
@@ -86,8 +87,8 @@ export const api = {
 
   status: () => get<SystemStatus>('/status'),
   summary: (hours = 24) => get<Summary>(`/summary${qs({ hours })}`),
-  series: (metric: string, hours = 6) =>
-    get<{ metric: string; points: Array<{ t: number; v: number }> }>(`/series/${metric}${qs({ hours })}`),
+  series: (metric: string, hours = 6, points?: number) =>
+    get<{ metric: string; points: Array<{ t: number; v: number; max?: number }> }>(`/series/${metric}${qs({ hours, points })}`),
   audit: (limit = 200) => get<{ entries: AuditEntry[] }>(`/audit${qs({ limit })}`),
   geoip: (ip: string) => get<{ ip: string; location: Record<string, unknown> }>(`/geoip/${ip}`),
   locateSelf: () =>
@@ -411,6 +412,17 @@ export const api = {
     list: () => get<{ records: DNSRecord[]; local_domain: string }>('/dns/records'),
     save: (rec: DNSRecord) => post<{ records: DNSRecord[] }>('/dns/records', rec),
     remove: (rec: DNSRecord) => post<{ records: DNSRecord[] }>('/dns/records/delete', rec),
+  },
+
+  alerts: {
+    rules: () => get<{ rules: AlertRule[] }>('/notify/rules'),
+    save: (rule: Partial<AlertRule>) => post<{ rules: AlertRule[] }>('/notify/rules', rule),
+    remove: (id: string) => del<{ rules: AlertRule[] }>(`/notify/rules/${id}`),
+  },
+
+  report: {
+    preview: (hours: number) => get<ReportData>(`/report${qs({ hours })}`),
+    downloadURL: (hours: number, format: 'csv' | 'html') => `/api/report${qs({ hours, format })}`,
   },
 
   config: {

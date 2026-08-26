@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/backup"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // mountOps registers backup/restore and notification management.
@@ -20,6 +22,9 @@ func (s *Server) mountOps(r chi.Router) {
 	})
 	r.Route("/notify", func(r chi.Router) {
 		r.Get("/", s.handleNotifyGet)
+		r.Get("/rules", s.handleAlertRules)
+		r.Post("/rules", s.handleAlertRuleSave)
+		r.Delete("/rules/{id}", s.handleAlertRuleDelete)
 		r.Post("/test", s.handleNotifyTest)
 		r.Post("/webhooks", s.handleNotifySaveWebhook)
 		r.Delete("/webhooks/{name}", s.handleNotifyDeleteWebhook)
@@ -152,4 +157,66 @@ func (s *Server) handleNotifyDeleteWebhook(w http.ResponseWriter, r *http.Reques
 	}
 	s.app.Store.Audit(r.RemoteAddr, "notify.webhook.delete", name, "", "", "ok")
 	writeOK(w, s.cfg.Redacted().Notify)
+}
+
+// ---- alert rules ----
+
+func (s *Server) handleAlertRules(w http.ResponseWriter, r *http.Request) {
+	writeOK(w, map[string]any{"rules": orEmptyRules(s.cfg.Snapshot().Notify.Rules)})
+}
+
+func (s *Server) handleAlertRuleSave(w http.ResponseWriter, r *http.Request) {
+	var rule alerts.Rule
+	if err := decodeJSON(r, &rule); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if rule.Name == "" || rule.Type == "" {
+		writeErr(w, http.StatusBadRequest, "name and type are required")
+		return
+	}
+	if rule.ID == "" {
+		rule.ID = uuid.NewString()
+	}
+	err := s.cfg.Update(func(c *config.Config) {
+		for i := range c.Notify.Rules {
+			if c.Notify.Rules[i].ID == rule.ID {
+				c.Notify.Rules[i] = rule
+				return
+			}
+		}
+		c.Notify.Rules = append(c.Notify.Rules, rule)
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.app.Store.Audit(r.RemoteAddr, "alert.rule.save", rule.Name, "", rule.Type, "ok")
+	writeOK(w, map[string]any{"rules": s.cfg.Snapshot().Notify.Rules})
+}
+
+func (s *Server) handleAlertRuleDelete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	err := s.cfg.Update(func(c *config.Config) {
+		out := c.Notify.Rules[:0]
+		for _, rl := range c.Notify.Rules {
+			if rl.ID != id {
+				out = append(out, rl)
+			}
+		}
+		c.Notify.Rules = out
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.app.Store.Audit(r.RemoteAddr, "alert.rule.delete", id, "", "", "ok")
+	writeOK(w, map[string]any{"rules": s.cfg.Snapshot().Notify.Rules})
+}
+
+func orEmptyRules(in []alerts.Rule) []alerts.Rule {
+	if in == nil {
+		return []alerts.Rule{}
+	}
+	return in
 }

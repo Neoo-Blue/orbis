@@ -606,8 +606,8 @@ func (s *Store) Prune(ctx context.Context, flowDays, eventDays int) error {
 			return err
 		}
 	}
-	// stats_minute is only used for the last 48h of sparklines.
-	_, _ = s.db.ExecContext(ctx, "DELETE FROM stats_minute WHERE bucket < ?", now.Add(-48*time.Hour).Unix())
+	// stats_minute powers sparklines and the analytics charts; keep 14 days.
+	_, _ = s.db.ExecContext(ctx, "DELETE FROM stats_minute WHERE bucket < ?", now.Add(-14*24*time.Hour).Unix())
 	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 	return err
 }

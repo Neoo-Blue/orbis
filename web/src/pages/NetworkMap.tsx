@@ -41,10 +41,11 @@ interface Placed extends TopoNode {
 const W = 1000
 const H = 720
 
-export function NetworkMap({ graph, onSelect, selectedId }: {
+export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
   graph: TopoGraph
   onSelect: (n: TopoNode) => void
   selectedId?: string
+  activeIPs?: Set<string>
 }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [view, setView] = useState({ x: 0, y: 0, k: 1 })
@@ -143,6 +144,13 @@ export function NetworkMap({ graph, onSelect, selectedId }: {
               <g key={n.id} transform={`translate(${n.x} ${n.y})`}
                 onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover(null)}
                 onClick={() => onSelect(n)} style={{ cursor: 'pointer', opacity: dim ? 0.35 : 1 }}>
+                {/* live flash: a node with a flow on the wire right now */}
+                {activeIPs?.has(n.ip) && (
+                  <circle r={n.r + 4} fill="none" stroke="var(--accent)" strokeWidth={1.5} opacity={0.9}>
+                    <animate attributeName="r" from={n.r + 2} to={n.r + 14} dur="0.9s" repeatCount="indefinite" />
+                    <animate attributeName="opacity" from="0.9" to="0" dur="0.9s" repeatCount="indefinite" />
+                  </circle>
+                )}
                 {/* activity pulse for online nodes with traffic */}
                 {n.online && (n.bytes_in + n.bytes_out > 0) && (
                   <circle r={n.r} fill="none" stroke={inHeavy ? 'var(--amber)' : color} strokeWidth={1}>

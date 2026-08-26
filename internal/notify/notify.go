@@ -259,3 +259,16 @@ func (n *Notifier) Test() error {
 	}
 	return nil
 }
+
+// SendReport delivers a scheduled report to the email sink (and any webhooks),
+// bypassing the severity filter and dedupe that gate ordinary alerts: a report
+// is requested, not triggered, so those guards do not apply.
+func (n *Notifier) SendReport(subject, body string) {
+	c := n.cfg.Snapshot().Notify
+	if c.Email.Enabled {
+		ev := store.Event{TS: time.Now(), Severity: "info", Category: "report", Title: subject, Detail: body}
+		if err := n.sendEmail(c.Email, ev); err != nil {
+			n.log("notify: report email failed: %v", err)
+		}
+	}
+}

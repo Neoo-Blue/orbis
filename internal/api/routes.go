@@ -126,6 +126,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountConsent(r)
 	s.mountDNSTools(r)
 	s.mountDNSRecords(r)
+	s.mountReport(r)
 	s.mountOnboarding(r)
 	s.mountTopology(r)
 	s.mountIntercept(r)
@@ -171,7 +172,14 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 	metric := chi.URLParam(r, "metric")
-	points, err := s.app.Store.Series(metric, querySince(r, 6))
+	buckets := queryInt(r, "points", 0, 1000)
+	var points []map[string]any
+	var err error
+	if buckets > 0 {
+		points, err = s.app.Store.SeriesDownsampled(metric, querySince(r, 6), buckets)
+	} else {
+		points, err = s.app.Store.Series(metric, querySince(r, 6))
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

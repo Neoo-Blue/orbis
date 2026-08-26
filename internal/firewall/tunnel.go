@@ -69,11 +69,18 @@ type TunnelConfig struct {
 	// ProxyZoneIfaces are LAN interfaces to redirect. Only populated when the
 	// node is inline; otherwise LAN traffic does not pass through it anyway.
 	ProxyZoneIfaces []string
+	// ProxyTunnelIfaces are tunnel interfaces to redirect. Kept separate from
+	// Interfaces because a device reaching in over WireGuard or Tailscale is
+	// the least likely of any client to have been given the CA, and
+	// intercepting it does not filter its traffic, it breaks it: every
+	// intercepted host fails TLS and the browser reports the site as down.
+	// Populated only on explicit opt-in.
+	ProxyTunnelIfaces []string
 }
 
 // Active reports whether there is anything to install.
 func (t TunnelConfig) Active() bool {
-	if t.FilterProxy && (len(t.ProxyZoneIfaces) > 0 || len(t.Interfaces) > 0) {
+	if t.FilterProxy && (len(t.ProxyZoneIfaces) > 0 || len(t.ProxyTunnelIfaces) > 0) {
 		return true
 	}
 	return len(t.Interfaces) > 0 && t.WAN != ""
@@ -161,6 +168,14 @@ func BuildTunnelConfig(cfg config.Config) TunnelConfig {
 		tc.ProxyHTTP = portOf(cfg.MITM.ListenHTTP)
 		tc.ProxyTLS = portOf(cfg.MITM.ListenTLS)
 		tc.ProxyClients = cfg.MITM.OnlyClients
+		// Tunnel clients are intercepted only when the operator asks, or when
+		// an explicit client list says exactly which devices have the CA.
+		// The old behaviour redirected every tunnel client by default, which
+		// silently broke browsing for any remote device that had not installed
+		// the certificate.
+		if cfg.MITM.InterceptTunnelClients || len(cfg.MITM.OnlyClients) > 0 {
+			tc.ProxyTunnelIfaces = append(tc.ProxyTunnelIfaces, tc.Interfaces...)
+		}
 		// LAN traffic only reaches this node when it is the gateway, so
 		// redirecting it in observe mode would be a rule that never matches.
 		if cfg.Mode == config.ModeInline {
@@ -366,7 +381,7 @@ func renderTunnelRuleset(tc TunnelConfig) string {
 	w("  }")
 	w("")
 
-	if tc.FilterProxy && (len(tc.ProxyZoneIfaces) > 0 || len(tc.Interfaces) > 0) {
+	if tc.FilterProxy && (len(tc.ProxyZoneIfaces) > 0 || len(tc.ProxyTunnelIfaces) > 0) {
 		w("  chain proxy_redirect {")
 		w("    type nat hook prerouting priority dstnat - 20;")
 		if len(tc.ProxyClients) > 0 {
@@ -384,7 +399,7 @@ func renderTunnelRuleset(tc TunnelConfig) string {
 		// that is an immediate loop.
 		w("    fib saddr type local return")
 		ifaces := append([]string{}, tc.ProxyZoneIfaces...)
-		ifaces = append(ifaces, tc.Interfaces...)
+		ifaces = append(ifaces, tc.ProxyTunnelIfaces...)
 		w("    iifname { %s } tcp dport 80 redirect to :%d comment \"filter proxy (http)\"",
 			quoteJoin(dedupe(ifaces)), tc.ProxyHTTP)
 		w("    iifname { %s } tcp dport 443 redirect to :%d comment \"filter proxy (tls)\"",

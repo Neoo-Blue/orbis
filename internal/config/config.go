@@ -319,6 +319,13 @@ type MITMConfig struct {
 	// OnlyClients limits interception to specific IP/MACs. Empty = all
 	// clients whose traffic is redirected here.
 	OnlyClients []string `yaml:"only_clients" json:"only_clients"`
+	// InterceptTunnelClients extends interception to devices arriving over
+	// WireGuard or Tailscale. Off by default: a remote device is the least
+	// likely to have the CA installed, and intercepting one without it does
+	// not filter its traffic, it breaks it. Every intercepted host fails TLS
+	// and the browser reports the site as down, which looks like DNS
+	// over-blocking and sends you hunting in the wrong place.
+	InterceptTunnelClients bool `yaml:"intercept_tunnel_clients" json:"intercept_tunnel_clients"`
 	// BlockQUIC rejects UDP/443 for intercepted zones so YouTube and Chrome,
 	// which default to HTTP/3 over QUIC, fall back to the TCP path the proxy
 	// can actually see. Without it the InnerTube filter silently does nothing

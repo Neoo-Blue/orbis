@@ -187,3 +187,36 @@ func TestInactiveTunnelRendersNothing(t *testing.T) {
 		t.Error("a WAN with no tunnel interfaces reported itself as active")
 	}
 }
+
+func TestTunnelClientsAreNotInterceptedByDefault(t *testing.T) {
+	// Regression: every tunnel client used to be redirected into the MITM
+	// proxy. A remote device that has not installed the CA then fails TLS on
+	// every intercepted host, which presents as "Google will not load" and
+	// looks like a DNS problem. Interception must be opt-in.
+	cfg := config.Default()
+	cfg.MITM.Enabled = true
+	cfg.MITM.ListenHTTP = "0.0.0.0:3128"
+	cfg.MITM.ListenTLS = "0.0.0.0:3129"
+	cfg.Tailscale.Enabled = true
+
+	tc := BuildTunnelConfig(*cfg)
+	if len(tc.ProxyTunnelIfaces) != 0 {
+		t.Fatalf("tunnel interfaces must not be intercepted by default, got %v", tc.ProxyTunnelIfaces)
+	}
+
+	// Opting in explicitly turns it back on.
+	cfg.MITM.InterceptTunnelClients = true
+	tc2 := BuildTunnelConfig(*cfg)
+	if len(tc2.Interfaces) > 0 && len(tc2.ProxyTunnelIfaces) == 0 {
+		t.Fatal("opting in should intercept tunnel interfaces")
+	}
+
+	// Naming specific clients also opts in, because that list is the operator
+	// saying which devices have the certificate.
+	cfg.MITM.InterceptTunnelClients = false
+	cfg.MITM.OnlyClients = []string{"100.64.0.5"}
+	tc3 := BuildTunnelConfig(*cfg)
+	if len(tc3.Interfaces) > 0 && len(tc3.ProxyTunnelIfaces) == 0 {
+		t.Fatal("an explicit client list should opt in")
+	}
+}

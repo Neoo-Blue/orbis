@@ -248,10 +248,16 @@ func TestNowPlayingEarlyInAnAdDoesNotEndIt(t *testing.T) {
 	c.handleEvent(adPlaying("ad-A", 15, false, false))
 	fake.waitFor(t, "setVolume", 1)
 	k.advance(2 * time.Second)
-	// The television reports nowPlaying for the content two seconds in.
-	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "content-1", "state": "1", "currentTime": "40"}))
+	// The television reports nowPlaying two seconds in, naming the content
+	// video but saying an ad is playing (the live payload of 2026-09-01).
+	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "content-1", "adState": "1", "adVideoId": "ad-A", "duration": "15.041"}))
 	if !c.Stats().AdActive {
 		t.Fatal("nowPlaying 2s into a 15s unskippable ad must not end it (that un-muted every unskippable ad)")
+	}
+	// One that says nothing about ads does not end it either.
+	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "content-1", "state": "1", "currentTime": "40"}))
+	if !c.Stats().AdActive {
+		t.Fatal("a nowPlaying with no ad state is not evidence the ad ended")
 	}
 	// The ad itself reported as now playing is not the end either.
 	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "ad-A", "state": "1"}))
@@ -346,13 +352,14 @@ func TestPausedAdExtendsDeadline(t *testing.T) {
 	c, _, k := newTestController(t, Options{SkipAds: true})
 	c.handleEvent(adPlaying("ad-A", 15, false, false))
 	k.advance(5 * time.Second)
-	c.handleEvent(ev("onStateChange", map[string]any{"state": "2", "currentTime": "5"}))
+	// The pause report carries the ad's own duration: it is the ad that is paused.
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "2", "currentTime": "5", "duration": "15.041"}))
 	k.advance(60 * time.Second)
 	c.tick()
 	if !c.Stats().AdActive {
 		t.Fatal("a paused ad must not expire on wall-clock time")
 	}
-	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "5"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "5", "duration": "15.041"}))
 	k.advance(5 * time.Second) // 10s of actual ad time
 	c.tick()
 	if !c.Stats().AdActive {
@@ -431,5 +438,98 @@ func TestViewerVolumeIsNotOverwrittenByOurMute(t *testing.T) {
 	fake.waitFor(t, "setVolume", 2)
 	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "35" {
 		t.Fatalf("restore should return to the viewer's 35, got %+v", cmd)
+	}
+}
+
+// The sequence a television actually sends when a skip takes effect: no
+// adState=0, no nowPlaying, just the content's own state reports. Taken from
+// the live log of 2026-09-01 22:58:13.
+func TestInstantSkipIsRecognisedFromContentStateChange(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true})
+	// Content had been playing: the engine knows its length.
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "330", "duration": "626.721"}))
+	c.handleEvent(adPlaying("ad-A", 45.061, true, false))
+	fake.waitFor(t, "setVolume", 1)
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1081", "currentTime": "0.01", "duration": "45.061"}))
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "1082", "isSkipEnabled": "false"}))
+	k.advance(300 * time.Millisecond)
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "3", "currentTime": "332.193", "duration": "626.721"}))
+	st := c.Stats()
+	if st.AdActive {
+		t.Fatal("content buffering with the content's duration means the ad is gone")
+	}
+	if st.Recent[0].Outcome != "skipped" || st.SecondsSaved < 44 {
+		t.Fatalf("an ad cut at 0.3s of 45s is skipped with ~45s saved: %+v saved=%v", st.Recent[0], st.SecondsSaved)
+	}
+	fake.waitFor(t, "setVolume", 2)
+	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "100" {
+		t.Fatalf("volume must come back the moment content resumes, got %+v", cmd)
+	}
+}
+
+// A pre-roll: the content has never played, so its length is unknown. The
+// content starting is still recognisable because its duration is not the ad's.
+func TestPreRollSkipIsRecognisedWithoutKnownContentDuration(t *testing.T) {
+	c, _, k := newTestController(t, Options{SkipAds: true, MuteAds: true})
+	c.handleEvent(adPlaying("ad-A", 15.041, true, false))
+	k.advance(200 * time.Millisecond)
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "-1", "currentTime": "0", "duration": "1945.101"}))
+	if !c.Stats().AdActive {
+		t.Fatal("an unstarted report alone is not the content playing (the next ad loads the same way)")
+	}
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "3", "currentTime": "0.041", "duration": "1945.101"}))
+	if c.Stats().AdActive {
+		t.Fatal("content buffering with a non-ad duration should end the ad")
+	}
+}
+
+// The next ad in a pod announces itself with onStateChange too, in the
+// ad-playing state or unstarted, and must not be mistaken for content.
+func TestNextAdLoadingDoesNotEndCurrentAd(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true})
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "10", "duration": "626.721"}))
+	c.handleEvent(adPlaying("ad-A", 6.041, false, true))
+	fake.waitFor(t, "setVolume", 1)
+	k.advance(6 * time.Second)
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1081", "currentTime": "0", "duration": "15", "seekableEndTime": "15.015"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "-1", "currentTime": "0", "duration": "15.041"}))
+	if !c.Stats().AdActive {
+		t.Fatal("the next ad loading must not close the current one as content")
+	}
+	c.handleEvent(adPlaying("ad-B", 15.041, true, false))
+	c.settle()
+	if n := fake.count("setVolume"); n != 1 {
+		t.Fatalf("no un-mute between ads in a pod; got %d setVolume: %+v", n, fake.cmds)
+	}
+	st := c.Stats()
+	if st.AdsHandled != 2 || st.Recent[0].Reason != "next ad in pod" {
+		t.Fatalf("pod handling: %+v", st)
+	}
+}
+
+func TestVideoIdFromQualityEventLoadsSegments(t *testing.T) {
+	c, _, _ := newTestController(t, Options{Categories: []string{"sponsor"}})
+	c.handleEvent(ev("onVideoQualityChanged", map[string]any{"videoId": "PkHhHTwxN-0", "qualityLevel": "1080"}))
+	if c.Stats().VideoID != "PkHhHTwxN-0" {
+		t.Fatal("the quality event names the video and must be used")
+	}
+}
+
+func TestNowPlayingWithAdStateStartsAMissedAd(t *testing.T) {
+	c, fake, _ := newTestController(t, Options{SkipAds: true, MuteAds: true})
+	// First thing heard after a reconnect: an ad is already on screen.
+	c.handleEvent(ev("nowPlaying", map[string]any{
+		"videoId": "content-1", "adState": "1", "adVideoId": "ad-Z", "duration": "30.061", "isSkippable": "true",
+	}))
+	st := c.Stats()
+	if !st.AdActive || st.AdsHandled != 1 {
+		t.Fatalf("an ad reported by nowPlaying must be handled: %+v", st)
+	}
+	fake.waitFor(t, "setVolume", 1)
+	fake.waitFor(t, "skipAd", 1)
+	// And a clear ad state ends it.
+	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "content-1", "adState": "0"}))
+	if c.Stats().AdActive {
+		t.Fatal("nowPlaying with adState=0 ends the ad")
 	}
 }

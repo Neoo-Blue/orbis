@@ -114,6 +114,10 @@ type Controller struct {
 	adSkipOK    bool
 	adTries     int
 	nextTry     time.Time
+	// contentDur is the length of the content video, learned from the
+	// player's own state reports while no ad is on screen. During an ad it
+	// is what tells a state report about the content from one about the ad.
+	contentDur float64
 
 	// Volume state. mutedByUs records that Orbis, not the viewer, set the
 	// volume to zero, so a session that drops mid-ad can put it back instead
@@ -263,34 +267,52 @@ type adInfo struct {
 	bumper    bool
 }
 
-// onNowPlayingDuringAd decides what a nowPlaying event means while an ad is
-// on screen. On a television it is not the end of the ad by itself: the
-// player reports nowPlaying about two seconds into an unskippable ad, and
-// treating that as the end un-muted every unskippable ad and recorded it as
-// skipped. So it ends the ad only when it carries evidence: a different
-// content video (the viewer moved on), or a position past the ad's own
-// length. A genuine skip is confirmed by adState=0, and an ad that quietly
-// ends is closed by its deadline.
-func (c *Controller) onNowPlayingDuringAd(vid string) {
+// onNowPlaying reads what a television's nowPlaying actually says. During an
+// ad it carries adState (1 while an ad plays) and adVideoId, so it is read
+// as a statement rather than guessed at: an ad state means the ad is still
+// on, and is also how an ad already in progress is discovered after a
+// reconnect, when the getNowPlaying reply is the first thing heard. A clear
+// ad state, or a different content video, ends the ad. A nowPlaying that
+// says nothing about ads does not end one by itself; the player's state
+// reports and the deadline do that.
+func (c *Controller) onNowPlaying(obj map[string]any, vid string, dur float64) {
+	adState := asString(obj["adState"])
+	adID := asString(obj["adVideoId"])
+	adLive := adState != "" && adState != "0" && adState != "-1"
+
 	c.mu.Lock()
-	if !c.adActive {
-		c.mu.Unlock()
-		return
-	}
-	adID, content := c.adID, c.adContent
+	active := c.adActive
+	curAd, content := c.adID, c.adContent
 	elapsed := c.now().Sub(c.adStart).Seconds()
-	dur := c.adDur
+	adDur := c.adDur
 	c.mu.Unlock()
 
+	if adLive {
+		if !active && adID != "" {
+			// An ad nobody announced: seen on reconnect, or when the
+			// adPlaying event was lost. Treat the report as the announcement.
+			c.onAd(adInfo{
+				id: adID, content: vid, duration: normaliseDuration(dur),
+				skippable: truthy(obj["isSkippable"]), skipArmed: truthy(obj["isSkipEnabled"]),
+				bumper: truthy(obj["isBumper"]),
+			})
+		}
+		return
+	}
+	if !active {
+		return
+	}
 	switch {
-	case vid != "" && vid == adID:
+	case vid != "" && vid == curAd:
 		// The ad itself being reported as the current video.
 	case vid != "" && content != "" && vid != content:
 		c.clearAd("nowPlaying: different video")
-	case dur > 0 && elapsed >= dur-1.5:
+	case adState == "0" || adState == "-1":
+		c.clearAd("nowPlaying: adState=" + adState)
+	case adDur > 0 && elapsed >= adDur-1.5:
 		c.clearAd("nowPlaying at the ad's end")
 	default:
-		c.log("lounge[%s]: nowPlaying %.1fs into a %.0fs ad; keeping the ad open", c.name, elapsed, dur)
+		c.log("lounge[%s]: nowPlaying %.1fs into a %.0fs ad with no ad state; keeping the ad open", c.name, elapsed, adDur)
 	}
 }
 
@@ -318,14 +340,24 @@ func (c *Controller) handleEvent(ev event) {
 		obj := ev.object()
 		state := asString(obj["state"])
 		vid := asString(obj["videoId"])
+		dur, _ := asFloat(obj["duration"])
 		if ev.typ == "nowPlaying" {
-			c.onNowPlayingDuringAd(vid)
+			c.onNowPlaying(obj, vid, dur)
+		} else {
+			c.onStateChangeDuringAd(state, dur)
 		}
 		if t, ok := asFloat(obj["currentTime"]); ok {
 			c.updatePosition(t, state == "1")
 		}
-		c.notePlayerState(state)
+		c.noteContentDuration(state, dur)
 		if vid != "" {
+			c.onVideo(vid)
+		}
+	case "onVideoQualityChanged", "onSubtitlesTrackChanged":
+		// On a television nowPlaying often carries only a playlist id; these
+		// are the events that reliably name the video, which is what the
+		// SponsorBlock lookup needs.
+		if vid := asString(ev.object()["videoId"]); vid != "" {
 			c.onVideo(vid)
 		}
 	case "onAdStateChange":
@@ -418,6 +450,92 @@ func screenPresent(ev event) bool {
 	return false
 }
 
+// adPlayingState is the player state a television reports while an ad is
+// on screen. Content reports the ordinary -1 (unstarted), 1 (playing),
+// 2 (paused) and 3 (buffering).
+const adPlayingState = "1081"
+
+// onStateChangeDuringAd is the ad-end signal a television actually sends.
+// When a skip takes effect the player does not always say adState=0; what
+// it does say is an onStateChange for the content, recognisable by its
+// duration (the content's, not the ad's) and an ordinary playing or
+// buffering state. The next ad in a pod also arrives by onStateChange, but
+// in the ad-playing state or unstarted, so those are left alone.
+func (c *Controller) onStateChangeDuringAd(state string, duration float64) {
+	c.mu.Lock()
+	if !c.adActive {
+		c.mu.Unlock()
+		return
+	}
+	adDur, contentDur := c.adDur, c.contentDur
+	if state == adPlayingState {
+		// The ad itself. Learn its length if nothing else has said it.
+		if adDur == 0 && duration > 0 {
+			c.adDur = duration
+		}
+		c.mu.Unlock()
+		return
+	}
+	looksLikeAd := adDur > 0 && duration > 0 && absf(duration-adDur) <= 1
+	looksLikeContent := duration > 0 && !looksLikeAd &&
+		((contentDur > 0 && absf(duration-contentDur) <= 1) || adDur > 0)
+	switch state {
+	case "1", "3", "2":
+		if looksLikeContent {
+			c.mu.Unlock()
+			c.clearAd("onStateChange: content " + stateWord(state))
+			return
+		}
+		if looksLikeAd {
+			// A pause or resume of the ad itself moves its deadline.
+			switch state {
+			case "2":
+				if c.adPausedAt.IsZero() {
+					c.adPausedAt = c.now()
+				}
+			case "1":
+				if !c.adPausedAt.IsZero() {
+					c.adStart = c.adStart.Add(c.now().Sub(c.adPausedAt))
+					c.adPausedAt = time.Time{}
+				}
+			}
+		}
+	}
+	c.mu.Unlock()
+}
+
+// noteContentDuration remembers the content's length while no ad is on
+// screen, so the next ad can tell the content's state reports from its own.
+func (c *Controller) noteContentDuration(state string, duration float64) {
+	if duration <= 0 || state == adPlayingState {
+		return
+	}
+	c.mu.Lock()
+	if !c.adActive {
+		c.contentDur = duration
+	}
+	c.mu.Unlock()
+}
+
+func stateWord(state string) string {
+	switch state {
+	case "1":
+		return "playing"
+	case "2":
+		return "paused"
+	case "3":
+		return "buffering"
+	}
+	return "state " + state
+}
+
+func absf(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+	return f
+}
+
 // normaliseDuration accepts seconds or milliseconds; clients differ.
 func normaliseDuration(d float64) float64 {
 	if d <= 0 {
@@ -427,27 +545,6 @@ func normaliseDuration(d float64) float64 {
 		d /= 1000
 	}
 	return d
-}
-
-// notePlayerState tracks pauses during an ad. A paused ad does not advance,
-// so its deadline is pushed forward by however long it sat.
-func (c *Controller) notePlayerState(state string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.adActive {
-		return
-	}
-	switch state {
-	case "2": // paused
-		if c.adPausedAt.IsZero() {
-			c.adPausedAt = c.now()
-		}
-	case "1": // playing
-		if !c.adPausedAt.IsZero() {
-			c.adStart = c.adStart.Add(c.now().Sub(c.adPausedAt))
-			c.adPausedAt = time.Time{}
-		}
-	}
 }
 
 // onVideo loads sponsor segments for a newly-playing video.
@@ -460,6 +557,7 @@ func (c *Controller) onVideo(videoID string) {
 		c.segments = nil
 		c.stats.SegmentsLoaded = 0
 		c.muteSeg = nil
+		c.contentDur = 0
 	}
 	c.mu.Unlock()
 	if same || c.sb == nil {

@@ -48,6 +48,8 @@ type ForwardConfig struct {
 	RedirectHTTP bool
 	HTTPPort     int
 	HTTPSPort    int
+	HTTPScoped   bool
+	HTTPClients  []netip.Addr
 }
 
 func ApplyForwarding(context.Context, ForwardConfig) error { return nil }

@@ -44,6 +44,15 @@ type ForwardConfig struct {
 	RedirectHTTP bool
 	HTTPPort     int
 	HTTPSPort    int
+	// HTTPScoped narrows the web redirect to HTTPClients (the ones with the
+	// certificate) instead of every intercepted client. With HTTPScoped set
+	// and HTTPClients empty, nobody is web-redirected: an operator who has
+	// named the certificate holders and named none is not asking for every
+	// device to be broken. QUIC is refused for the same set, so a browser
+	// falls back to the TCP the proxy can see instead of riding HTTP/3
+	// straight past it.
+	HTTPScoped  bool
+	HTTPClients []netip.Addr
 }
 
 // ApplyForwarding installs the intercept table. It is idempotent: the table is
@@ -102,6 +111,16 @@ func renderForwarding(cfg ForwardConfig) string {
 		w("    elements = { %s }", members)
 	}
 	w("  }")
+	if cfg.RedirectHTTP && cfg.HTTPScoped && len(cfg.HTTPClients) > 0 {
+		webMembers := make([]string, 0, len(cfg.HTTPClients))
+		for _, a := range cfg.HTTPClients {
+			webMembers = append(webMembers, a.String())
+		}
+		w("  set web_clients {")
+		w("    type ipv4_addr")
+		w("    elements = { %s }", strings.Join(webMembers, ", "))
+		w("  }")
+	}
 
 	// Masquerade intercepted clients out towards the gateway. Without this the
 	// reply is sent to the client's real path and never comes back here, so the
@@ -121,11 +140,30 @@ func renderForwarding(cfg ForwardConfig) string {
 		w("    ip saddr @clients udp dport 53 redirect to :%d comment \"intercept: filter dns\"", cfg.DNSPort)
 		w("    ip saddr @clients tcp dport 53 redirect to :%d comment \"intercept: filter dns\"", cfg.DNSPort)
 	}
-	if cfg.RedirectHTTP && cfg.HTTPPort > 0 && cfg.HTTPSPort > 0 {
-		w("    ip saddr @clients tcp dport 80 redirect to :%d comment \"intercept: filter http\"", cfg.HTTPPort)
-		w("    ip saddr @clients tcp dport 443 redirect to :%d comment \"intercept: filter https\"", cfg.HTTPSPort)
+	web := "clients"
+	webRedirect := cfg.RedirectHTTP && cfg.HTTPPort > 0 && cfg.HTTPSPort > 0
+	if cfg.HTTPScoped {
+		web = "web_clients"
+		if len(cfg.HTTPClients) == 0 {
+			webRedirect = false
+		}
+	}
+	if webRedirect {
+		w("    ip saddr @%s tcp dport 80 redirect to :%d comment \"intercept: filter http\"", web, cfg.HTTPPort)
+		w("    ip saddr @%s tcp dport 443 redirect to :%d comment \"intercept: filter https\"", web, cfg.HTTPSPort)
 	}
 	w("  }")
+
+	// A web-intercepted client must not be allowed to use QUIC: the proxy
+	// cannot see HTTP/3, and YouTube in particular will happily use it and
+	// sail past the filter. Refusing UDP/443 makes the browser fall back to
+	// TCP within a second and remember that for the session.
+	if webRedirect {
+		w("  chain forward {")
+		w("    type filter hook forward priority filter - 5; policy accept;")
+		w("    ip saddr @%s udp dport 443 counter reject with icmp type port-unreachable comment \"intercept: no quic past the filter\"", web)
+		w("  }")
+	}
 
 	w("}")
 	return b.String()

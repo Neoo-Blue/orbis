@@ -74,6 +74,9 @@ type Stats struct {
 	InPageStripped atomic.Int64
 	InPageSkipped  atomic.Int64
 	InPageSegments atomic.Int64
+	// InPageProbes counts ad-blocker detection probes the engine answered
+	// in place of the network.
+	InPageProbes atomic.Int64
 	// ServerStitched counts player responses whose ads are muxed into the
 	// content stream. Nothing can be stripped from those; counting them is
 	// what tells the difference between a filter that is broken and a stream
@@ -123,7 +126,7 @@ func (p *Proxy) Stats() map[string]any {
 		"spliced": p.stats.Spliced.Load(), "filtered": p.stats.Filtered.Load(),
 		"ads_stripped": p.stats.AdsStripped.Load(), "beacons_killed": p.stats.BeaconsKilled.Load(),
 		"inpage_stripped": p.stats.InPageStripped.Load(), "inpage_skipped": p.stats.InPageSkipped.Load(),
-		"inpage_segments": p.stats.InPageSegments.Load(),
+		"inpage_segments": p.stats.InPageSegments.Load(), "inpage_probes": p.stats.InPageProbes.Load(),
 		"server_stitched": p.stats.ServerStitched.Load(),
 		"errors":          p.stats.Errors.Load(),
 		"bytes_in":        p.stats.BytesIn.Load(), "bytes_out": p.stats.BytesOut.Load(),
@@ -349,6 +352,17 @@ func (p *Proxy) roundTrip(ctx context.Context, req *http.Request, host string, c
 	path := req.URL.Path
 	referer := req.Header.Get("Referer")
 
+	// The probe script is served from the page's own origin. It carries no
+	// data and takes none, so it needs no provenance check.
+	if path == InPageProbePath && isYouTubeAppHost(host) {
+		drainRequestBody(req)
+		p.stats.InPageProbes.Add(1)
+		return syntheticResponse(req, RequestVerdict{
+			Status: http.StatusOK, ContentType: "application/javascript; charset=utf-8",
+			Reason: "orbis-probe", Body: []byte(ProbeScript),
+		}), true, nil
+	}
+
 	// The in-page engine's two endpoints are answered here and never
 	// forwarded. They exist only for the engine, so anything that is not a
 	// same-origin request from a YouTube page is refused outright.
@@ -521,6 +535,7 @@ func (p *Proxy) recordInPageReport(req *http.Request) {
 		Burned   int64 `json:"burned"`
 		Skips    int64 `json:"skips"`
 		Segments int64 `json:"segments"`
+		Probes   int64 `json:"probes"`
 	}
 	if json.Unmarshal(body, &rep) != nil {
 		return
@@ -538,6 +553,9 @@ func (p *Proxy) recordInPageReport(req *http.Request) {
 	}
 	if rep.Segments > 0 {
 		p.stats.InPageSegments.Add(min(rep.Segments, maxDelta))
+	}
+	if rep.Probes > 0 {
+		p.stats.InPageProbes.Add(min(rep.Probes, maxDelta))
 	}
 }
 

@@ -141,11 +141,12 @@ func (m *Manager) startLocked(d config.LoungeDevice) {
 	opts := func() Options {
 		lc := m.cfg.Snapshot().YouTube.Lounge
 		return Options{
-			SkipAds:       lc.SkipAds,
-			MuteAds:       lc.MuteAds,
-			Categories:    lc.SkipCategories,
-			MinSkipLength: lc.MinSkipLength,
-			Offset:        offset,
+			SkipAds:           lc.SkipAds,
+			MuteAds:           lc.MuteAds,
+			ReloadUnskippable: lc.ReloadUnskippable,
+			Categories:        lc.SkipCategories,
+			MinSkipLength:     lc.MinSkipLength,
+			Offset:            offset,
 		}
 	}
 	ctrl := NewController(d.ScreenID, d.Name, m.deviceID, m.hc, m.sb, opts, m.log)
@@ -325,14 +326,16 @@ func (m *Manager) Segments(ctx context.Context, videoID string) (any, error) {
 
 // Status is the full picture for the API/UI.
 type Status struct {
-	Enabled      bool               `json:"enabled"`
-	AutoDiscover bool               `json:"auto_discover"`
-	SkipAds      bool               `json:"skip_ads"`
-	MuteAds      bool               `json:"mute_ads"`
-	Categories   []string           `json:"categories"`
-	Devices      []Stats            `json:"devices"`
-	Discovered   []DiscoveredScreen `json:"discovered"`
-	Coverage     []CoverageRow      `json:"coverage"`
+	Enabled      bool `json:"enabled"`
+	AutoDiscover bool `json:"auto_discover"`
+	SkipAds      bool `json:"skip_ads"`
+	MuteAds      bool `json:"mute_ads"`
+	// ReloadUnskippable reloads the content past unskippable mid-rolls.
+	ReloadUnskippable bool               `json:"reload_unskippable"`
+	Categories        []string           `json:"categories"`
+	Devices           []Stats            `json:"devices"`
+	Discovered        []DiscoveredScreen `json:"discovered"`
+	Coverage          []CoverageRow      `json:"coverage"`
 }
 
 // CoverageRow is one honest statement about a device class: which engine covers
@@ -383,13 +386,14 @@ func (m *Manager) Status() Status {
 	sort.Slice(devs, func(i, j int) bool { return devs[i].Name < devs[j].Name })
 
 	return Status{
-		Enabled:      lc.Enabled,
-		AutoDiscover: lc.AutoDiscover,
-		SkipAds:      lc.SkipAds,
-		MuteAds:      lc.MuteAds,
-		Categories:   lc.SkipCategories,
-		Devices:      devs,
-		Discovered:   discovered,
-		Coverage:     coverageMatrix,
+		Enabled:           lc.Enabled,
+		AutoDiscover:      lc.AutoDiscover,
+		SkipAds:           lc.SkipAds,
+		MuteAds:           lc.MuteAds,
+		ReloadUnskippable: lc.ReloadUnskippable,
+		Categories:        lc.SkipCategories,
+		Devices:           devs,
+		Discovered:        discovered,
+		Coverage:          coverageMatrix,
 	}
 }

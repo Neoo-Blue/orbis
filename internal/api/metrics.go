@@ -145,7 +145,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	// YouTube Lounge engine.
 	if app.Lounge != nil {
 		lst := app.Lounge.Status()
-		connected, online, ads, skipped, lost, segs := 0, 0, 0, 0, 0, 0
+		connected, online, ads, skipped, lost, segs, reloads := 0, 0, 0, 0, 0, 0, 0
 		saved := 0.0
 		for _, d := range lst.Devices {
 			if d.Connected {
@@ -157,6 +157,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			ads += d.AdsHandled
 			skipped += d.AdsSkipped
 			lost += d.AdsLost
+			reloads += d.Reloads
 			segs += d.SegmentsSkipped + d.SegmentsMuted
 			saved += d.SecondsSaved
 		}
@@ -166,6 +167,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		m.counter("orbis_lounge_ads_total", "Ads seen on paired screens.", float64(ads))
 		m.counter("orbis_lounge_ads_skipped_total", "Ads cut short by Orbis.", float64(skipped))
 		m.counter("orbis_lounge_ads_lost_total", "Ads whose end the player never reported.", float64(lost))
+		m.counter("orbis_lounge_reloads_total", "Unskippable mid-rolls reloaded past.", float64(reloads))
 		m.counter("orbis_lounge_segments_total", "SponsorBlock segments skipped or muted.", float64(segs))
 		m.counter("orbis_lounge_seconds_saved_total", "Seconds of ads and segments not watched.", saved)
 	}

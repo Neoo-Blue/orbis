@@ -533,3 +533,99 @@ func TestNowPlayingWithAdStateStartsAMissedAd(t *testing.T) {
 		t.Fatal("nowPlaying with adState=0 ends the ad")
 	}
 }
+
+func TestUnskippableMidRollIsReloadedPast(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, ReloadUnskippable: true})
+	// Content playing at 330s of a 626s video.
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "330", "duration": "626.721"}))
+	k.advance(2 * time.Second)
+	// The ad-playing state arrives first, then the ad is named.
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1081", "currentTime": "0", "duration": "30", "seekableEndTime": "30.061"}))
+	if st := c.Stats(); !st.AdActive || st.AdsHandled != 1 {
+		t.Fatalf("state 1081 should open the ad early: %+v", st)
+	}
+	c.handleEvent(adPlaying("ad-U", 30.061, false, false))
+	fake.waitFor(t, "setPlaylist", 1)
+	cmd, _ := fake.last("setPlaylist")
+	if cmd.args["videoId"] != "content-1" || cmd.args["currentTime"] != "332.0" {
+		t.Fatalf("reload should resume the content where it was: %+v", cmd.args)
+	}
+	// The player comes back with the content at that position.
+	k.advance(2 * time.Second)
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "3", "currentTime": "332.0", "duration": "626.721"}))
+	st := c.Stats()
+	if st.AdActive || st.Reloads != 1 || st.Recent[0].Outcome != "skipped" || !st.Recent[0].Reloaded {
+		t.Fatalf("reloaded ad should be closed as skipped: active=%v %+v", st.AdActive, st.Recent[0])
+	}
+	if n := fake.count("setPlaylist"); n != 1 {
+		t.Fatalf("exactly one reload per ad, got %d", n)
+	}
+}
+
+func TestReloadIsNotTriedForPreRollsBumpersOrSkippable(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, ReloadUnskippable: true})
+	// Pre-roll: content has not started.
+	c.handleEvent(adPlaying("ad-P", 30, false, false))
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "0"}))
+	// Mid-roll bumper.
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "100", "duration": "600"}))
+	k.advance(time.Second)
+	c.handleEvent(adPlaying("ad-B", 6, false, true))
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "0"}))
+	// Mid-roll skippable: skipAd handles it.
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "200", "duration": "600"}))
+	k.advance(time.Second)
+	c.handleEvent(adPlaying("ad-S", 30, true, false))
+	c.settle()
+	if n := fake.count("setPlaylist"); n != 0 {
+		t.Fatalf("no reload for pre-rolls, bumpers or skippable ads; got %d: %+v", n, fake.cmds)
+	}
+	if fake.count("skipAd") == 0 {
+		t.Fatal("the skippable ad should still get skipAd")
+	}
+}
+
+func TestVideoThatServesAdAfterReloadIsLeftAlone(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, ReloadUnskippable: true})
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "100", "duration": "600"}))
+	k.advance(time.Second)
+	c.handleEvent(adPlaying("ad-U1", 30, false, false))
+	fake.waitFor(t, "setPlaylist", 1)
+	// The player reloads and serves an ad again straight away.
+	k.advance(3 * time.Second)
+	c.handleEvent(adPlaying("ad-U2", 30, false, false))
+	c.settle()
+	st := c.Stats()
+	if st.ReloadsResisted != 1 {
+		t.Fatalf("the second ad after a reload marks the video as resisting: %+v", st)
+	}
+	if st.Recent[0].Outcome == "skipped" {
+		t.Fatalf("the reloaded ad was not skipped when another ad came back: %+v", st.Recent[0])
+	}
+	// A later mid-roll on the same video is not reloaded again.
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "0"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "300", "duration": "600"}))
+	k.advance(40 * time.Second)
+	c.handleEvent(adPlaying("ad-U3", 30, false, false))
+	c.settle()
+	if n := fake.count("setPlaylist"); n != 1 {
+		t.Fatalf("a resisting video must not be reloaded again; got %d reloads", n)
+	}
+}
+
+func TestAdPositionReportsDoNotMoveTheContentPosition(t *testing.T) {
+	c, _, k := newTestController(t, Options{})
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "500", "duration": "1000"}))
+	k.advance(time.Second)
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1081", "currentTime": "0", "duration": "15"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "-1", "currentTime": "0", "duration": "15.041"}))
+	c.handleEvent(adPlaying("ad-A", 15.041, false, false))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1081", "currentTime": "0.012", "duration": "15.041"}))
+	c.mu.Lock()
+	pos := c.contentPos
+	last := c.lastTime
+	c.mu.Unlock()
+	if pos < 500.5 || pos > 502 || last < 500 {
+		t.Fatalf("content position must survive the ad's own reports: contentPos=%v lastTime=%v", pos, last)
+	}
+}

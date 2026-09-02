@@ -111,6 +111,7 @@ func (s *Server) handleYouTubeSettings(w http.ResponseWriter, r *http.Request) {
 		AutoDiscover  *bool     `json:"auto_discover"`
 		SkipAds       *bool     `json:"skip_ads"`
 		MuteAds       *bool     `json:"mute_ads"`
+		Reload        *bool     `json:"reload_unskippable"`
 		Categories    *[]string `json:"categories"`
 		MinSkipLength *float64  `json:"min_skip_length"`
 	}
@@ -131,6 +132,9 @@ func (s *Server) handleYouTubeSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.MuteAds != nil {
 			lc.MuteAds = *body.MuteAds
+		}
+		if body.Reload != nil {
+			lc.ReloadUnskippable = *body.Reload
 		}
 		if body.Categories != nil {
 			lc.SkipCategories = *body.Categories

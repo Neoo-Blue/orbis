@@ -405,3 +405,22 @@ func TestSponsorResponseValidatesAndSerialises(t *testing.T) {
 	}
 	_ = time.Second
 }
+
+func TestProbeScriptIsRepointedAtOrbis(t *testing.T) {
+	page := []byte(`<html><head><script src="https://static.doubleclick.net/instream/ad_status.js"></script>` +
+		`<script src='//static.doubleclick.net/instream/ad_status.js' async></script><script src="https://www.youtube.com/s/player/x/base.js"></script></head></html>`)
+	out, n := rewriteProbeSrc(page)
+	if n != 2 {
+		t.Fatalf("both probe references should be rewritten, got %d", n)
+	}
+	s := string(out)
+	if strings.Contains(s, "doubleclick.net/instream/ad_status.js") {
+		t.Fatalf("probe still points at doubleclick:\n%s", s)
+	}
+	if strings.Count(s, `src="`+InPageProbePath+`"`) != 1 || strings.Count(s, `src='`+InPageProbePath+`'`) != 1 {
+		t.Fatalf("probe should be served from the page's own origin, quotes preserved:\n%s", s)
+	}
+	if !strings.Contains(s, "base.js") {
+		t.Fatal("other scripts must be untouched")
+	}
+}

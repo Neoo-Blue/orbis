@@ -33,6 +33,8 @@ type Config struct {
 	RedirectHTTP bool
 	HTTPPort     int
 	HTTPSPort    int
+	HTTPScoped   bool
+	HTTPClients  []netip.Addr
 }
 
 func NewManager(log func(string, ...any)) *Manager {
@@ -104,6 +106,8 @@ func (m *Manager) Apply(ctx context.Context, cfg Config) error {
 		RedirectHTTP: cfg.RedirectHTTP,
 		HTTPPort:     cfg.HTTPPort,
 		HTTPSPort:    cfg.HTTPSPort,
+		HTTPScoped:   cfg.HTTPScoped,
+		HTTPClients:  cfg.HTTPClients,
 	})
 }
 

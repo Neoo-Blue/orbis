@@ -34,6 +34,31 @@ const InPageReportPath = "/__orbis/yt-report"
 // segments from, as ?v=<video id>. Answered locally by the proxy.
 const InPageSegmentsPath = "/__orbis/sb"
 
+// InPageProbePath is where the ad-blocker probe script is served from once
+// the document has been rewritten to load it from here rather than from
+// doubleclick. The page loads it in its markup, before any script of ours
+// could intervene, and on a network that sinkholes doubleclick the failed
+// load is the very thing YouTube reads as "ad blocker present". Serving the
+// same one-line script from the page's own origin makes the load succeed.
+const InPageProbePath = "/__orbis/ad_status.js"
+
+// ProbeScript is what the real ad_status.js does: it sets one flag.
+const ProbeScript = "window.google_ad_status=1;"
+
+// probeSrcRe finds the probe's script source in markup, with either quote.
+var probeSrcRe = regexp.MustCompile(`(?i)(src=["'])(?:https?:)?//static\.doubleclick\.net/instream/ad_status\.js(["'])`)
+
+// rewriteProbeSrc repoints the probe script at InPageProbePath.
+func rewriteProbeSrc(body []byte) ([]byte, int) {
+	n := 0
+	out := probeSrcRe.ReplaceAllFunc(body, func(m []byte) []byte {
+		n++
+		sub := probeSrcRe.FindSubmatch(m)
+		return append(append(append([]byte{}, sub[1]...), []byte(InPageProbePath)...), sub[2]...)
+	})
+	return out, n
+}
+
 // nonceRe finds a CSP nonce already present in the document. Reusing it means
 // the injected script satisfies YouTube's own Content-Security-Policy, so the
 // policy stays intact instead of being stripped to make room for us.
@@ -103,13 +128,16 @@ const inPageCSS = `.ytp-ad-overlay-container,.ytp-ad-player-overlay,` +
 	`ytd-promoted-video-renderer,ytd-compact-promoted-video-renderer,ytd-ad-slot-renderer,` +
 	`ytd-in-feed-ad-layout-renderer,ytd-banner-promo-renderer,ytd-statement-banner-renderer,` +
 	`ytm-promoted-video-renderer,ytm-companion-ad-renderer,ytd-merch-shelf-renderer,` +
-	`ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"]` +
+	`ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"],` +
+	`ytd-enforcement-message-view-model,yt-enforcement-message-view-model` +
 	`{display:none!important}` +
 	// :has() lives in its own rule on purpose: one unsupported selector
 	// invalidates every selector sharing its comma-separated list, and an
 	// older TV browser would otherwise lose the whole stylesheet above.
 	`ytd-rich-item-renderer:has(ytd-ad-slot-renderer),` +
-	`ytd-rich-section-renderer:has(ytd-statement-banner-renderer)` +
+	`ytd-rich-section-renderer:has(ytd-statement-banner-renderer),` +
+	`tp-yt-paper-dialog:has(ytd-enforcement-message-view-model),` +
+	`ytd-popup-container:has(ytd-enforcement-message-view-model)` +
 	`{display:none!important}`
 
 // playerEngineJS is deliberately written in plain ES5 with no template
@@ -118,15 +146,88 @@ const inPageCSS = `.ytp-ad-overlay-container,.ytp-ad-player-overlay,` +
 const playerEngineJS = `(function(){
 if(window.__orbisYT)return;
 var CFG=window.__orbisYTcfg||{};
-var S={v:2,stripped:0,burned:0,skips:0,overlays:0,segments:0,sent:0};
+var S={v:3,stripped:0,burned:0,skips:0,overlays:0,segments:0,probes:0,sent:0};
 window.__orbisYT=S;
+
+// --- the probes YouTube uses to decide an ad blocker is present ------------
+// The page loads a small script from doubleclick that sets google_ad_status;
+// on a network that sinkholes doubleclick the load fails, and the failure is
+// what the page reads as "ad blocker". So the status is set here, and the
+// probe script is never fetched: its element is told it loaded.
+try{window.google_ad_status=1;}catch(e){}
+var PROBE=/doubleclick\.net\/instream\/ad_status\.js|googleads\.g\.doubleclick\.net\/pagead\/id|\/pagead\/(?:managed\/js|js\/adsbygoogle)/;
+function fakeLoad(el){
+  try{window.google_ad_status=1;}catch(e){}
+  S.probes++;
+  setTimeout(function(){
+    try{
+      var ev;
+      try{ev=new Event("load");}catch(e){ev=document.createEvent("Event");ev.initEvent("load",false,false);}
+      el.dispatchEvent(ev);
+      if(typeof el.onload==="function")el.onload(ev);
+    }catch(e){}
+  },0);
+}
+try{
+  var srcDesc=Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype,"src");
+  if(srcDesc&&srcDesc.set&&srcDesc.get){
+    Object.defineProperty(HTMLScriptElement.prototype,"src",{
+      configurable:true,enumerable:srcDesc.enumerable,
+      get:function(){return srcDesc.get.call(this);},
+      set:function(v){
+        if(typeof v==="string"&&PROBE.test(v)){fakeLoad(this);return;}
+        srcDesc.set.call(this,v);
+      }
+    });
+  }
+  var setAttr=Element.prototype.setAttribute;
+  Element.prototype.setAttribute=function(name,value){
+    if(this.tagName==="SCRIPT"&&String(name).toLowerCase()==="src"&&typeof value==="string"&&PROBE.test(value)){fakeLoad(this);return;}
+    return setAttr.apply(this,arguments);
+  };
+  // Whatever set the source, a script has to be inserted to load. This is
+  // the one place every path goes through.
+  function guardInsert(orig){
+    return function(node){
+      try{
+        if(node&&node.tagName==="SCRIPT"){
+          var src=node.getAttribute("src")||"";
+          if(PROBE.test(src)){fakeLoad(node);return node;}
+        }
+      }catch(e){}
+      return orig.apply(this,arguments);
+    };
+  }
+  Node.prototype.appendChild=guardInsert(Node.prototype.appendChild);
+  Node.prototype.insertBefore=guardInsert(Node.prototype.insertBefore);
+}catch(e){}
+
+// The enforcement dialog is opened through the page's popup config; telling
+// the config the popup is unsupported keeps it from ever opening.
+function disarmPopup(){
+  try{
+    var cfg=window.yt&&window.yt.config_;
+    if(!cfg)return false;
+    var opc=cfg.openPopupConfig;
+    if(opc&&opc.supportedPopups){
+      opc.supportedPopups.adBlockMessageViewModel=false;
+      opc.supportedPopups.enforcementMessageViewModel=false;
+    }
+    return true;
+  }catch(e){return false;}
+}
+if(!disarmPopup()){
+  var dp=setInterval(function(){if(disarmPopup())clearInterval(dp);},250);
+  setTimeout(function(){clearInterval(dp);},30000);
+}
 
 var KEYS=["adPlacements","playerAds","adSlots","adBreakHeartbeatParams","adParams",
 "adServingDataEntity","adsEngagementPanels","importantForAds","adBreakParams",
 "adRequestParams","playerAdParams","adsData","clientForcedAdParams","adNotify",
 "adPlacementRenderer","adSlotMetadata","adLayoutMetadata","adSlotLoggingData",
 "adLayoutLoggingData","instreamAdPlayerOverlayRenderer","playerLegacyDesktopWatchAdsRenderer",
-"adCpn","clientSideAdConfig","adPlacementConfig","adPlaybackContextParams"];
+"adCpn","clientSideAdConfig","adPlacementConfig","adPlaybackContextParams",
+"enforcementMessageViewModel","adBlockMessageViewModel"];
 
 var RENDERERS=["adSlotRenderer","promotedSparklesWebRenderer","promotedSparklesTextSearchRenderer",
 "promotedVideoRenderer","displayAdRenderer","searchPyvRenderer","compactPromotedVideoRenderer",
@@ -343,14 +444,14 @@ try{
 // --- report counters back to Orbis -----------------------------------------
 // Same-origin, answered by the proxy itself, so it is evidence the engine is
 // alive rather than telemetry: nothing leaves the network.
-var P={stripped:0,burned:0,skips:0,overlays:0,segments:0};
+var P={stripped:0,burned:0,skips:0,overlays:0,segments:0,probes:0};
 function report(){
   try{
     var d={stripped:S.stripped-P.stripped,burned:S.burned-P.burned,
            skips:S.skips-P.skips,overlays:S.overlays-P.overlays,
-           segments:S.segments-P.segments};
-    if(d.stripped+d.burned+d.skips+d.overlays+d.segments<=0)return;
-    P.stripped=S.stripped;P.burned=S.burned;P.skips=S.skips;P.overlays=S.overlays;P.segments=S.segments;
+           segments:S.segments-P.segments,probes:S.probes-P.probes};
+    if(d.stripped+d.burned+d.skips+d.overlays+d.segments+d.probes<=0)return;
+    P.stripped=S.stripped;P.burned=S.burned;P.skips=S.skips;P.overlays=S.overlays;P.segments=S.segments;P.probes=S.probes;
     S.sent++;
     var body=JSON.stringify(d);
     if(navigator.sendBeacon){navigator.sendBeacon("` + InPageReportPath + `",body);return;}

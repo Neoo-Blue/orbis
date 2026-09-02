@@ -14,11 +14,12 @@ import (
 // Options are the live settings a controller reads on every decision, so a
 // change in the UI takes effect without reconnecting.
 type Options struct {
-	SkipAds       bool
-	MuteAds       bool
-	Categories    []string
-	MinSkipLength float64
-	Offset        float64 // seconds added when seeking past a segment
+	SkipAds           bool
+	MuteAds           bool
+	ReloadUnskippable bool
+	Categories        []string
+	MinSkipLength     float64
+	Offset            float64 // seconds added when seeking past a segment
 }
 
 // AdRecord is one ad as the UI's history sees it: what it was, how long it
@@ -34,6 +35,8 @@ type AdRecord struct {
 	Bumper         bool      `json:"bumper"`
 	Muted          bool      `json:"muted"`
 	Attempts       int       `json:"attempts"`
+	// Reloaded records that Orbis reloaded the content past this ad.
+	Reloaded bool `json:"reloaded"`
 	// Outcome is one of "skipped" (the player ended it before its length),
 	// "played" (ran to its end; unskippable), "abandoned" (the screen went
 	// away or the viewer changed video), or "lost" (the player never said it
@@ -57,9 +60,13 @@ type Stats struct {
 	// because Orbis cut them short; AdsLost counts the ones whose end was
 	// never reported. The gaps between them are the honest measure of how
 	// well this is working, and they are the numbers the UI shows.
-	AdsHandled      int        `json:"ads_handled"`
-	AdsSkipped      int        `json:"ads_skipped"`
-	AdsLost         int        `json:"ads_lost"`
+	AdsHandled int `json:"ads_handled"`
+	AdsSkipped int `json:"ads_skipped"`
+	AdsLost    int `json:"ads_lost"`
+	// Reloads counts unskippable mid-rolls Orbis reloaded the content past;
+	// ReloadsResisted counts the times the video served the ad again anyway.
+	Reloads         int        `json:"reloads"`
+	ReloadsResisted int        `json:"reloads_resisted"`
 	SegmentsSkipped int        `json:"segments_skipped"`
 	SegmentsMuted   int        `json:"segments_muted"`
 	SegmentsLoaded  int        `json:"segments_loaded"`
@@ -119,6 +126,17 @@ type Controller struct {
 	// is what tells a state report about the content from one about the ad.
 	contentDur float64
 
+	// Reload state. contentPos is where the content was when the ad began;
+	// a reload asks the player for that position again. A video that serves
+	// the ad back after a reload is remembered in resisted and left to the
+	// mute from then on.
+	contentPos    float64
+	adReloadTried bool
+	adReloaded    bool
+	reloadAt      time.Time
+	reloadContent string
+	resisted      map[string]bool
+
 	// Volume state. mutedByUs records that Orbis, not the viewer, set the
 	// volume to zero, so a session that drops mid-ad can put it back instead
 	// of leaving the television silent until somebody picks up the remote.
@@ -172,6 +190,7 @@ func NewController(screenID, name, deviceID string, hc *http.Client, sb *Sponsor
 		now:      time.Now,
 		lastVol:  100,
 		seen:     map[string]bool{},
+		resisted: map[string]bool{},
 		cmds:     make(chan queuedCmd, 64),
 		stats:    Stats{ScreenID: screenID, Name: name, Recent: []AdRecord{}},
 	}
@@ -275,7 +294,7 @@ type adInfo struct {
 // ad state, or a different content video, ends the ad. A nowPlaying that
 // says nothing about ads does not end one by itself; the player's state
 // reports and the deadline do that.
-func (c *Controller) onNowPlaying(obj map[string]any, vid string, dur float64) {
+func (c *Controller) onNowPlaying(obj map[string]any, vid string, dur float64) (aboutAd bool) {
 	adState := asString(obj["adState"])
 	adID := asString(obj["adVideoId"])
 	adLive := adState != "" && adState != "0" && adState != "-1"
@@ -297,10 +316,10 @@ func (c *Controller) onNowPlaying(obj map[string]any, vid string, dur float64) {
 				bumper: truthy(obj["isBumper"]),
 			})
 		}
-		return
+		return true
 	}
 	if !active {
-		return
+		return false
 	}
 	switch {
 	case vid != "" && vid == curAd:
@@ -314,6 +333,7 @@ func (c *Controller) onNowPlaying(obj map[string]any, vid string, dur float64) {
 	default:
 		c.log("lounge[%s]: nowPlaying %.1fs into a %.0fs ad with no ad state; keeping the ad open", c.name, elapsed, adDur)
 	}
+	return false
 }
 
 func (c *Controller) handleEvent(ev event) {
@@ -341,12 +361,16 @@ func (c *Controller) handleEvent(ev event) {
 		state := asString(obj["state"])
 		vid := asString(obj["videoId"])
 		dur, _ := asFloat(obj["duration"])
+		var aboutAd bool
 		if ev.typ == "nowPlaying" {
-			c.onNowPlaying(obj, vid, dur)
+			aboutAd = c.onNowPlaying(obj, vid, dur)
 		} else {
-			c.onStateChangeDuringAd(state, dur)
+			aboutAd = c.onStateChange(state, dur)
 		}
-		if t, ok := asFloat(obj["currentTime"]); ok {
+		// Only the content's own position is worth remembering: an ad's
+		// position, or an unstarted load, would poison the place the content
+		// is resumed at after a reload and the sponsor-segment tracking.
+		if t, ok := asFloat(obj["currentTime"]); ok && !aboutAd && state != "-1" {
 			c.updatePosition(t, state == "1")
 		}
 		c.noteContentDuration(state, dur)
@@ -461,11 +485,18 @@ const adPlayingState = "1081"
 // duration (the content's, not the ad's) and an ordinary playing or
 // buffering state. The next ad in a pod also arrives by onStateChange, but
 // in the ad-playing state or unstarted, so those are left alone.
-func (c *Controller) onStateChangeDuringAd(state string, duration float64) {
+func (c *Controller) onStateChange(state string, duration float64) (aboutAd bool) {
 	c.mu.Lock()
 	if !c.adActive {
 		c.mu.Unlock()
-		return
+		if state == adPlayingState {
+			// The ad-playing state is unambiguous and arrives a beat before
+			// adPlaying names the ad. Starting here mutes a beat sooner and
+			// captures the content position before anything overwrites it.
+			c.onAd(adInfo{duration: normaliseDuration(duration)})
+			return true
+		}
+		return false
 	}
 	adDur, contentDur := c.adDur, c.contentDur
 	if state == adPlayingState {
@@ -474,7 +505,7 @@ func (c *Controller) onStateChangeDuringAd(state string, duration float64) {
 			c.adDur = duration
 		}
 		c.mu.Unlock()
-		return
+		return true
 	}
 	looksLikeAd := adDur > 0 && duration > 0 && absf(duration-adDur) <= 1
 	looksLikeContent := duration > 0 && !looksLikeAd &&
@@ -484,7 +515,7 @@ func (c *Controller) onStateChangeDuringAd(state string, duration float64) {
 		if looksLikeContent {
 			c.mu.Unlock()
 			c.clearAd("onStateChange: content " + stateWord(state))
-			return
+			return false
 		}
 		if looksLikeAd {
 			// A pause or resume of the ad itself moves its deadline.
@@ -502,6 +533,7 @@ func (c *Controller) onStateChangeDuringAd(state string, duration float64) {
 		}
 	}
 	c.mu.Unlock()
+	return looksLikeAd
 }
 
 // noteContentDuration remembers the content's length while no ad is on
@@ -618,6 +650,19 @@ func adRetryDelay(attempt int) time.Duration {
 // by any means available here, and continuing to ask only adds requests.
 const maxAdTries = 40
 
+const (
+	// reloadMinAdSeconds is the shortest unskippable ad worth a reload. A
+	// reload costs a couple of seconds of buffering; a six-second bumper is
+	// not worth it.
+	reloadMinAdSeconds = 10
+	// reloadMinPosition keeps reloads to mid-rolls. Reloading at the start
+	// is what produces a pre-roll in the first place.
+	reloadMinPosition = 5.0
+	// reloadResistWindow is how soon after a reload another ad on the same
+	// video means the reload did not help.
+	reloadResistWindow = 25 * time.Second
+)
+
 // onAd records an ad start (or a state change within one) and acts on it.
 func (c *Controller) onAd(info adInfo) {
 	c.mu.Lock()
@@ -625,10 +670,14 @@ func (c *Controller) onAd(info adInfo) {
 	// the current one first so each ad gets its own record and its own
 	// skip budget.
 	if c.adActive && info.id != "" && c.adID != "" && info.id != c.adID {
+		reason := "next ad in pod"
+		if c.adReloaded {
+			reason = "reloaded, ad served again"
+		}
 		c.mu.Unlock()
 		// Keep the mute across the boundary: un-muting for the half second
 		// between two ads is a burst of sound, not a restore.
-		c.closeAd("next ad in pod", false)
+		c.closeAd(reason, false)
 		c.mu.Lock()
 	}
 	firstSeen := !c.adActive
@@ -647,6 +696,14 @@ func (c *Controller) onAd(info adInfo) {
 		c.adSkipOK = false
 		c.adTries = 0
 		c.nextTry = time.Time{}
+		c.adReloadTried = false
+		c.adReloaded = false
+		// Where the content was when the ad began, from the last content
+		// report plus the time since; this is where a reload resumes.
+		c.contentPos = c.lastTime
+		if c.playing && !c.lastWall.IsZero() {
+			c.contentPos += c.now().Sub(c.lastWall).Seconds()
+		}
 	}
 	if info.id != "" && c.adID == "" {
 		c.adID = info.id
@@ -676,7 +733,41 @@ func (c *Controller) onAd(info adInfo) {
 	if needMute {
 		c.mutedByUs = true
 	}
+
+	// Reload decision, once per ad, on the event that names it. A video that
+	// served an ad back within a short while of the last reload is marked as
+	// resisting and left to the mute from then on.
+	reload := ""
+	var reloadPos float64
+	if info.id != "" && !c.adReloadTried {
+		c.adReloadTried = true
+		content := c.adContent
+		if !c.reloadAt.IsZero() && c.now().Sub(c.reloadAt) < reloadResistWindow && content != "" && content == c.reloadContent {
+			if !c.resisted[content] {
+				c.resisted[content] = true
+				c.stats.ReloadsResisted++
+				c.log("lounge[%s]: %s served an ad again after a reload; leaving it to the mute from now on", c.name, content)
+			}
+			c.reloadAt = time.Time{}
+		} else if o.ReloadUnskippable && !info.skippable && !info.skipArmed && !info.bumper &&
+			dur >= reloadMinAdSeconds && c.contentPos >= reloadMinPosition &&
+			content != "" && !c.resisted[content] {
+			reload = content
+			reloadPos = c.contentPos
+			c.adReloaded = true
+			c.reloadAt = c.now()
+			c.reloadContent = content
+			c.stats.Reloads++
+		}
+	}
 	c.mu.Unlock()
+	if reload != "" {
+		c.log("lounge[%s]: unskippable %.0fs ad; reloading %s at %.1fs", c.name, dur, reload, reloadPos)
+		c.command("setPlaylist", map[string]string{
+			"videoId":     reload,
+			"currentTime": strconv.FormatFloat(reloadPos, 'f', 1, 64),
+		})
+	}
 
 	if firstSeen {
 		c.log("lounge[%s]: AD %s detected (skippable=%v, bumper=%v, duration=%.0fs) -> mute=%v skip=%v",
@@ -750,6 +841,7 @@ func (c *Controller) closeAd(reason string, restore bool) {
 		Bumper:         c.adBumper,
 		Muted:          c.mutedByUs,
 		Attempts:       c.adTries,
+		Reloaded:       c.adReloaded,
 		Outcome:        outcome,
 		Reason:         reason,
 	}
@@ -794,6 +886,8 @@ func adOutcome(reason string, dur, elapsed float64) string {
 			return "played"
 		}
 		return "abandoned"
+	case strings.HasPrefix(reason, "reloaded, ad served again"):
+		return "played"
 	default:
 		if dur > 0 && elapsed < dur-1 {
 			return "skipped"

@@ -154,6 +154,10 @@ func (f *FilterChain) FilterResponse(host, path string, req *http.Request, resp 
 	// only on YouTube documents, where it is the layer that survives a
 	// response-shape change the static filter has not learned yet.
 	if c.MITM.Filters.YouTube && c.MITM.Filters.YouTubeInPage && isHTML && isYouTubeAppHost(host) {
+		if out, n := rewriteProbeSrc(body); n > 0 {
+			body = out
+			modified = true
+		}
 		if out, ok := injectPlayerEngine(body, InPageOptions{
 			SponsorBlock: c.MITM.Filters.YouTubeSponsorBlock,
 		}); ok {
@@ -311,6 +315,10 @@ var youtubeAdKeys = []string{
 	"adPlaybackContextParams",
 	"adPlacementConfig",
 	"adCpn",
+	// The anti-adblock enforcement dialog travels inside the same responses
+	// as the ads it complains about.
+	"enforcementMessageViewModel",
+	"adBlockMessageViewModel",
 }
 
 // serverStitchedMarkers identify a response whose ads are muxed into the same

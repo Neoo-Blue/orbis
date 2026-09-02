@@ -556,16 +556,42 @@ func (a *App) SyncIntercept() error {
 		}
 	}
 
+	targets := intercept.ResolveTargets(pairs)
+
+	// The web redirect is narrowed to the devices the proxy is allowed to
+	// intercept (mitm.only_clients), when that list is set: those are the
+	// ones with the certificate. Everyone else enrolled still gets DNS
+	// filtering, and is spared a proxy hop that would only splice.
+	mitmCfg := a.Cfg.Snapshot().MITM
+	var webClients []netip.Addr
+	scoped := cfg.RedirectHTTP && len(mitmCfg.OnlyClients) > 0
+	if scoped {
+		for _, t := range targets {
+			for _, spec := range mitmCfg.OnlyClients {
+				if pfx, err := netip.ParsePrefix(spec); err == nil && pfx.Contains(t.IP) {
+					webClients = append(webClients, t.IP)
+					break
+				}
+				if a, err := netip.ParseAddr(spec); err == nil && a == t.IP {
+					webClients = append(webClients, t.IP)
+					break
+				}
+			}
+		}
+	}
+
 	return a.Intercept.Apply(a.ctx, intercept.Config{
 		Enabled:      cfg.Enabled,
 		LANInterface: lan,
 		Gateway:      gwAddr,
-		Clients:      intercept.ResolveTargets(pairs),
+		Clients:      targets,
 		RedirectDNS:  cfg.RedirectDNS,
 		DNSPort:      53,
 		RedirectHTTP: cfg.RedirectHTTP,
-		HTTPPort:     portOfAddr(a.Cfg.Snapshot().MITM.ListenHTTP),
-		HTTPSPort:    portOfAddr(a.Cfg.Snapshot().MITM.ListenTLS),
+		HTTPPort:     portOfAddr(mitmCfg.ListenHTTP),
+		HTTPSPort:    portOfAddr(mitmCfg.ListenTLS),
+		HTTPScoped:   scoped,
+		HTTPClients:  webClients,
 	})
 }
 

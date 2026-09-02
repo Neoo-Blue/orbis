@@ -316,7 +316,7 @@ export const api = {
     settings: (
       body: Partial<{
         enabled: boolean; auto_discover: boolean; skip_ads: boolean
-        mute_ads: boolean; categories: string[]; min_skip_length: number
+        mute_ads: boolean; reload_unskippable: boolean; categories: string[]; min_skip_length: number
       }>,
     ) => post<YouTubeStatus>('/youtube/settings', body),
   },

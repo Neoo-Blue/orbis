@@ -105,3 +105,53 @@ func TestResolveTargetsDropsBadEntries(t *testing.T) {
 		t.Fatalf("wrong survivor: %v", got[0].IP)
 	}
 }
+
+func TestRenderForwardingWebRedirectIsScopedAndBlocksQUIC(t *testing.T) {
+	s := renderForwarding(ForwardConfig{
+		LANInterface: "eth0",
+		Clients:      []netip.Addr{netip.MustParseAddr("192.168.50.26"), netip.MustParseAddr("192.168.50.230")},
+		RedirectDNS:  true, DNSPort: 53,
+		RedirectHTTP: true, HTTPPort: 3128, HTTPSPort: 3129,
+		HTTPScoped:  true,
+		HTTPClients: []netip.Addr{netip.MustParseAddr("192.168.50.230")},
+	})
+	if !strings.Contains(s, "set web_clients") || !strings.Contains(s, "elements = { 192.168.50.230 }") {
+		t.Fatalf("web redirect must be scoped to the clients with the certificate:\n%s", s)
+	}
+	if !strings.Contains(s, "ip saddr @web_clients tcp dport 443 redirect to :3129") {
+		t.Fatal("HTTPS redirect must use the narrowed set")
+	}
+	if strings.Contains(s, "ip saddr @clients tcp dport 443") {
+		t.Fatal("a client without the certificate must not be redirected into the proxy")
+	}
+	if !strings.Contains(s, "ip saddr @web_clients udp dport 443 counter reject") {
+		t.Fatal("QUIC must be refused for web-intercepted clients or HTTP/3 bypasses the filter")
+	}
+	// DNS still covers everyone.
+	if !strings.Contains(s, "ip saddr @clients udp dport 53 redirect to :53") {
+		t.Fatal("DNS redirect must still apply to every intercepted client")
+	}
+
+	// Without a narrowed set, everyone enrolled is web-redirected, and QUIC
+	// is still refused.
+	s = renderForwarding(ForwardConfig{
+		LANInterface: "eth0",
+		Clients:      []netip.Addr{netip.MustParseAddr("192.168.50.26")},
+		RedirectHTTP: true, HTTPPort: 3128, HTTPSPort: 3129,
+	})
+	if !strings.Contains(s, "ip saddr @clients tcp dport 443 redirect to :3129") || !strings.Contains(s, "ip saddr @clients udp dport 443 counter reject") {
+		t.Fatalf("unscoped web redirect should apply to the whole client set:\n%s", s)
+	}
+}
+
+func TestRenderForwardingScopedToNobodyRedirectsNobody(t *testing.T) {
+	s := renderForwarding(ForwardConfig{
+		LANInterface: "eth0",
+		Clients:      []netip.Addr{netip.MustParseAddr("192.168.50.26")},
+		RedirectHTTP: true, HTTPPort: 3128, HTTPSPort: 3129,
+		HTTPScoped: true, // the operator named certificate holders, and none is enrolled
+	})
+	if strings.Contains(s, "dport 443 redirect") || strings.Contains(s, "udp dport 443") {
+		t.Fatalf("with only_clients set and none enrolled, nobody may be web-redirected:\n%s", s)
+	}
+}

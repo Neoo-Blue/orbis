@@ -435,6 +435,12 @@ type LoungeConfig struct {
 	SkipAds bool `yaml:"skip_ads" json:"skip_ads"`
 	// MuteAds silences the player for the (often unskippable) opening seconds.
 	MuteAds bool `yaml:"mute_ads" json:"mute_ads"`
+	// ReloadUnskippable reloads the content at its current position when an
+	// unskippable mid-roll starts, which on most screens resumes the video
+	// without the ad. A video that serves the ad again anyway is remembered
+	// and left to the mute. Pre-rolls are never reloaded: a fresh load is
+	// what causes them.
+	ReloadUnskippable bool `yaml:"reload_unskippable" json:"reload_unskippable"`
 	// SkipCategories are SponsorBlock categories to seek past (in-video
 	// sponsor reads, intros, self-promo). Separate from Google's own ads.
 	SkipCategories []string `yaml:"skip_categories" json:"skip_categories"`
@@ -814,10 +820,11 @@ func Default() *Config {
 		},
 		YouTube: YouTubeConfig{
 			Lounge: LoungeConfig{
-				Enabled:      false,
-				AutoDiscover: true,
-				SkipAds:      true,
-				MuteAds:      true,
+				Enabled:           false,
+				AutoDiscover:      true,
+				SkipAds:           true,
+				MuteAds:           true,
+				ReloadUnskippable: true,
 				SkipCategories: []string{
 					"sponsor", "selfpromo", "interaction",
 					"intro", "outro", "preview", "music_offtopic",

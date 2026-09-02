@@ -447,6 +447,7 @@ export interface AdRecord {
   bumper: boolean
   muted: boolean
   attempts: number
+  reloaded: boolean
   outcome: 'skipped' | 'played' | 'abandoned' | 'lost'
   reason: string
 }
@@ -462,6 +463,8 @@ export interface LoungeDeviceStats {
   ads_handled: number
   ads_skipped: number
   ads_lost: number
+  reloads: number
+  reloads_resisted: number
   segments_skipped: number
   segments_muted: number
   segments_loaded: number
@@ -494,6 +497,7 @@ export interface YouTubeStatus {
   auto_discover: boolean
   skip_ads: boolean
   mute_ads: boolean
+  reload_unskippable: boolean
   categories: string[]
   devices: LoungeDeviceStats[]
   discovered: DiscoveredScreen[]

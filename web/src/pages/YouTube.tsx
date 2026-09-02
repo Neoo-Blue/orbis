@@ -68,6 +68,7 @@ function EngineControls({
   const ads = status.devices.reduce((n, d) => n + d.ads_handled, 0)
   const cut = status.devices.reduce((n, d) => n + d.ads_skipped, 0)
   const lost = status.devices.reduce((n, d) => n + d.ads_lost, 0)
+  const reloads = status.devices.reduce((n, d) => n + d.reloads, 0)
   const segs = status.devices.reduce((n, d) => n + d.segments_skipped + d.segments_muted, 0)
   const saved = status.devices.reduce((n, d) => n + d.seconds_saved, 0)
 
@@ -91,7 +92,7 @@ function EngineControls({
     >
       <div className="grid c4" style={{ marginBottom: 14 }}>
         <Stat label="Screens on" value={String(online)} sub={`${status.devices.length} paired`} tone={online ? 'accent' : undefined} />
-        <Stat label="Ads cut short" value={compact(cut)} sub={ads ? `of ${compact(ads)} seen${lost ? `, ${lost} lost` : ''}` : 'none seen yet'} tone={cut ? 'accent' : undefined} />
+        <Stat label="Ads cut short" value={compact(cut)} sub={ads ? `of ${compact(ads)} seen${lost ? `, ${lost} lost` : ''}${reloads ? `, ${reloads} reloaded past` : ''}` : 'none seen yet'} tone={cut ? 'accent' : undefined} />
         <Stat label="Segments" value={compact(segs)} sub="SponsorBlock, skipped or muted" />
         <Stat label="Time saved" value={saved ? duration(Math.round(saved)) : '0s'} sub="since start" tone={saved ? 'accent' : undefined} />
       </div>
@@ -107,6 +108,14 @@ function EngineControls({
           label="Skip ads the moment YouTube allows it" />
         <Switch checked={status.mute_ads} onChange={(v) => onSave({ mute_ads: v })}
           label="Mute every ad from its first frame (covers the unskippable ones)" />
+        <Switch checked={status.reload_unskippable} onChange={(v) => onSave({ reload_unskippable: v })}
+          label="Reload past unskippable mid-rolls" />
+        <div className="hint" style={{ marginTop: -4 }}>
+          When an unskippable ad of ten seconds or more starts mid-video, Orbis asks the screen to
+          load the video again at the same position, which on most screens resumes without the ad
+          after a moment of buffering. A video that serves the ad again anyway is remembered and
+          left to the mute. Pre-rolls are never reloaded; a fresh load is what causes them.
+        </div>
       </div>
 
       <div style={{ borderTop: '1px solid var(--line-soft)', marginTop: 13, paddingTop: 12 }}>
@@ -333,7 +342,7 @@ function DeviceRow({ d, onForget }: { d: LoungeDeviceStats; onForget: () => void
 
 function AdRow({ r }: { r: AdRecord }) {
   const tag = r.outcome === 'skipped' ? 'allow' : r.outcome === 'lost' ? 'warn' : r.outcome === 'abandoned' ? 'info' : ''
-  const kind = [r.bumper ? 'bumper' : r.skippable ? 'skippable' : 'unskippable', r.muted ? 'muted' : null]
+  const kind = [r.bumper ? 'bumper' : r.skippable ? 'skippable' : 'unskippable', r.muted ? 'muted' : null, r.reloaded ? 'reloaded' : null]
     .filter(Boolean).join(', ')
   return (
     <tr>

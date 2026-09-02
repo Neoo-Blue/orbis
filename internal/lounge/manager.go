@@ -23,6 +23,7 @@ type Manager struct {
 	deviceID string
 
 	mu          sync.Mutex
+	wg          sync.WaitGroup
 	ctx         context.Context
 	cancel      context.CancelFunc
 	running     bool
@@ -150,14 +151,20 @@ func (m *Manager) startLocked(d config.LoungeDevice) {
 	ctrl := NewController(d.ScreenID, d.Name, m.deviceID, m.hc, m.sb, opts, m.log)
 	cctx, ccancel := context.WithCancel(m.ctx)
 	m.controllers[d.ScreenID] = &ctrlHandle{ctrl: ctrl, cancel: ccancel}
-	go ctrl.Run(cctx)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		ctrl.Run(cctx)
+	}()
 }
 
-// Stop tears down all controllers.
+// Stop tears down all controllers and waits, briefly, for them to finish.
+// The wait is what lets a controller put a television's volume back on the
+// way out; without it the process is gone before the command is sent.
 func (m *Manager) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if !m.running {
+		m.mu.Unlock()
 		return
 	}
 	if m.cancel != nil {
@@ -165,6 +172,17 @@ func (m *Manager) Stop() {
 	}
 	m.controllers = map[string]*ctrlHandle{}
 	m.running = false
+	m.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+	}
 }
 
 // Discover runs an on-demand DIAL scan and caches the result.

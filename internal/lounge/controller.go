@@ -34,9 +34,10 @@ type AdRecord struct {
 	Bumper         bool      `json:"bumper"`
 	Muted          bool      `json:"muted"`
 	Attempts       int       `json:"attempts"`
-	// Outcome is one of "skipped" (cut short by Orbis), "played" (ran to its
-	// end; unskippable), or "lost" (the player never said it ended, so Orbis
-	// stopped waiting). Reason is the event or condition that closed it.
+	// Outcome is one of "skipped" (the player ended it before its length),
+	// "played" (ran to its end; unskippable), "abandoned" (the screen went
+	// away or the viewer changed video), or "lost" (the player never said it
+	// ended and its length was unknown). Reason is what closed it.
 	Outcome string `json:"outcome"`
 	Reason  string `json:"reason"`
 }
@@ -104,7 +105,8 @@ type Controller struct {
 	adActive    bool
 	adID        string
 	adContent   string
-	adStart     time.Time
+	adBegan     time.Time // wall time the ad started; for the record
+	adStart     time.Time // shifted forward by pauses; for the deadline
 	adPausedAt  time.Time
 	adDur       float64
 	adSkippable bool
@@ -140,7 +142,7 @@ const (
 	// ad is closed as lost: better a rare early un-mute than a television
 	// that stays silent, and a skip command sent every second, until someone
 	// notices.
-	adEndGrace = 10 * time.Second
+	adEndGrace = 6 * time.Second
 	// adUnknownLimit bounds an ad whose duration was never reported.
 	adUnknownLimit = 90 * time.Second
 	// adPausedLimit bounds an ad the viewer has paused; a paused ad does not
@@ -217,20 +219,79 @@ func (c *Controller) Run(ctx context.Context) {
 			}
 		}
 		cancelTick()
+		if ctx.Err() != nil {
+			// Going away: the send loop is gone with the context, so a
+			// queued restore would never leave. Send it directly, on a
+			// context of its own, before the session is dropped.
+			c.restoreVolumeNow()
+		}
 		c.setConnected(false)
 		sleep(ctx, backoff)
 	}
-	// Never leave a screen muted because the process is going away.
-	c.restoreVolumeIfMuted()
+}
+
+// restoreVolumeNow is the shutdown path of restoreVolumeIfMuted: it sends
+// the command itself, synchronously, on a fresh context, because the queue
+// and its sender are bound to the context that has just been cancelled.
+func (c *Controller) restoreVolumeNow() {
+	c.mu.Lock()
+	if !c.mutedByUs {
+		c.mu.Unlock()
+		return
+	}
+	c.mutedByUs = false
+	vol := c.lastVol
+	c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := c.send.sendCommand(ctx, "setVolume", map[string]string{"volume": strconv.Itoa(vol), "delta": "0"}); err != nil {
+		c.log("lounge[%s]: volume restore on shutdown FAILED: %v", c.name, err)
+	} else {
+		c.log("lounge[%s]: volume restored to %d on shutdown", c.name, vol)
+	}
 }
 
 // adInfo is what an ad-start event tells us about the ad.
 type adInfo struct {
-	id        string
-	content   string
-	duration  float64
+	id       string
+	content  string
+	duration float64
+	// skippable is YouTube saying the ad has a skip button; skipArmed is it
+	// saying the button is live right now. They arrive on different events.
 	skippable bool
+	skipArmed bool
 	bumper    bool
+}
+
+// onNowPlayingDuringAd decides what a nowPlaying event means while an ad is
+// on screen. On a television it is not the end of the ad by itself: the
+// player reports nowPlaying about two seconds into an unskippable ad, and
+// treating that as the end un-muted every unskippable ad and recorded it as
+// skipped. So it ends the ad only when it carries evidence: a different
+// content video (the viewer moved on), or a position past the ad's own
+// length. A genuine skip is confirmed by adState=0, and an ad that quietly
+// ends is closed by its deadline.
+func (c *Controller) onNowPlayingDuringAd(vid string) {
+	c.mu.Lock()
+	if !c.adActive {
+		c.mu.Unlock()
+		return
+	}
+	adID, content := c.adID, c.adContent
+	elapsed := c.now().Sub(c.adStart).Seconds()
+	dur := c.adDur
+	c.mu.Unlock()
+
+	switch {
+	case vid != "" && vid == adID:
+		// The ad itself being reported as the current video.
+	case vid != "" && content != "" && vid != content:
+		c.clearAd("nowPlaying: different video")
+	case dur > 0 && elapsed >= dur-1.5:
+		c.clearAd("nowPlaying at the ad's end")
+	default:
+		c.log("lounge[%s]: nowPlaying %.1fs into a %.0fs ad; keeping the ad open", c.name, elapsed, dur)
+	}
 }
 
 func (c *Controller) handleEvent(ev event) {
@@ -241,10 +302,14 @@ func (c *Controller) handleEvent(ev event) {
 	c.seen[ev.typ] = true
 	c.mu.Unlock()
 
-	// Log the first time each event type is seen, and every ad-related event
-	// in full, so a session that is connected but not skipping can be
-	// diagnosed from the log rather than guessed at.
-	if first || strings.Contains(strings.ToLower(ev.typ), "ad") {
+	// Log the first time each event type is seen, every ad-related event in
+	// full, and every playback event that arrives while an ad is on screen,
+	// so a session that is connected but not skipping can be diagnosed from
+	// the log rather than guessed at.
+	c.mu.Lock()
+	duringAd := c.adActive
+	c.mu.Unlock()
+	if first || duringAd || strings.Contains(strings.ToLower(ev.typ), "ad") {
 		c.log("lounge[%s]: event %q %s", c.name, ev.typ, rawArgs(ev))
 	}
 
@@ -252,15 +317,15 @@ func (c *Controller) handleEvent(ev event) {
 	case "nowPlaying", "onStateChange":
 		obj := ev.object()
 		state := asString(obj["state"])
+		vid := asString(obj["videoId"])
 		if ev.typ == "nowPlaying" {
-			// A new video always means no ad is on screen.
-			c.clearAd("nowPlaying")
+			c.onNowPlayingDuringAd(vid)
 		}
 		if t, ok := asFloat(obj["currentTime"]); ok {
 			c.updatePosition(t, state == "1")
 		}
 		c.notePlayerState(state)
-		if vid := asString(obj["videoId"]); vid != "" {
+		if vid != "" {
 			c.onVideo(vid)
 		}
 	case "onAdStateChange":
@@ -270,7 +335,8 @@ func (c *Controller) handleEvent(ev event) {
 		if d, ok := asFloat(obj["adDuration"]); ok {
 			info.duration = normaliseDuration(d)
 		}
-		info.skippable = truthy(obj["isSkipEnabled"]) || truthy(obj["isSkippable"])
+		info.skippable = truthy(obj["isSkippable"])
+		info.skipArmed = truthy(obj["isSkipEnabled"])
 		if adState == "" || adState == "0" || adState == "-1" {
 			c.clearAd("adState=" + adState)
 		} else {
@@ -281,7 +347,8 @@ func (c *Controller) handleEvent(ev event) {
 		info := adInfo{
 			id:        asString(obj["adVideoId"]),
 			content:   asString(obj["contentVideoId"]),
-			skippable: truthy(obj["isSkippable"]) || truthy(obj["isSkipEnabled"]),
+			skippable: truthy(obj["isSkippable"]),
+			skipArmed: truthy(obj["isSkipEnabled"]),
 			bumper:    truthy(obj["isBumper"]),
 		}
 		if d, ok := asFloat(obj["duration"]); ok {
@@ -472,6 +539,7 @@ func (c *Controller) onAd(info adInfo) {
 	if firstSeen {
 		c.stats.AdsHandled++
 		c.adStart = c.now()
+		c.adBegan = c.adStart
 		c.adPausedAt = time.Time{}
 		c.adID = info.id
 		c.adContent = info.content
@@ -497,7 +565,9 @@ func (c *Controller) onAd(info adInfo) {
 	if info.skippable {
 		c.adSkippable = true
 	}
-	skipJustEnabled := info.skippable && !c.adSkipOK
+	// Either signal is worth a skip attempt; the retry schedule covers the
+	// gap between "has a button" and "button is live".
+	skipJustEnabled := (info.skippable || info.skipArmed) && !c.adSkipOK
 	if skipJustEnabled {
 		c.adSkipOK = true
 	}
@@ -564,20 +634,16 @@ func (c *Controller) closeAd(reason string, restore bool) {
 		elapsed = 0
 	}
 	dur := c.adDur
-	lost := strings.HasPrefix(reason, "no end event")
-	skipped := !lost && dur > 0 && elapsed < dur-1
-	outcome := "played"
-	switch {
-	case lost:
-		outcome = "lost"
+	outcome := adOutcome(reason, dur, elapsed)
+	switch outcome {
+	case "lost":
 		c.stats.AdsLost++
-	case skipped:
-		outcome = "skipped"
+	case "skipped":
 		c.stats.AdsSkipped++
 		c.stats.SecondsSaved += dur - elapsed
 	}
 	rec := AdRecord{
-		At:             c.adStart,
+		At:             c.adBegan,
 		AdVideoID:      c.adID,
 		ContentVideoID: c.adContent,
 		Duration:       dur,
@@ -601,8 +667,40 @@ func (c *Controller) closeAd(reason string, restore bool) {
 
 	c.log("lounge[%s]: ad cleared via %s after %.1fs of %.0fs (%d skip attempt(s)) -> %s",
 		c.name, reason, elapsed, dur, attempts, strings.ToUpper(outcome))
-	if restore {
+	c.mu.Lock()
+	inMuteSeg := c.muteSeg != nil
+	c.mu.Unlock()
+	// Inside a SponsorBlock mute segment the sound stays off; applySegments
+	// puts it back when the playhead leaves the segment.
+	if restore && !inMuteSeg {
 		c.restoreVolumeIfMuted()
+	}
+}
+
+// adOutcome classifies how an ad ended. "skipped" is only claimed when the
+// player itself reported the end and it came before the ad's own length;
+// a screen that went away or a viewer who changed video is "abandoned",
+// and an ad closed by its deadline is "played" if it ran its length and
+// "lost" if nobody knows.
+func adOutcome(reason string, dur, elapsed float64) string {
+	ranFull := dur > 0 && elapsed >= dur-1
+	switch {
+	case strings.HasPrefix(reason, "no end event"):
+		if ranFull {
+			return "played"
+		}
+		return "lost"
+	case reason == "screen disconnected", reason == "onAdCancel",
+		strings.HasPrefix(reason, "nowPlaying: different"):
+		if ranFull {
+			return "played"
+		}
+		return "abandoned"
+	default:
+		if dur > 0 && elapsed < dur-1 {
+			return "skipped"
+		}
+		return "played"
 	}
 }
 
@@ -615,7 +713,6 @@ func (c *Controller) restoreVolumeIfMuted() {
 		return
 	}
 	c.mutedByUs = false
-	c.muteSeg = nil
 	vol := c.lastVol
 	c.mu.Unlock()
 	c.command("setVolume", map[string]string{"volume": strconv.Itoa(vol), "delta": "0"})

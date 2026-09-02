@@ -109,9 +109,10 @@ function EngineControls({
           label="Mute every ad from its first frame (covers the unskippable ones)" />
       </div>
 
-      <div style={{ borderTop: '1px solid var(--line-soft)', marginTop: 13, paddingTop: 12, opacity: status.enabled ? 1 : 0.55 }}>
+      <div style={{ borderTop: '1px solid var(--line-soft)', marginTop: 13, paddingTop: 12 }}>
         <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginBottom: 9 }}>
-          Also skip these in-video SponsorBlock segments (used by both engines)
+          Also skip these in-video SponsorBlock segments (shared by the Lounge and in-page engines,
+          so they apply even with the Lounge engine off)
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {CATEGORIES.map((c) => {
@@ -120,7 +121,6 @@ function EngineControls({
               <button
                 key={c.id}
                 title={c.hint}
-                disabled={!status.enabled}
                 onClick={() => toggleCategory(c.id, !on)}
                 className={`chip ${on ? 'on' : ''}`}
                 style={{
@@ -332,7 +332,7 @@ function DeviceRow({ d, onForget }: { d: LoungeDeviceStats; onForget: () => void
 }
 
 function AdRow({ r }: { r: AdRecord }) {
-  const tag = r.outcome === 'skipped' ? 'allow' : r.outcome === 'lost' ? 'warn' : ''
+  const tag = r.outcome === 'skipped' ? 'allow' : r.outcome === 'lost' ? 'warn' : r.outcome === 'abandoned' ? 'info' : ''
   const kind = [r.bumper ? 'bumper' : r.skippable ? 'skippable' : 'unskippable', r.muted ? 'muted' : null]
     .filter(Boolean).join(', ')
   return (

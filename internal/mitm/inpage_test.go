@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ import (
 func TestInjectPlayerEngineGoesAfterCharsetAndReusesNonce(t *testing.T) {
 	page := []byte(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>x</title>` +
 		`<script nonce="abcDEF123">var a=1;</script></head><body></body></html>`)
-	out, ok := injectPlayerEngine(page, InPageOptions{SponsorBlock: true, Offset: 0.5})
+	out, ok := injectPlayerEngine(page, InPageOptions{SponsorBlock: true})
 	if !ok {
 		t.Fatal("expected injection")
 	}
@@ -29,7 +30,7 @@ func TestInjectPlayerEngineGoesAfterCharsetAndReusesNonce(t *testing.T) {
 	if charset < 0 || engine < charset {
 		t.Fatalf("engine must come after the charset meta:\n%s", s[:200])
 	}
-	if !strings.Contains(s, `<script nonce="abcDEF123">window.__orbisYTcfg={sb:true,offset:0.5};`) {
+	if !strings.Contains(s, `<script nonce="abcDEF123">window.__orbisYTcfg={sb:true};`) {
 		t.Fatalf("engine should reuse the page nonce and carry its config:\n%s", s[:400])
 	}
 	if !strings.Contains(s, InPageReportPath) || !strings.Contains(s, InPageSegmentsPath) {
@@ -195,7 +196,7 @@ func TestWriteResponseKeepsKnownLengthAndEncoding(t *testing.T) {
 	}
 }
 
-func TestWriteResponseHeadHasNoBody(t *testing.T) {
+func TestWriteResponseHeadKeepsLengthWithoutBody(t *testing.T) {
 	req := httptest.NewRequest("HEAD", "https://www.youtube.com/x", nil)
 	resp := &http.Response{
 		StatusCode:    200,
@@ -203,10 +204,16 @@ func TestWriteResponseHeadHasNoBody(t *testing.T) {
 		Body:          io.NopCloser(strings.NewReader("should-not-be-sent")),
 		ContentLength: 18,
 	}
-	got, _ := readBack(t, resp, req)
+	got, keep := readBack(t, resp, req)
 	b, _ := io.ReadAll(got.Body)
 	if len(b) != 0 {
 		t.Fatalf("HEAD response carried a body: %q", b)
+	}
+	if got.ContentLength != 18 {
+		t.Fatalf("HEAD must keep the GET's Content-Length, got %d", got.ContentLength)
+	}
+	if !keep {
+		t.Fatal("HEAD with a known length keeps the connection")
 	}
 }
 
@@ -217,18 +224,137 @@ func testConfig(t *testing.T) *config.Config {
 	return c
 }
 
-func TestFilterRequestAnswersInPageReportLocally(t *testing.T) {
-	f := NewFilterChain(testConfig(t))
-	req := httptest.NewRequest("POST", "https://www.youtube.com"+InPageReportPath, strings.NewReader(`{"stripped":3}`))
-	v := f.FilterRequest("www.youtube.com", InPageReportPath, req)
-	if !v.Drop || v.Reason != "orbis-inpage-report" || v.Status != http.StatusNoContent {
-		t.Fatalf("report endpoint should be answered locally: %+v", v)
+func TestEngineEndpointsRequireSameOrigin(t *testing.T) {
+	p := New(testConfig(t), nil, nil)
+	client := netip.MustParseAddr("192.168.1.20")
+	mk := func(hdr map[string]string) *http.Request {
+		r := httptest.NewRequest("POST", "https://www.youtube.com"+InPageReportPath, strings.NewReader(`{"stripped":3}`))
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		return r
 	}
-	// The same path on another host is not ours to answer.
-	v = f.FilterRequest("example.com", InPageReportPath, req)
-	if v.Drop {
-		t.Fatal("report path on a non-YouTube host must be forwarded")
+	// A browser that sends Sec-Fetch-Site: the only accepted value is same-origin.
+	if r := p.engineEndpoint(context.Background(), mk(map[string]string{"Sec-Fetch-Site": "same-origin"}), InPageReportPath, client); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("same-origin report should be accepted, got %d", r.StatusCode)
 	}
+	if r := p.engineEndpoint(context.Background(), mk(map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://www.youtube.com"}), InPageReportPath, client); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-site beacon must be refused even with a YouTube Origin, got %d", r.StatusCode)
+	}
+	// Older browsers: Origin or Referer has to name a YouTube page.
+	if r := p.engineEndpoint(context.Background(), mk(map[string]string{"Referer": "https://www.youtube.com/watch?v=x"}), InPageReportPath, client); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("YouTube referer should be accepted, got %d", r.StatusCode)
+	}
+	if r := p.engineEndpoint(context.Background(), mk(map[string]string{"Referer": "https://evil.example/"}), InPageReportPath, client); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("foreign referer must be refused, got %d", r.StatusCode)
+	}
+	if r := p.engineEndpoint(context.Background(), mk(nil), InPageReportPath, client); r.StatusCode != http.StatusForbidden {
+		t.Fatalf("no provenance at all must be refused, got %d", r.StatusCode)
+	}
+	if p.Stats()["inpage_stripped"] != int64(6) {
+		t.Fatalf("only the two accepted reports should count: %+v", p.Stats())
+	}
+}
+
+func TestSegmentLookupsAreRateLimited(t *testing.T) {
+	var l clientLimiter
+	client := netip.MustParseAddr("10.0.0.5")
+	now := time.Now()
+	allowed := 0
+	for i := 0; i < 100; i++ {
+		if l.allow(client, now) {
+			allowed++
+		}
+	}
+	if allowed != int(sbBurst) {
+		t.Fatalf("burst should allow exactly %v, got %d", sbBurst, allowed)
+	}
+	if !l.allow(client, now.Add(time.Minute)) {
+		t.Fatal("tokens should refill over time")
+	}
+	if !l.allow(netip.MustParseAddr("10.0.0.6"), now) {
+		t.Fatal("another client has its own bucket")
+	}
+}
+
+func TestWriteResponseHTTP10IsCloseDelimited(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://www.youtube.com/x", nil)
+	req.Proto, req.ProtoMajor, req.ProtoMinor = "HTTP/1.0", 1, 0
+	resp := &http.Response{
+		StatusCode:    200,
+		Header:        http.Header{"Content-Type": {"text/plain"}},
+		Body:          io.NopCloser(strings.NewReader("old-client-bytes")),
+		ContentLength: -1,
+	}
+	got, keep := readBack(t, resp, req)
+	if keep {
+		t.Fatal("an HTTP/1.0 client with an unknown length must get Connection: close")
+	}
+	if len(got.TransferEncoding) != 0 || !got.Close {
+		t.Fatalf("HTTP/1.0 must not be chunked and must be close-delimited: %+v close=%v", got.TransferEncoding, got.Close)
+	}
+	b, _ := io.ReadAll(got.Body)
+	if string(b) != "old-client-bytes" {
+		t.Fatalf("body mismatch: %q", b)
+	}
+}
+
+func TestWriteResponseUpstreamCloseDoesNotCloseClient(t *testing.T) {
+	req := httptest.NewRequest("GET", "https://www.youtube.com/x", nil)
+	resp := &http.Response{
+		StatusCode:    200,
+		Close:         true, // the origin said Connection: close to us
+		Header:        http.Header{"Content-Type": {"text/plain"}},
+		Body:          io.NopCloser(strings.NewReader("abc")),
+		ContentLength: 3,
+	}
+	if _, keep := readBack(t, resp, req); !keep {
+		t.Fatal("the origin closing its side is no reason to drop the client's TLS session")
+	}
+}
+
+func TestTruncatedBodyClosesTheClientConnection(t *testing.T) {
+	resp := &http.Response{
+		StatusCode:    200,
+		Header:        http.Header{},
+		Body:          io.NopCloser(&failingReader{data: []byte("partial")}),
+		ContentLength: 100,
+	}
+	if _, ok := takeBody(resp); ok {
+		t.Fatal("a truncated read must not be offered for rewriting")
+	}
+	if !resp.Close || resp.ContentLength != 100 {
+		t.Fatalf("truncation must close the connection and keep the declared length: close=%v len=%d", resp.Close, resp.ContentLength)
+	}
+	req := httptest.NewRequest("GET", "https://www.youtube.com/x", nil)
+	client, server := net.Pipe()
+	go func() {
+		keep := writeResponse(server, resp, req)
+		if keep {
+			t.Error("a truncated response must not keep the connection alive")
+		}
+		server.Close()
+	}()
+	got, err := http.ReadResponse(newBufReader(client), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(got.Body); err == nil {
+		t.Fatal("client should see a short read, not a complete body")
+	}
+}
+
+type failingReader struct {
+	data []byte
+	done bool
+}
+
+func (f *failingReader) Read(p []byte) (int, error) {
+	if f.done {
+		return 0, io.ErrUnexpectedEOF
+	}
+	f.done = true
+	return copy(p, f.data), nil
 }
 
 func TestRecordInPageReportCapsAndSums(t *testing.T) {

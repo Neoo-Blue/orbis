@@ -43,16 +43,6 @@ func (f *FilterChain) FilterRequest(host, path string, req *http.Request) Reques
 	}
 	lp := strings.ToLower(path)
 
-	// The injected engine's counter endpoint is answered here and never
-	// forwarded. It exists so the UI can show that the in-page layer is alive
-	// on a real client, which is otherwise invisible from the network.
-	if lp == InPageReportPath && isYouTubeHost(host) {
-		return RequestVerdict{
-			Drop: true, Status: http.StatusNoContent,
-			ContentType: "text/plain", Reason: "orbis-inpage-report",
-		}
-	}
-
 	if c.MITM.Filters.YouTube && isYouTubeHost(host) {
 		// These endpoints exist solely to report ad playback and to fetch ad
 		// creatives. Dropping them removes the ad request round-trip and
@@ -163,10 +153,9 @@ func (f *FilterChain) FilterResponse(host, path string, req *http.Request, resp 
 	// The in-page engine goes in last so it sits after any rewrite above, and
 	// only on YouTube documents, where it is the layer that survives a
 	// response-shape change the static filter has not learned yet.
-	if c.MITM.Filters.YouTube && c.MITM.Filters.YouTubeInPage && isHTML && isYouTubeHost(host) {
+	if c.MITM.Filters.YouTube && c.MITM.Filters.YouTubeInPage && isHTML && isYouTubeAppHost(host) {
 		if out, ok := injectPlayerEngine(body, InPageOptions{
 			SponsorBlock: c.MITM.Filters.YouTubeSponsorBlock,
-			Offset:       0,
 		}); ok {
 			body = out
 			modified = true
@@ -201,6 +190,21 @@ func isYouTubeHost(host string) bool {
 		if h == s || strings.HasSuffix(h, "."+s) {
 			return true
 		}
+	}
+	return false
+}
+
+// isYouTubeAppHost is the narrower set of hosts that serve the YouTube
+// *application* documents: the ones the in-page engine belongs in and the
+// only origins its endpoints answer. Account, consent and API hosts are
+// YouTube hosts but not places to inject a script.
+func isYouTubeAppHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	switch h {
+	case "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
+		"tv.youtube.com", "www.youtube-nocookie.com", "youtube-nocookie.com",
+		"www.youtubekids.com", "youtubekids.com":
+		return true
 	}
 	return false
 }

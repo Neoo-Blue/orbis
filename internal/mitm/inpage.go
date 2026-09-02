@@ -3,7 +3,6 @@ package mitm
 import (
 	"bytes"
 	"regexp"
-	"strconv"
 )
 
 // The in-page engine is the second half of YouTube ad removal, and the half
@@ -53,9 +52,6 @@ type InPageOptions struct {
 	// SponsorBlock enables the segment skipper, which fetches segments from
 	// InPageSegmentsPath.
 	SponsorBlock bool
-	// Offset is added to a segment's end when seeking past it, matching the
-	// Lounge engine's per-device offset.
-	Offset float64
 }
 
 // injectPlayerEngine inserts the engine as the first script in the document,
@@ -78,7 +74,7 @@ func injectPlayerEngine(body []byte, opts InPageOptions) ([]byte, bool) {
 	if m := nonceRe.FindSubmatch(body); m != nil {
 		nonce = ` nonce="` + string(m[1]) + `"`
 	}
-	cfg := `window.__orbisYTcfg={sb:` + boolJS(opts.SponsorBlock) + `,offset:` + floatJS(opts.Offset) + `};`
+	cfg := `window.__orbisYTcfg={sb:` + boolJS(opts.SponsorBlock) + `};`
 	tag := []byte(`<script` + nonce + `>` + cfg + playerEngineJS + `</script>` +
 		`<style` + nonce + ` id="` + engineMarker + `-css">` + inPageCSS + `</style>`)
 
@@ -94,15 +90,6 @@ func boolJS(b bool) string {
 		return "true"
 	}
 	return "false"
-}
-
-// floatJS renders a seek offset as a JS number literal, clamped to a sane
-// range so a config typo cannot become a 3000-second jump.
-func floatJS(f float64) string {
-	if f < 0 || f > 30 {
-		f = 0
-	}
-	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
 const engineMarker = "orbis-yt-engine"
@@ -219,25 +206,33 @@ function video(){
   return document.querySelector("video.html5-main-video")||document.querySelector("#movie_player video")||document.querySelector("video");
 }
 
-var adOn=false,wasMuted=false,lastBurn=0;
+// Counters count ad breaks, not attempts: one skip or one burn per break,
+// recorded on the way out, so a 15 s ad the player fights over does not
+// report as sixty of them.
+var adOn=false,wasMuted=false,lastBurn=0,clicked=false,burnt=false;
 
 function driveAd(p,v){
   var showing=p.classList.contains("ad-showing")||p.classList.contains("ad-interrupting");
 
   // Overlay banners have their own close button and no bearing on playback.
   var close=document.querySelector(".ytp-ad-overlay-close-button,.ytp-ad-overlay-close-container");
-  if(close){close.click();S.overlays++;}
+  if(close&&!close.getAttribute("data-orbis")){close.setAttribute("data-orbis","1");close.click();S.overlays++;}
 
   if(!showing){
-    if(adOn){adOn=false;if(v)v.muted=wasMuted;}
+    if(adOn){
+      adOn=false;
+      if(clicked)S.skips++;else if(burnt)S.burned++;
+      clicked=false;burnt=false;
+      if(v)v.muted=wasMuted;
+    }
     return false;
   }
-  if(!adOn){adOn=true;wasMuted=v?v.muted:false;}
+  if(!adOn){adOn=true;clicked=false;burnt=false;wasMuted=v?v.muted:false;}
 
   // A skippable ad has a button, and pressing it is the cleanest exit: the
   // player tears the ad down itself and resumes content in one step.
   var b=document.querySelector(".ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad-button,.ytp-ad-survey-answer-button");
-  if(b&&b.offsetParent!==null){b.click();S.skips++;return true;}
+  if(b&&b.offsetParent!==null){b.click();clicked=true;return true;}
 
   // Otherwise the ad is an ordinary media element, and the end of it is one
   // assignment away. Muting first keeps the jump silent.
@@ -248,7 +243,7 @@ function driveAd(p,v){
       var now=Date.now();
       if(now-lastBurn>250){
         lastBurn=now;
-        try{v.currentTime=d;S.burned++;}catch(e){}
+        try{v.currentTime=d;burnt=true;}catch(e){}
         try{if(v.paused)v.play();}catch(e){}
       }
     }
@@ -316,7 +311,7 @@ function driveSegments(v){
   var now=Date.now();
   if(now-lastSeek<1500)return;
   lastSeek=now;
-  try{v.currentTime=s.end+(CFG.offset||0);S.segments++;}catch(e){}
+  try{v.currentTime=s.end;S.segments++;}catch(e){}
 }
 
 function drive(){

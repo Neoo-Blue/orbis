@@ -447,7 +447,7 @@ export interface AdRecord {
   bumper: boolean
   muted: boolean
   attempts: number
-  outcome: 'skipped' | 'played' | 'lost'
+  outcome: 'skipped' | 'played' | 'abandoned' | 'lost'
   reason: string
 }
 

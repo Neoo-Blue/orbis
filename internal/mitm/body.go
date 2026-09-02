@@ -46,9 +46,14 @@ func takeBody(resp *http.Response) ([]byte, bool) {
 	// distinguishable from "longer than the limit".
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRewriteBody+1))
 	if err != nil {
+		// The origin cut off mid-body. What was read is forwarded, but the
+		// declared length is left as the origin stated it and the
+		// connection is marked to close, so the client sees a short read
+		// rather than a well-framed, complete-looking, broken document.
 		resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(raw))
-		resp.ContentLength = int64(len(raw))
+		resp.Close = true
+		resp.Header.Set("X-Orbis-Truncated", "1")
 		return nil, false
 	}
 	if len(raw) > maxRewriteBody {

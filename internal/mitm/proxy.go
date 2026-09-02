@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -54,6 +55,10 @@ type Proxy struct {
 	// SponsorSegments answers the in-page engine's segment lookups. The
 	// result is serialised as JSON. Nil disables the endpoint.
 	SponsorSegments func(ctx context.Context, videoID string) (any, error)
+
+	// sbLimiter bounds segment lookups per client, so a page cannot turn
+	// Orbis into an amplifier against the segment database.
+	sbLimiter clientLimiter
 }
 
 type Stats struct {
@@ -344,10 +349,12 @@ func (p *Proxy) roundTrip(ctx context.Context, req *http.Request, host string, c
 	path := req.URL.Path
 	referer := req.Header.Get("Referer")
 
-	// The in-page engine's segment lookups are answered here, from Orbis's
-	// own SponsorBlock client, and never forwarded to YouTube.
-	if path == InPageSegmentsPath && isYouTubeHost(host) {
-		resp := p.sponsorResponse(ctx, req)
+	// The in-page engine's two endpoints are answered here and never
+	// forwarded. They exist only for the engine, so anything that is not a
+	// same-origin request from a YouTube page is refused outright.
+	if (path == InPageSegmentsPath || path == InPageReportPath) && isYouTubeAppHost(host) {
+		resp := p.engineEndpoint(ctx, req, path, clientIP)
+		drainRequestBody(req)
 		if p.OnRequest != nil {
 			p.OnRequest(clientIP, host, path, referer, resp.ContentLength)
 		}
@@ -357,11 +364,11 @@ func (p *Proxy) roundTrip(ctx context.Context, req *http.Request, host string, c
 	// Request-side filtering: drop tracker beacons before they reach the
 	// network at all, which saves the round trip and the data.
 	if verdict := p.filters.FilterRequest(host, path, req); verdict.Drop {
-		if verdict.Reason == "orbis-inpage-report" {
-			p.recordInPageReport(req)
-		} else {
-			p.stats.BeaconsKilled.Add(1)
-		}
+		p.stats.BeaconsKilled.Add(1)
+		// The body of a dropped request still has to leave the connection,
+		// or its bytes are read as the next request line and the keep-alive
+		// connection dies with the following real request on it.
+		drainRequestBody(req)
 		if p.OnRequest != nil {
 			p.OnRequest(clientIP, host, path, referer, 0)
 		}
@@ -390,6 +397,111 @@ func (p *Proxy) roundTrip(ctx context.Context, req *http.Request, host string, c
 		p.OnRequest(clientIP, host, path, referer, size)
 	}
 	return resp, filtered, nil
+}
+
+// drainRequestBody consumes and closes a request body that will not be
+// forwarded, bounded so a hostile client cannot make the proxy read forever.
+func drainRequestBody(req *http.Request) {
+	if req == nil || req.Body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(req.Body, 1<<20))
+	req.Body.Close()
+}
+
+// engineEndpoint answers the in-page engine's report and segment paths.
+func (p *Proxy) engineEndpoint(ctx context.Context, req *http.Request, path string, client netip.Addr) *http.Response {
+	if !sameOriginFromYouTube(req) {
+		return syntheticResponse(req, RequestVerdict{
+			Status: http.StatusForbidden, ContentType: "text/plain",
+			Reason: "orbis-engine-endpoint-refused", Body: []byte("same-origin only"),
+		})
+	}
+	if path == InPageReportPath {
+		p.recordInPageReport(req)
+		return syntheticResponse(req, RequestVerdict{
+			Status: http.StatusNoContent, ContentType: "text/plain", Reason: "orbis-inpage-report",
+		})
+	}
+	if !p.sbLimiter.allow(client, time.Now()) {
+		return syntheticResponse(req, RequestVerdict{
+			Status: http.StatusTooManyRequests, ContentType: "application/json",
+			Reason: "orbis-sponsorblock-limited", Body: []byte(`{"video_id":"","segments":[]}`),
+		})
+	}
+	return p.sponsorResponse(ctx, req)
+}
+
+// sameOriginFromYouTube is the gate on the engine endpoints. The Host header
+// alone is the client's to set, so the request also has to look like it came
+// from a YouTube page: Sec-Fetch-Site says same-origin where the browser
+// sends it, and otherwise the Origin or Referer names a YouTube host. A
+// beacon from some other site, or a forged Host on the cleartext listener,
+// fails both.
+func sameOriginFromYouTube(req *http.Request) bool {
+	if site := req.Header.Get("Sec-Fetch-Site"); site != "" {
+		return strings.EqualFold(site, "same-origin")
+	}
+	for _, h := range []string{"Origin", "Referer"} {
+		if v := req.Header.Get(h); v != "" {
+			u, err := url.Parse(v)
+			if err != nil || u.Host == "" {
+				return false
+			}
+			return isYouTubeAppHost(u.Hostname())
+		}
+	}
+	return false
+}
+
+// clientLimiter is a small per-client token bucket.
+type clientLimiter struct {
+	mu      sync.Mutex
+	buckets map[netip.Addr]*bucket
+}
+
+type bucket struct {
+	tokens float64
+	last   time.Time
+}
+
+const (
+	sbBurst   = 20.0
+	sbPerMin  = 30.0
+	sbMaxKeys = 4096
+)
+
+func (l *clientLimiter) allow(client netip.Addr, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.buckets == nil {
+		l.buckets = map[netip.Addr]*bucket{}
+	}
+	b := l.buckets[client]
+	if b == nil {
+		if len(l.buckets) >= sbMaxKeys {
+			for k, v := range l.buckets {
+				if now.Sub(v.last) > 5*time.Minute {
+					delete(l.buckets, k)
+				}
+			}
+			if len(l.buckets) >= sbMaxKeys {
+				return false
+			}
+		}
+		b = &bucket{tokens: sbBurst, last: now}
+		l.buckets[client] = b
+	}
+	b.tokens += now.Sub(b.last).Minutes() * sbPerMin
+	if b.tokens > sbBurst {
+		b.tokens = sbBurst
+	}
+	b.last = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
 }
 
 // recordInPageReport folds the injected engine's counters into the proxy
@@ -620,27 +732,35 @@ func writeError(w io.Writer, code int, msg string) {
 // origin set it unless the filter chain decoded the body, because relabelling
 // a body that is still compressed makes it unreadable.
 func writeResponse(w net.Conn, resp *http.Response, req *http.Request) bool {
-	bodyAllowed := resp.StatusCode >= 200 &&
-		resp.StatusCode != http.StatusNoContent &&
-		resp.StatusCode != http.StatusNotModified &&
-		req.Method != http.MethodHead
+	isHead := req.Method == http.MethodHead
+	// A status that can never carry a body, as opposed to a HEAD, which
+	// carries the body's headers without the body.
+	bodiless := resp.StatusCode < 200 ||
+		resp.StatusCode == http.StatusNoContent ||
+		resp.StatusCode == http.StatusNotModified
+	writeBody := !bodiless && !isHead
 
 	// Framing: a known length is preferable because it keeps the connection
 	// reusable; an unknown one is chunked, which HTTP/1.1 clients all speak.
 	chunked := false
-	if bodyAllowed {
-		if resp.ContentLength >= 0 {
-			resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
-		} else {
-			resp.Header.Del("Content-Length")
-			chunked = true
-		}
-	} else {
+	switch {
+	case bodiless:
 		resp.Header.Del("Content-Length")
+	case resp.ContentLength >= 0:
+		resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+	case isHead:
+		resp.Header.Del("Content-Length")
+	default:
+		resp.Header.Del("Content-Length")
+		chunked = true
 	}
 	resp.Header.Del("Transfer-Encoding")
 
-	keepAlive := !resp.Close && req.ProtoAtLeast(1, 1) &&
+	// resp.Close describes the upstream connection (the origin asked for it
+	// to close, or the body was cut short). Only the second case is a reason
+	// to close the client's connection too, and takeBody marks that.
+	truncated := resp.Header.Get("X-Orbis-Truncated") != ""
+	keepAlive := !truncated && req.ProtoAtLeast(1, 1) &&
 		!strings.EqualFold(req.Header.Get("Connection"), "close")
 	if chunked && !req.ProtoAtLeast(1, 1) {
 		// HTTP/1.0 has no chunked encoding; the only length signal it has is
@@ -667,7 +787,7 @@ func writeResponse(w net.Conn, resp *http.Response, req *http.Request) bool {
 	if _, err := w.Write(head.Bytes()); err != nil {
 		return false
 	}
-	if !bodyAllowed {
+	if !writeBody {
 		_ = w.SetWriteDeadline(time.Time{})
 		return keepAlive
 	}
@@ -677,13 +797,20 @@ func writeResponse(w net.Conn, resp *http.Response, req *http.Request) bool {
 	pw := &progressWriter{conn: w, every: 60 * time.Second}
 	var err error
 	if chunked && keepAlive {
-		cw := httputil.NewChunkedWriter(pw)
+		// The chunked writer emits a size line, the payload and a CRLF for
+		// every Write; buffering turns those three syscalls per 32 KB into
+		// one.
+		bw := bufio.NewWriterSize(pw, 64*1024)
+		cw := httputil.NewChunkedWriter(bw)
 		_, err = io.Copy(cw, resp.Body)
 		if cerr := cw.Close(); err == nil {
 			err = cerr
 		}
 		if err == nil {
-			_, err = pw.Write([]byte("\r\n"))
+			_, err = bw.Write([]byte("\r\n"))
+		}
+		if ferr := bw.Flush(); err == nil {
+			err = ferr
 		}
 	} else {
 		_, err = io.Copy(pw, resp.Body)

@@ -39,8 +39,8 @@ var streamingAdDomains = []string{
 	"ads.roku.com",
 	"logs.roku.com",
 	"scribe.logs.roku.com",
-	"ravm.tv",
 	"giga.logs.roku.com",
+	"ravm.tv",
 
 	// Amazon Fire TV: the ad system and the device metrics collectors.
 	"amazon-adsystem.com",
@@ -65,24 +65,14 @@ var streamingAdDomains = []string{
 	"sambatv.com",
 	"alphonso.tv",
 	"alphonso.com",
-	"rl.alphonso.tv",
 
-	// Hisense VIDAA and TCL: the ACR and advertising subsidiaries only.
+	// Hisense VIDAA and TCL: the advertising subsidiaries only.
 	"vidaa-ads.com",
 	"hisense-ads.com",
 	"tcl-ads.com",
 
-	// Android TV and Google TV surface ads: the ad decisioning hosts that
-	// Google's own list of "advertising" domains covers. YouTube itself is
-	// not touched by DNS at all; that is what the other engines are for.
-	"googleadservices.com",
-	"googlesyndication.com",
-	"adservice.google.com",
-	"doubleclick.net",
-	"admob.com",
-
-	// Xbox and PlayStation home-screen promotions and telemetry collectors
-	// that are separate from the game and account services.
+	// Xbox and Windows home-screen promotions, separate from the game and
+	// account services.
 	"arc.msn.com",
 	"ris.api.iris.microsoft.com",
 
@@ -98,25 +88,8 @@ var streamingAdDomains = []string{
 	"science.twitch.tv",
 	"spade.twitch.tv",
 
-	// Cross-platform CTV ad exchanges and measurement, which appear on
-	// almost every free ad-supported app but never carry the programme.
-	"innovid.com",
-	"springserve.com",
-	"spotxchange.com",
-	"spotx.tv",
-	"freewheel.tv",
-	"fwmrm.net",
-	"tremorhub.com",
-	"telaria.com",
-	"beachfront.com",
-	"adsrvr.org",
-	"magnite.com",
-	"rubiconproject.com",
-	"pubmatic.com",
-	"openx.net",
-	"casalemedia.com",
-	"indexww.com",
-	"adnxs.com",
+	// Viewability and audience measurement: pixels and beacons that report
+	// an ad was seen. A player never waits on these to start.
 	"adsafeprotected.com",
 	"moatads.com",
 	"doubleverify.com",
@@ -125,20 +98,59 @@ var streamingAdDomains = []string{
 	"samplicio.us",
 	"ad.gt",
 	"iqzone.com",
-	"vungle.com",
-	"unityads.unity3d.com",
 }
 
 // streamingNeverBlock is the safety net behind the list above: hosts that a
 // stream, an app store or a device depends on, checked in a test so nobody
 // can add one to the list by mistake.
 var streamingNeverBlock = []string{
+	// Server-side and client-side ad *decision* servers. A player that does
+	// its own VAST/VMAP call waits on these before the break can end, and
+	// several of them serve the programme itself. Blocking them is how a
+	// household ends up with "having trouble playing" on the first ad break.
 	"dai.google.com",
+	"pubads.g.doubleclick.net",
+	"fwmrm.net",
+	"freewheel.tv",
+	"innovid.com",
+	"springserve.com",
+	"spotxchange.com",
+	"tremorhub.com",
+	"adrise.tv",
+	"uplynk.com",
+	"yospace.com",
+	"mediatailor.us-east-1.amazonaws.com",
+	// The apps those servers sit behind.
+	"hulu.com",
+	"sling.com",
+	"peacocktv.com",
+	"pluto.tv",
+	"tubi.tv",
+	"tubitv.com",
+	"paramountplus.com",
+	"plex.tv",
+	"xumo.com",
+	"crackle.com",
+	"philo.com",
+	"fubo.tv",
+	"disneyplus.com",
+	"max.com",
+	"netflix.com",
+	// Device services, app stores, firmware and playback for each platform.
 	"cloudservices.roku.com",
 	"api.roku.com",
+	"roku.com",
 	"samsungcloudsolution.com",
 	"samsungotn.net",
 	"samsungcloudsolution.net",
+	"samsung.com",
+	"lgappstv.com",
+	"lgtvsdp.com",
+	"lge.com",
+	"vidaahub.com",
+	"vidaa.com",
+	"tcl.com",
+	"hisense.com",
 	"spclient.wg.spotify.com",
 	"audio-ak-spotify-com.akamaized.net",
 	"usher.ttvnw.net",
@@ -153,16 +165,14 @@ var streamingNeverBlock = []string{
 	"atv-ps.amazon.com",
 	"api.amazonvideo.com",
 	"appletv.apple.com",
-	"lgappstv.com",
-	"lgtvsdp.com",
-	"vidaahub.com",
-	"vidaa.com",
-	"tcl.com",
-	"hisense.com",
 	"androidtv-watchnext-pa.googleapis.com",
 	"play.googleapis.com",
 	"googlevideo.com",
 	"youtube.com",
+	// Mobile-game ad SDKs. Rewarded-ad games hang without them, and they
+	// are not streaming hosts in any case.
+	"unityads.unity3d.com",
+	"vungle.com",
 }
 
 // StreamingAdDomainCount is exposed for the UI, so the switch can say how

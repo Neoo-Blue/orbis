@@ -32,7 +32,7 @@ func TestStreamingListEntriesAreBareDomains(t *testing.T) {
 		}
 		seen[d] = true
 	}
-	if StreamingAdDomainCount() < 50 {
+	if StreamingAdDomainCount() < 40 {
 		t.Fatalf("list unexpectedly short: %d", StreamingAdDomainCount())
 	}
 }
@@ -49,7 +49,8 @@ func TestStreamingListBlocksSubdomainsWhenEnabled(t *testing.T) {
 			t.Errorf("%s should be blocked by the streaming list", q)
 		}
 	}
-	for _, q := range []string{"cloudservices.roku.com", "www.youtube.com", "spclient.wg.spotify.com", "dai.google.com"} {
+	for _, q := range []string{"cloudservices.roku.com", "www.youtube.com", "spclient.wg.spotify.com", "dai.google.com",
+		"pubads.g.doubleclick.net", "fwmrm.net", "innovid.com", "play.hulu.com", "auth.sling.com"} {
 		if v := m.Lookup(q); v.Blocked {
 			t.Errorf("%s must not be blocked by the streaming list", q)
 		}

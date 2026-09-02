@@ -419,6 +419,12 @@ func readFrame(br *bufio.Reader, n int) ([]byte, error) {
 		sc.feed(ru)
 		units += utf16Len(ru)
 	}
+	// A frame that reached its declared length without ever opening a JSON
+	// value is not going to close one either; returning it here keeps a
+	// malformed frame from swallowing the ones behind it.
+	if !sc.started {
+		return []byte(string(buf)), nil
+	}
 	for !sc.complete() && len(buf) < maxFrameRunes {
 		ru, _, err := br.ReadRune()
 		if err != nil {

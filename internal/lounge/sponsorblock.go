@@ -45,11 +45,17 @@ type SponsorBlock struct {
 
 type sbCached struct {
 	at   time.Time
+	ttl  time.Duration
 	segs []Segment
+	err  error
 }
 
 const (
 	sbCacheTTL = 10 * time.Minute
+	// sbErrorTTL is how long a failed lookup is remembered. Without it a
+	// SponsorBlock outage costs a full timeout per new video, per engine,
+	// per page load.
+	sbErrorTTL = time.Minute
 	sbCacheMax = 512
 )
 
@@ -95,8 +101,11 @@ func (s *SponsorBlock) Segments(ctx context.Context, videoID string, categories 
 	}
 	key := videoID + "|" + strings.Join(categories, ",")
 	s.mu.Lock()
-	if c, ok := s.cache[key]; ok && time.Since(c.at) < sbCacheTTL {
+	if c, ok := s.cache[key]; ok && time.Since(c.at) < c.ttl {
 		s.mu.Unlock()
+		if c.err != nil {
+			return nil, c.err
+		}
 		return append([]Segment(nil), c.segs...), nil
 	}
 	s.mu.Unlock()
@@ -113,6 +122,7 @@ func (s *SponsorBlock) Segments(ctx context.Context, videoID string, categories 
 	}
 	resp, err := s.hc.Do(req)
 	if err != nil {
+		s.rememberError(key, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -121,10 +131,13 @@ func (s *SponsorBlock) Segments(ctx context.Context, videoID string, categories 
 		return nil, nil // no segments for this prefix
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("sponsorblock: http %d", resp.StatusCode)
+		err := fmt.Errorf("sponsorblock: http %d", resp.StatusCode)
+		s.rememberError(key, err)
+		return nil, err
 	}
 	var videos []sbVideo
 	if err := json.NewDecoder(resp.Body).Decode(&videos); err != nil {
+		s.rememberError(key, err)
 		return nil, err
 	}
 
@@ -165,6 +178,14 @@ func (s *SponsorBlock) Segments(ctx context.Context, videoID string, categories 
 }
 
 func (s *SponsorBlock) remember(key string, segs []Segment) {
+	s.store(key, sbCached{at: time.Now(), ttl: sbCacheTTL, segs: segs})
+}
+
+func (s *SponsorBlock) rememberError(key string, err error) {
+	s.store(key, sbCached{at: time.Now(), ttl: sbErrorTTL, err: err})
+}
+
+func (s *SponsorBlock) store(key string, entry sbCached) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.cache) >= sbCacheMax {
@@ -183,7 +204,7 @@ func (s *SponsorBlock) remember(key string, segs []Segment) {
 			delete(s.cache, e.k)
 		}
 	}
-	s.cache[key] = sbCached{at: time.Now(), segs: segs}
+	s.cache[key] = entry
 }
 
 // SegmentAt returns the segment covering t (with a small tolerance so a report

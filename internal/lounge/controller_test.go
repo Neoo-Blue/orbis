@@ -3,6 +3,7 @@ package lounge
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -139,11 +140,12 @@ func TestAdWithNoEndEventIsClosedByDeadline(t *testing.T) {
 	if st.AdActive {
 		t.Fatal("ad should have been closed by the deadline")
 	}
-	if st.AdsLost != 1 || st.AdsSkipped != 0 {
-		t.Fatalf("expected 1 lost / 0 skipped, got lost=%d skipped=%d", st.AdsLost, st.AdsSkipped)
+	// It ran past its own length, so it played; nothing was saved.
+	if st.AdsLost != 0 || st.AdsSkipped != 0 || st.SecondsSaved != 0 {
+		t.Fatalf("expected 0 lost / 0 skipped / nothing saved, got %+v", st)
 	}
-	if len(st.Recent) != 1 || st.Recent[0].Outcome != "lost" {
-		t.Fatalf("expected a lost record, got %+v", st.Recent)
+	if len(st.Recent) != 1 || st.Recent[0].Outcome != "played" || !strings.HasPrefix(st.Recent[0].Reason, "no end event") {
+		t.Fatalf("expected a played-by-deadline record, got %+v", st.Recent)
 	}
 	fake.waitFor(t, "setVolume", 2)
 	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "100" {
@@ -174,11 +176,13 @@ func TestSkipRetriesAreBounded(t *testing.T) {
 	if n := fake.count("skipAd"); n > maxAdTries {
 		t.Fatalf("skipAd sent %d times, cap is %d", n, maxAdTries)
 	}
-	// The unknown-duration limit eventually closes it.
+	// The unknown-duration limit eventually closes it, as lost: nobody knows
+	// how long it was.
 	k.advance(adUnknownLimit)
 	c.tick()
-	if c.Stats().AdActive {
-		t.Fatal("ad with unknown duration should have been closed")
+	st := c.Stats()
+	if st.AdActive || st.AdsLost != 1 || st.Recent[0].Outcome != "lost" {
+		t.Fatalf("ad with unknown duration should have been closed as lost: %+v", st)
 	}
 }
 
@@ -231,8 +235,97 @@ func TestScreenDisconnectClearsAdAndRestoresVolume(t *testing.T) {
 	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "100" {
 		t.Fatalf("volume should be restored on disconnect, got %+v", cmd)
 	}
-	if st.Recent[0].Reason != "screen disconnected" {
-		t.Fatalf("record should say why: %+v", st.Recent[0])
+	if st.Recent[0].Reason != "screen disconnected" || st.Recent[0].Outcome != "abandoned" {
+		t.Fatalf("a screen that went away is abandoned, not skipped: %+v", st.Recent[0])
+	}
+	if st.AdsSkipped != 0 || st.SecondsSaved != 0 {
+		t.Fatalf("an abandoned ad must not be credited as saved time: %+v", st)
+	}
+}
+
+func TestNowPlayingEarlyInAnAdDoesNotEndIt(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true})
+	c.handleEvent(adPlaying("ad-A", 15, false, false))
+	fake.waitFor(t, "setVolume", 1)
+	k.advance(2 * time.Second)
+	// The television reports nowPlaying for the content two seconds in.
+	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "content-1", "state": "1", "currentTime": "40"}))
+	if !c.Stats().AdActive {
+		t.Fatal("nowPlaying 2s into a 15s unskippable ad must not end it (that un-muted every unskippable ad)")
+	}
+	// The ad itself reported as now playing is not the end either.
+	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "ad-A", "state": "1"}))
+	if !c.Stats().AdActive {
+		t.Fatal("nowPlaying for the ad's own id must not end it")
+	}
+	// Past the ad's length it is.
+	k.advance(13 * time.Second)
+	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "content-1", "state": "1", "currentTime": "40"}))
+	st := c.Stats()
+	if st.AdActive || st.Recent[0].Outcome != "played" {
+		t.Fatalf("nowPlaying at the ad's end should close it as played: %+v", st.Recent)
+	}
+}
+
+func TestNowPlayingDifferentVideoAbandonsAd(t *testing.T) {
+	c, _, k := newTestController(t, Options{SkipAds: true})
+	c.handleEvent(adPlaying("ad-A", 30, true, false))
+	k.advance(3 * time.Second)
+	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "content-2", "state": "1"}))
+	st := c.Stats()
+	if st.AdActive || st.Recent[0].Outcome != "abandoned" {
+		t.Fatalf("viewer changing video mid-ad is abandoned: active=%v %+v", st.AdActive, st.Recent)
+	}
+}
+
+func TestDeadlinePastFullLengthIsPlayedNotLost(t *testing.T) {
+	c, _, k := newTestController(t, Options{SkipAds: true})
+	c.handleEvent(adPlaying("ad-A", 15, false, true))
+	k.advance(15*time.Second + adEndGrace + time.Second)
+	c.tick()
+	st := c.Stats()
+	if st.AdActive || st.Recent[0].Outcome != "played" || st.AdsLost != 0 {
+		t.Fatalf("an ad that ran its whole length and was closed by the deadline played: %+v", st.Recent)
+	}
+}
+
+func TestShutdownRestoreSendsDirectly(t *testing.T) {
+	c, fake, _ := newTestController(t, Options{MuteAds: true})
+	c.handleEvent(adPlaying("ad-A", 30, false, false))
+	fake.waitFor(t, "setVolume", 1)
+	// Simulate the session going away: nothing is connected and the send
+	// loop's context is gone. The restore must still reach the sender.
+	c.mu.Lock()
+	c.connected = false
+	c.mu.Unlock()
+	c.restoreVolumeNow()
+	if cmd, ok := fake.last("setVolume"); !ok || cmd.args["volume"] != "100" {
+		t.Fatalf("shutdown restore did not send: %+v", fake.cmds)
+	}
+	if c.Stats().AdActive {
+		// The ad record is left as is; only the volume matters on the way out.
+		return
+	}
+}
+
+func TestAdInsideMuteSegmentKeepsSoundOff(t *testing.T) {
+	c, fake, k := newTestController(t, Options{Categories: []string{"sponsor"}, MuteAds: true, SkipAds: true})
+	c.mu.Lock()
+	c.segments = []Segment{{Category: "sponsor", Action: ActionMute, Start: 10, End: 60}}
+	c.mu.Unlock()
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "12"}))
+	c.tick()
+	fake.waitFor(t, "setVolume", 1) // muted for the segment
+	// An ad starts and ends while still inside the segment.
+	c.handleEvent(adPlaying("ad-A", 6, false, true))
+	k.advance(2 * time.Second)
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "0"}))
+	c.settle()
+	if n := fake.count("setVolume"); n != 1 {
+		t.Fatalf("sound must stay off inside the mute segment across an ad; got %d setVolume: %+v", n, fake.cmds)
+	}
+	if st := c.Stats(); st.SegmentsMuted != 1 {
+		t.Fatalf("mute segment counted once, got %d", st.SegmentsMuted)
 	}
 }
 

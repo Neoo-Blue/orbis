@@ -2,115 +2,143 @@
 
 # Orbis
 
-<img width="1913" height="889" alt="image" src="https://github.com/user-attachments/assets/3650f99c-d682-4e5c-a7b6-e938a7d18e13" />
+<img width="1913" height="889" alt="Orbis globe view: live connections drawn as arcs from the network to the world" src="https://github.com/user-attachments/assets/3650f99c-d682-4e5c-a7b6-e938a7d18e13" />
 
+**The firewall that follows the ad into the stream.**
 
-**An AI-assisted network firewall, filtering resolver, DNS server and traffic analyser, in one binary.**
-
-Little Snitch's per-connection visibility applied to the whole network, a real firewall and DNS
-stack underneath, an interactive map of what your network actually is, and an assistant that can
-read the flow table and change the rules.
+A network firewall, a filtering DNS server, and three ad-removal engines at three different layers,
+in one static binary with an embedded UI. It blocks what a blocklist can block, filters what only a
+proxy can filter, and for the ads that live inside YouTube on a television it picks up the remote.
 
 </div>
 
 ---
 
-## What it is
+## Why this exists
 
-Orbis is a single static Go binary with an embedded React UI. It watches the traffic that reaches
-it, identifies every connection, filters DNS and ads, and can act as the gateway, the resolver, or
-a transparent filter for selected devices. It runs on bare metal, a VM, an LXC, or in Docker.
+Ad blocking on the network stopped working the day ads moved into the same connection as the
+content. A DNS sinkhole cannot see a YouTube pre-roll, because the ad and the video come from the
+same host over the same TLS session. A browser extension cannot see a television. Every product
+in this space stops at one of those walls and calls the rest "not possible".
 
-It ships in **observe** mode by default: it installs no rules, routes nothing, and is safe to leave
-running while you decide what you want it to do. Becoming the gateway, the DNS server, or a
-per-device filter are each separate, explicit choices you make in the UI.
+Orbis is built on the premise that each wall needs a different tool, and that the honest thing to
+do is to say, per device, which tool applies and what it cannot reach.
 
-## What it does
-
-**Sees every connection.** A kernel BPF prefilter hands userspace only the packets that carry
-identity: the TLS ClientHello, the QUIC Initial, the HTTP request line. A gigabit link costs a
-handful of packets per flow rather than hundreds of thousands. Every connection gets a hostname, an
-application, a network operator, a country and a coordinate.
-
-**Is a full DNS server.** A filtering resolver with an LRU cache, upstreams over plain, DoT and DoH,
-and a **DoT/DoH server for your own clients** so a phone keeps using it off the LAN and nobody on
-the LAN can read your lookups off the wire. Local authoritative records (A, AAAA, CNAME, TXT, MX,
-NS, SRV, PTR, with wildcards) make it authoritative for your own names. DNS rewrites, conditional
-forwarding, per-client policies, safe search enforcement, blocked-service bundles, rate limiting,
-and DNS-rebinding protection.
-
-**Blocks ads at four layers.**
-
-| Layer | Catches | Cost |
+| Layer | What it catches | What it needs |
 |---|---|---|
-| DNS blocklists | The overwhelming majority of ads and trackers | Free, no client changes |
-| CNAME uncloaking | First-party trackers that CNAME into ad networks | Free |
-| SNI / QUIC | Apps that hardcode IPs and never ask your resolver | Free |
-| Smart capture | Ad hosts no list has caught yet | Free (AI optional) |
-| In-stream filter | YouTube pre/mid-rolls, in-app ad payloads | Needs a CA on each device |
+| **DNS** | Ad and tracker hosts, first-party CNAME cloaks, DoH bypass, and a built-in list of the hosts smart TVs and streaming sticks use only for ads and viewing telemetry | Nothing on the client |
+| **Wire** | Apps that hardcode IPs and never ask your resolver, matched on TLS SNI and decrypted QUIC Initials | Nothing on the client |
+| **In-stream** | YouTube pre/mid-rolls and in-app ad payloads, stripped from the response before the page sees them, then an in-page engine that drives the player past anything that still starts, and SponsorBlock segments with no extension | The Orbis certificate on that device |
+| **Player** | YouTube ads on a TV, Apple TV, console or Chromecast: Orbis attaches as a remote, mutes the ad on its first frame and skips it the moment YouTube allows | Nothing on the client, no certificate |
 
-**Removes YouTube ads two ways.** The MITM filter strips ad slots from the InnerTube player
-response (needs the CA). The **Lounge engine** needs no certificate at all: it attaches to a TV,
-Apple TV or console the way your phone does when it casts, and skips or mutes ads and SponsorBlock
-segments by driving the player. The UI states plainly which device classes each can and cannot
-cover.
+And underneath the ad engines, a real gateway: nftables firewall with zones and hit counters,
+WireGuard and Tailscale in both directions, DHCP, multi-WAN, shaping, and a resolver that serves
+DoT and DoH to your own devices.
 
-**Is a real firewall.** Zones with trust levels, an ordered rule table with live hit counters, NAT
-and port forwarding, time-based rules, IPv6, flow offload, an anti-lockout rule, compiled into a
-single nftables ruleset and loaded atomically after `nft -c` validation.
+## Where the others stop
 
-**Is a VPN, both ways.** A WireGuard server with QR enrolment, outbound WireGuard tunnels with
-policy routing and a kill switch, and full Tailscale integration in both directions.
+This is not a claim to be better at what these tools do. It is a map of where each one ends and
+where Orbis keeps going.
 
-**Gets into the path without being the gateway.** ARP interception inserts Orbis in front of
-selected devices only: it answers ARP for the real gateway with its own address, forwards and NATs
-their traffic, and restores them cleanly the moment it stops. Per-device, opt-in, with the eero (or
-any router) still the real gateway underneath.
+| | Pi-hole | AdGuard Home | NextDNS | pfSense / OPNsense | uBlock Origin | iSponsorBlockTV | **Orbis** |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| DNS blocklists, per-client policy | ● | ● | ● | ○ | | | ● |
+| CNAME uncloaking | ○ | ● | ● | | ● | | ● |
+| Blocks by TLS SNI and QUIC when DNS is bypassed | | | | ○ | | | ● |
+| Strips YouTube ads from the response (with a CA) | | | | | ● (browser only) | | ● |
+| In-page player engine and SponsorBlock without an extension | | | | | ● (extension) | | ● |
+| YouTube ads on a TV or Apple TV, no certificate | | | | | | ● | ● |
+| Per-ad ledger: what ran, for how long, why it ended | | | | | | | ● |
+| Real firewall: zones, NAT, port forwarding, multi-WAN | | | | ● | | | ● |
+| WireGuard server and client, Tailscale exit node | ○ | | | ● | | | ● |
+| Every connection identified: host, app, ASN, country | | | | ○ | | | ● |
+| Network map, live globe, anomaly detection | | | | | | | ● |
+| Assistant with tools, MCP server | | | | | | | ● |
 
-**Maps your network.** An interactive topology map that identifies devices by MAC prefix, open
-port, DHCP fingerprint and behaviour, with confidence and evidence for every verdict. It tells a
-Proxmox or Hyper-V host from a NAS from a workstation, clusters a hypervisor's guests under it, and
-shows internal traffic with direction. A gateway page with multi-WAN failover, CAKE shaping, static
-routes, NAT-PMP, Wake-on-LAN, ping, traceroute, speed test and pcap export.
+● built in · ○ partial or via add-on · blank: not in scope for that product
 
-**Analyses and reports.** Time-series charts for throughput, DNS and connections over up to 14
-days. A user-defined alert engine (new device, device offline, bandwidth spike, domain queried,
-block-rate spike) routed to webhook or email. Scheduled summary reports, downloadable as CSV or a
-printable HTML page. Prometheus metrics. Config backup and restore.
+## The streaming ad problem, engine by engine
 
-**Asks before allowing.** An opt-in, per-device ask-on-first-connection queue: the first time an
-enrolled device reaches a hostname it has never reached before, it waits for your verdict, and the
-answer becomes a durable rule.
+**The response filter.** With the Orbis certificate trusted, YouTube's InnerTube responses are
+rewritten in flight: `adPlacements`, `playerAds`, `adSlots` and two dozen renamed relatives are
+removed, promoted rows are dropped from feeds, and the ad reporting endpoints are answered locally
+so the player never learns an ad failed to play. The inline `ytInitialPlayerResponse` in the page
+is filtered too, so the first video of a session is not the one that slips through.
 
-**Shows the shape of your network.** A 3D globe and a flat map of live and historical connections,
-arcs coloured by verdict with a gradient that flows in the direction traffic was opened, and
-countries lit up by how much of your traffic reaches them.
+**The in-page engine.** Field names change; behaviour does not. A small ES5 script is injected as
+the first thing in every YouTube document. It patches `JSON.parse` and `Response.json` to scrub ad
+structures the static filter has not learned yet, and it watches the player itself: an ad break
+that starts anyway is muted and driven to its end, a skip button is pressed the instant it
+appears, overlay banners are closed. The same engine skips and mutes SponsorBlock segments, asking
+Orbis for them over a same-origin path. The browser never talks to SponsorBlock, and it reports
+its counters back to Orbis so the UI can show the layer is alive on a real screen. It runs in the
+browser built into a Samsung or LG set as readily as in Chrome.
 
-**Has an assistant that can do the work.** Fifteen read tools and eleven write tools over the same
-code paths the UI uses. Ask what a device is talking to overnight, why a domain is blocked, or tell
-it to block something and apply the ruleset. Write access is off by default; everything it does
-lands in the audit log. It also speaks **MCP**, so an external assistant can use the same tools.
+**The Lounge engine.** Televisions cannot install a certificate. So Orbis does what a phone does
+when it casts: it attaches to the screen over YouTube's Lounge API as a remote control and watches
+the same event stream the TV app emits. Every ad is handled as its own record: muted on the first
+`adPlaying`, `skipAd` sent the moment `isSkippable` flips, retried on a schedule rather than
+hammered, closed when the player says so. An ad pod is a sequence of records, not one long ad. And
+because a television will sometimes go dark mid-ad and never say the ad ended, every ad carries a
+deadline: past its own duration plus a grace period it is closed as *lost*, the volume comes back,
+and the ledger says so. The history for each screen is in the UI, ad by ad: what ran, for how long,
+skippable or not, how many skips were sent, and why it ended.
 
-## Screens
+**The counters that tell the truth.** Some YouTube streams have the ad muxed into the video itself.
+No filter anywhere can separate those bytes. Orbis counts server-stitched responses so a filter
+that is broken and a stream that cannot be filtered do not look the same. A readiness panel
+checks, separately, whether traffic reaches the proxy, whether TLS is being decrypted, and whether
+ads are being stripped, because from the sofa every one of those failures looks identical.
 
-| | |
-|---|---|
-| **Globe / Flat** | Live connections as arcs from your network to the world, coloured by verdict, filterable per device. |
-| **Topology** | An interactive map of your LAN: hosts, their guests, storage, endpoints, and the traffic between them. |
-| **Connections** | Every flow, live or historical, with the device that opened it and why it was allowed or blocked. |
-| **Devices** | Everything on the network, identified by MAC vendor, DHCP fingerprint and behaviour, with live throughput. |
-| **DNS** | The query log, upstream health, local records, and a "why is this blocked" lookup that gives a straight answer. |
-| **Domain tester** | Trace a lookup through every stage that can stop it, then allow or block it in one click, or import a list. |
-| **Ad blocking** | Lists, your own rules, the smart-capture review queue with its evidence, and the in-stream filter. |
-| **YouTube** | The no-CA Lounge engine, device pairing, and an honest coverage matrix. |
-| **Firewall / Gateway** | Rules with hit counters, multi-WAN, shaping, port mappings, and live diagnostic tools. |
-| **Interception** | Enrol devices to route through Orbis by ARP, with the trade-offs stated plainly. |
-| **VPN** | WireGuard peers with QR enrolment, and Tailscale exit-node control in both directions. |
-| **Analytics** | Throughput, DNS and connection charts over up to 14 days. |
-| **Alerts / Reports** | User-defined triggers and scheduled, exportable summaries. |
-| **Assistant** | Chat, with every tool call and result shown inline. |
-| **Ask first** | The per-device new-connection review queue. |
-| **Settings** | Every subsystem, with the trade-offs written next to the switches. |
+### Coverage, stated plainly
+
+| Screen | Engine | Needs | Result |
+|---|---|---|---|
+| Smart TV, Apple TV, console, Chromecast | Lounge | nothing | Ads muted from the first frame and skipped at the first chance; unskippable ads play muted |
+| Laptop or desktop browser | Response filter + in-page | Orbis CA | Ads removed before the page sees them; anything that starts is driven past |
+| TV browser, phone browser | Response filter + in-page | Orbis CA | Same as above |
+| Mobile YouTube app | none | | Pins certificates, is not a castable screen. Cast it to a TV and the TV is covered |
+| Server-side stitched ads | none | | Counted, not removed. Nothing on a network can |
+
+## Everything else it is
+
+**A full DNS server.** Filtering resolver with an LRU cache, upstreams over plain, DoT and DoH, and
+a DoT/DoH server for your own clients so a phone keeps using it off the LAN. Local authoritative
+records with wildcards. Rewrites, conditional forwarding, per-client policies, safe search,
+blocked-service bundles, rate limiting, rebinding protection.
+
+**Ad blocking beyond the lists.** CNAME uncloaking, SNI and QUIC blocking for clients that never
+ask your resolver, a DoH-bypass sinkhole, the built-in streaming-device list, and *smart capture*:
+a heuristic pipeline (with an optional model) that scores hosts no list has caught yet and queues
+them with evidence for a one-click verdict.
+
+**A real firewall.** Zones with trust levels, an ordered rule table with live hit counters, NAT and
+port forwarding, time-based rules, IPv6, flow offload, an anti-lockout rule, all compiled into one
+nftables ruleset and loaded atomically after `nft -c` validation.
+
+**A VPN, both ways.** WireGuard server with QR enrolment, outbound WireGuard with policy routing
+and a kill switch, and Tailscale as a subnet router and exit node in both directions.
+
+**Into the path without being the gateway.** ARP interception inserts Orbis in front of selected
+devices only, forwards and NATs their traffic, and restores them cleanly the moment it stops. Your
+existing router stays the router.
+
+**A map of the network.** Devices identified by MAC prefix, open ports, DHCP fingerprint and
+behaviour, with confidence and evidence. Hypervisors with their guests clustered under them,
+storage, endpoints, and the traffic between them. Multi-WAN failover, CAKE shaping, static routes,
+NAT-PMP, Wake-on-LAN, ping, traceroute, speed test, pcap export.
+
+**Sight.** Every connection gets a hostname, an application, a network operator, a country and a
+coordinate, from a kernel BPF prefilter that hands userspace only the packets that carry identity.
+A 3D globe and a flat map of live and historical connections. Time-series analytics over 14 days,
+user-defined alerts to webhook or email, scheduled reports, Prometheus metrics.
+
+**Ask first.** An opt-in per-device queue: the first time an enrolled device reaches a hostname it
+has never reached before, it waits for your verdict, and the answer becomes a rule.
+
+**An assistant that can do the work.** Fifteen read tools and eleven write tools over the same code
+paths the UI uses. Write access is off by default; everything lands in the audit log. The same
+tools are exposed over MCP for an external assistant.
 
 Press **⌘K** (or Ctrl-K) anywhere to jump to a page, device, or action.
 
@@ -122,15 +150,14 @@ One line, on a Debian/Ubuntu host, VM, or existing LXC, or on a Proxmox host:
 curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/orbis/main/deploy/bootstrap.sh | sudo bash
 ```
 
-It works out where it is and does the rest. On a **Proxmox host** it creates a privileged LXC and
-installs Orbis inside it, so nothing lands on the hypervisor; on a **Debian/Ubuntu** host, VM or
-container it installs in place: dependencies, the prebuilt binary for the architecture, a systemd
-service, and the GeoIP databases. It never changes how the network behaves; the node comes up in
-observe mode. Common overrides are documented at the top of
+On a **Proxmox host** it creates a privileged LXC and installs Orbis inside it. On a
+**Debian/Ubuntu** host, VM or container it installs in place: dependencies, the prebuilt binary, a
+systemd service, and the GeoIP databases. It never changes how the network behaves; the node comes
+up in observe mode. Overrides are documented at the top of
 [deploy/bootstrap.sh](deploy/bootstrap.sh) (`CTID`, `BRIDGE`, `IP`, `STORAGE`, `SKIP_GEOIP`, ...).
 
 Then open `http://<host>:8080`. A first-run wizard asks how the node should sit on the network and
-checks, honestly, whether it can actually see your traffic.
+checks whether it can actually see your traffic.
 
 ### Docker
 
@@ -141,16 +168,12 @@ docker run -d --name orbis --network host \
   ghcr.io/neoo-blue/orbis:nightly
 ```
 
-Or `docker compose up -d` with the bundled compose file. The image is published multi-arch (amd64
-and arm64) to GHCR by a daily CI build, with `:nightly` tracking main and `:latest` a tagged
-release.
+Or `docker compose up -d` with the bundled compose file. The image is multi-arch (amd64 and
+arm64), about 44 MB on Alpine, with `:nightly` tracking main and `:latest` a tagged release. Host
+networking is required: Orbis reads raw frames to pull SNI out of a ClientHello, and inside a
+bridge network the only frames it would ever see are its own. See [docs/DOCKER.md](docs/DOCKER.md).
 
-Host networking is required, not optional: Orbis reads raw frames to pull SNI out of a ClientHello,
-and inside a bridge network the only frames it would ever see are its own. See
-[docs/DOCKER.md](docs/DOCKER.md) for the full rationale, capabilities and volumes. The image is
-about 44 MB on Alpine.
-
-### Running in an LXC
+### In an LXC by hand
 
 Orbis needs raw sockets, netfilter and network configuration, so it wants a privileged container:
 
@@ -161,10 +184,10 @@ pct create 115 local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst \
   --unprivileged 0 --features nesting=1,keyctl=1
 
 # WireGuard needs the TUN device
-cat >> /etc/pve/lxc/115.conf <<'EOF'
+cat >> /etc/pve/lxc/115.conf <<'EOT'
 lxc.cgroup2.devices.allow: c 10:200 rwm
 lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
-EOF
+EOT
 
 # Netfilter modules live in the host kernel; a container cannot load them
 for m in nf_tables nft_ct nft_chain_nat nf_nat nf_conntrack nf_conntrack_netlink wireguard tun; do
@@ -173,121 +196,128 @@ done
 sysctl -w net.netfilter.nf_conntrack_acct=1   # per-connection byte counters
 ```
 
+## Getting the YouTube engines working
+
+**Television.** Turn on the Lounge engine on the YouTube page. With auto-discover on, any TV that
+advertises a screen id over DIAL is adopted with no code. Otherwise, YouTube on the TV → Settings →
+*Link with TV code*, and enter the code. The screen row shows what it is doing and its ad history.
+
+**Browser.** Ad blocking → In-stream ads: start the filter proxy, download the certificate, trust
+it on the device. The readiness panel on that page tells you which of the four prerequisites is
+missing when ads still show. The QUIC block is on by default so YouTube falls back to TCP where the
+proxy can see it.
+
+**The one thing to know about the mobile app.** It will not be filtered from the network. Cast it.
+
 ## Modes and placement
 
-Orbis has two modes, and the distinction is the whole safety story.
-
 **Observe** (the default) watches whatever traffic reaches it and records what it would have done.
-No ruleset is installed, DHCP stays off, nothing is routed through it. It is safe to leave here
-indefinitely.
+No ruleset is installed, DHCP stays off, nothing is routed through it. Safe to leave indefinitely.
 
-**Inline** makes it a real gateway: the nftables ruleset is loaded, forwarding and NAT are enabled,
-DHCP starts if a scope exists, and outbound DNS is redirected so a device with hardcoded resolvers
-still gets filtered. Inline requires a firewall with at least one zone; a config that would forward
-without translating, or drop everything, is corrected to observe on load with an explanation rather
-than silently misbehaving.
+**Inline** makes it a real gateway: the ruleset is loaded, forwarding and NAT are enabled, DHCP
+starts if a scope exists, and outbound DNS is redirected so a device with hardcoded resolvers still
+gets filtered. A config that would forward without translating, or drop everything, is corrected
+to observe on load with an explanation rather than silently misbehaving.
 
-To filter a network without becoming its gateway, use **ARP interception** (per device) or point
+To filter a network without becoming its gateway, use **ARP interception** per device, or point
 your router's DHCP DNS at Orbis. On a switched network a node that is not in the path sees only its
 own traffic and broadcast noise; the onboarding wizard measures this and tells you.
-
-## The assistant and MCP
-
-The assistant has read and write tools that all go through the same code the UI uses, so there is
-no API-only behaviour that could drift from what the model was told it was doing. With write access
-off (the default) the mutating tools are not offered to the model at all.
-
-The same tool catalogue is exposed over the Model Context Protocol:
-
-```bash
-orbisd -mcp -config /etc/orbis/orbis.yaml            # read-only
-orbisd -mcp -mcp-write -config /etc/orbis/orbis.yaml # with write access
-```
-
-See [docs/MCP.md](docs/MCP.md).
-
-Providers: Anthropic, OpenAI, OpenRouter, or a local Ollama. The anomaly detectors (beaconing,
-one-sided uploads, port and host sweeps, DGA-style lookups) are statistical and run whether or not
-a model is configured.
 
 ## Architecture
 
 ```
                       +------------ web UI (React + three.js) -------------+
-                      |  globe . map . flows . devices . rules . chat      |
+                      |  globe . map . flows . devices . rules . youtube   |
                       +---------------------------+------------------------+
                                  REST + WebSocket + SSE
                       +---------------------------+------------------------+
                       |                    orbisd                          |
    +------------------+---------------+---------------+-------------------+
-   | capture          | dnsproxy      | mitm / lounge | firewall / vpn    |
-   | AF_PACKET + BPF  | resolver +    | TLS strip /   | nftables, wg,     |
-   | TLS . QUIC . HTTP| DoT/DoH server| player drive  | tailscale, dhcp   |
+   | capture          | dnsproxy      | mitm          | lounge            |
+   | AF_PACKET + BPF  | resolver +    | TLS strip,    | Lounge API remote |
+   | TLS . QUIC . HTTP| DoT/DoH server| in-page engine| per-ad ledger     |
    +------------------+-------+-------+---------------+-------------------+
                       +-------+--------+------------------+--------------+
-                      | flow tracker   | adblock matcher  | ai + mcp     |
-                      | conntrack via  | 480k rules,      | chat, tools, |
-                      | netlink        | smart capture    | anomaly, mcp |
+                      | flow tracker   | adblock matcher  | firewall/vpn |
+                      | conntrack via  | 480k rules,      | nftables, wg |
+                      | netlink        | smart capture    | tailscale    |
                       +-------+--------+------------------+--------------+
                               |
-             topology . intercept . alerts . report . notify
+        topology . intercept . alerts . report . notify . ai + mcp
                               |
                          SQLite (WAL)
 ```
 
 Single static binary with the UI embedded. No cgo, no libpcap, no external database.
 
+## Things learned the hard way
+
+Each of these cost real time, and each is now a line in the code rather than a surprise.
+
+- **The BPF prefilter is the whole performance story.** Without it every byte of every stream is
+  copied to userspace. With it a gigabit link costs a handful of packets per flow.
+- **QUIC Initials are decryptable** with a salt fixed by RFC 9001 and the connection ID sent in the
+  clear, which is what keeps HTTP/3 from being a hole in the filter.
+- **`/proc/net/nf_conntrack` does not exist** on current Debian, Ubuntu and Proxmox kernels.
+  Conntrack is read over netlink, or every byte counter is zero.
+- **The ruleset is generated whole and loaded in one transaction**, so the box is never briefly
+  open or briefly cut off.
+- **Anycast resolvers are corrected before GeoIP is consulted.** 1.1.1.1 is registered to APNIC in
+  Australia; uncorrected, Australia is the busiest country on the globe by an order of magnitude.
+- **A proxy that buffers a video segment is a proxy that breaks video.** Bodies are only pulled into
+  memory when there is a realistic chance of rewriting them; everything else streams through with
+  its original framing and encoding. Decoding a body and then discovering it is unusable restores
+  the original bytes, not a truncated copy.
+- **The Lounge server counts frame lengths in UTF-16 code units**, the way JavaScript measures a
+  string. One emoji in a video title, counted as one code point, desyncs every frame after it and
+  the session goes quiet with nothing in the log. The length is treated as a hint and the frame ends
+  where its JSON closes.
+- **`skipAd` is a no-op until the button is armed**, and a television that goes dark mid-ad never
+  sends the end event. Retries are scheduled, not hammered, and every ad has a deadline.
+- **A charset meta only counts inside the first kilobyte.** The injected engine goes after it, not
+  before it.
+- **Tailscale route acceptance is guarded** against a peer advertising a prefix this node is already
+  on, which would route the LAN into the tunnel and strand the node.
+
 ## Configuration
 
 Everything lives in `/etc/orbis/orbis.yaml` (mode `0600`; it holds API keys and private keys). The
-Settings page maps one-to-one onto it, so you can drive Orbis from either and keep the file under
-version control. Secrets are masked in the API response and never returned. Config backup and
-restore preserves secrets, so a bundle downloaded from the UI cannot overwrite live keys with masks.
-
-## Notable implementation details
-
-- **The BPF prefilter** is the single most important performance decision. Without it, every byte
-  of every stream is copied to userspace.
-- **QUIC Initial decryption** keeps HTTP/3 from being a hole in the filter: the keys come from a
-  salt fixed by RFC 9001 and the connection ID sent in the clear.
-- **The nftables ruleset is generated whole and loaded in one transaction.** An atomic replace means
-  the box is never briefly open or briefly cut off.
-- **Conntrack is read over netlink**, because `/proc/net/nf_conntrack` requires a kernel option that
-  current Debian, Ubuntu and Proxmox kernels ship disabled.
-- **Anycast resolvers are corrected before the GeoIP database is consulted.** 1.1.1.1 is registered
-  to APNIC in Australia; left uncorrected it makes Australia the busiest country on a globe by an
-  order of magnitude.
-- **Tailscale route acceptance is off by default and guarded** against a peer advertising a prefix
-  that covers a network this node is already on, which would strand it.
+Settings page maps one-to-one onto it. Secrets are masked in the API response and never returned;
+config backup and restore preserves them so a bundle from the UI cannot overwrite live keys with
+masks.
 
 ## Security posture
 
 - One administrator, not a user model. **Do not expose port 8080 to the internet** directly; reach
   it over WireGuard, Tailscale, or a Cloudflare Tunnel with Access in front.
-- TLS interception is genuinely invasive and off by default, scoped to an explicit host allowlist,
-  with banks and pinned apps on a bypass list that always wins. Only the CA certificate is
-  downloadable; the private key never leaves the node.
+- TLS interception is invasive and off by default, scoped to an explicit host allowlist, with banks
+  and pinned apps on a bypass list that always wins. Only the CA certificate is downloadable; the
+  private key never leaves the node.
+- The in-page engine talks to nothing but the page it lives in and two same-origin paths that Orbis
+  answers itself. Its counters are capped per report, because a counter is evidence.
 - ARP interception is a legitimate technique against your own devices and an attack against a
-  network you do not control. Enrolment is explicit and per-device, and the restore-on-stop path is
-  treated as carefully as the takeover.
-- The assistant cannot change anything unless you turn write access on.
-- Every mutating action, from the UI, the API, the assistant or MCP, is written to the audit log.
+  network you do not control. Enrolment is explicit and per-device.
+- The assistant cannot change anything unless you turn write access on. Every mutating action, from
+  the UI, the API, the assistant or MCP, is written to the audit log.
+
+See [SECURITY.md](SECURITY.md).
 
 ## Development
 
 ```bash
-go test ./...            # unit tests
-go test -race ./...      # the concurrency ones matter here
+go test -race ./...                  # the concurrency ones matter here
 go vet ./...
 
-cd web && npm run dev    # UI against a daemon on :8080
+cd web && npm run dev                # UI against a daemon on :8080
 go run ./cmd/orbisd -config ./dev.yaml
 go run ./cmd/orbisd -print-ruleset   # render nftables without applying
+orbisd -mcp -config /etc/orbis/orbis.yaml   # the tool catalogue over MCP
 ```
 
 The competitive audit that drove much of the feature set is in
-[docs/COMPETITIVE-AUDIT.md](docs/COMPETITIVE-AUDIT.md).
+[docs/COMPETITIVE-AUDIT.md](docs/COMPETITIVE-AUDIT.md); the MCP surface in [docs/MCP.md](docs/MCP.md).
 
 ## Licence
 
-MIT. Blocklists retain their own licences. GeoIP data (c) DB-IP, CC-BY-4.0.
+MIT. Blocklists retain their own licences. GeoIP data (c) DB-IP, CC-BY-4.0. SponsorBlock data is
+provided by its contributors under CC BY-NC-SA 4.0.

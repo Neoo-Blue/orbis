@@ -229,6 +229,11 @@ func (m *Manager) Rebuild() error {
 			b.AddBlock(d, "builtin:doh-bypass", "bypass", true)
 		}
 	}
+	if cfg.AdBlock.StreamingAds {
+		for _, d := range streamingAdDomains {
+			b.AddBlock(d, "builtin:streaming-ads", "ads", true)
+		}
+	}
 
 	m.matcher.Commit(b)
 	m.mu.Lock()

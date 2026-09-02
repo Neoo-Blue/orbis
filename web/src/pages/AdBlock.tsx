@@ -417,6 +417,33 @@ function Lists() {
         </Card>
       )}
 
+      {data?.builtin && data.builtin.length > 0 && (
+        <Card title="Built in">
+          <div style={{ display: 'grid', gap: 12 }}>
+            {data.builtin.map((b) => (
+              <div key={b.id} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                    <span>{b.name}</span>
+                    <span className="tag">{b.category}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{compact(b.entries)} hosts, ships with Orbis</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.55 }}>{b.description}</div>
+                </div>
+                <Switch checked={b.enabled} label={b.enabled ? 'On' : 'Off'} onChange={async (v) => {
+                  try {
+                    await api.config.patch({ [b.key]: v })
+                    refresh()
+                  } catch (e) {
+                    toast(e instanceof Error ? e.message : 'Could not save', 'err')
+                  }
+                }} />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <Card flush>
         {!data ? <Loading what="lists" /> : (
           <div className="table-wrap">
@@ -546,11 +573,24 @@ function InStream() {
                 <dt>Ads stripped</dt>
                 <dd style={{ color: 'var(--accent)' }}>{compact(Number(proxy?.ads_stripped ?? 0))}</dd>
                 <dt>Beacons dropped</dt><dd>{compact(Number(proxy?.beacons_killed ?? 0))}</dd>
+                <dt>In-page: structures removed</dt><dd>{compact(Number(proxy?.inpage_stripped ?? 0))}</dd>
+                <dt>In-page: ad breaks driven past</dt><dd>{compact(Number(proxy?.inpage_skipped ?? 0))}</dd>
+                <dt>In-page: segments skipped</dt><dd>{compact(Number(proxy?.inpage_segments ?? 0))}</dd>
+                <dt>Server-stitched responses</dt>
+                <dd title="Player responses whose ads are muxed into the video itself. Nothing on a network can remove those; this counts how often it happened.">
+                  {compact(Number(proxy?.server_stitched ?? 0))}
+                </dd>
               </dl>
             )}
             <div style={{ display: 'grid', gap: 8, borderTop: '1px solid var(--line-soft)', paddingTop: 11 }}>
               <Switch checked={filters?.youtube ?? false} onChange={(v) => set('mitm.filters.youtube', v)}
                 label="Strip YouTube ad slots" />
+              <Switch checked={filters?.youtube_in_page ?? false} disabled={!(filters?.youtube ?? false)}
+                onChange={(v) => set('mitm.filters.youtube_in_page', v)}
+                label="YouTube in-page engine (drives the player past ads the filter missed)" />
+              <Switch checked={filters?.youtube_sponsorblock ?? false} disabled={!(filters?.youtube ?? false) || !(filters?.youtube_in_page ?? false)}
+                onChange={(v) => set('mitm.filters.youtube_sponsorblock', v)}
+                label="SponsorBlock segments in the browser, no extension" />
               <Switch checked={filters?.tracker_beacons ?? false} onChange={(v) => set('mitm.filters.tracker_beacons', v)}
                 label="Drop tracker beacons before they leave" />
               <Switch checked={filters?.generic_json_ads ?? false} onChange={(v) => set('mitm.filters.generic_json_ads', v)}
@@ -601,6 +641,13 @@ function InStream() {
             <strong style={{ color: 'var(--text)' }}>Works:</strong> pre-roll and mid-roll ad slots on
             YouTube web and the mobile apps (both read the same InnerTube player response), ad
             tracking pings, and ad payloads in most app APIs.
+          </div>
+          <div>
+            <strong style={{ color: 'var(--text)' }}>Two layers on YouTube pages:</strong> the response
+            filter removes ad structures by name before the page sees them; the in-page engine then
+            watches the player itself and drives past any ad break that starts anyway, muted. When
+            YouTube renames a field, the first layer misses and the second still catches it. The
+            engine also skips SponsorBlock segments, asking Orbis (never SponsorBlock) for them.
           </div>
           <div>
             <strong style={{ color: 'var(--text)' }}>Does not work:</strong> server-side stitched ads,

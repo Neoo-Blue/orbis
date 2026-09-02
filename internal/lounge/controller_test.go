@@ -1,0 +1,342 @@
+package lounge
+
+import (
+	"context"
+	"encoding/json"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeSender records every command the controller emits.
+type fakeSender struct {
+	mu   sync.Mutex
+	cmds []queuedCmd
+}
+
+func (f *fakeSender) sendCommand(_ context.Context, name string, args map[string]string) error {
+	f.mu.Lock()
+	f.cmds = append(f.cmds, queuedCmd{name: name, args: args})
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeSender) count(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.cmds {
+		if c.name == name {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeSender) last(name string) (queuedCmd, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.cmds) - 1; i >= 0; i-- {
+		if f.cmds[i].name == name {
+			return f.cmds[i], true
+		}
+	}
+	return queuedCmd{}, false
+}
+
+// waitFor polls until name has been sent at least n times or the deadline
+// passes; the send loop is asynchronous by design.
+func (f *fakeSender) waitFor(t *testing.T, name string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.count(name) >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("command %s sent %d time(s), wanted at least %d; all: %+v", name, f.count(name), n, f.cmds)
+}
+
+// settle waits for the command queue to drain so counts are stable.
+func (c *Controller) settle() {
+	for i := 0; i < 200 && len(c.cmds) > 0; i++ {
+		time.Sleep(2 * time.Millisecond)
+	}
+	time.Sleep(10 * time.Millisecond)
+}
+
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (k *clock) now() time.Time {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.t
+}
+
+func (k *clock) advance(d time.Duration) {
+	k.mu.Lock()
+	k.t = k.t.Add(d)
+	k.mu.Unlock()
+}
+
+func newTestController(t *testing.T, opts Options) (*Controller, *fakeSender, *clock) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	k := &clock{t: time.Date(2026, 9, 1, 21, 0, 0, 0, time.UTC)}
+	fake := &fakeSender{}
+	c := NewController("screen-1", "Living room TV", "dev-1", nil, nil,
+		func() Options { return opts }, func(string, ...any) {})
+	c.send = fake
+	c.now = k.now
+	c.ctx = ctx
+	c.connected = true
+	c.online = true
+	go c.sendLoop(ctx)
+	return c, fake, k
+}
+
+func ev(typ string, payload map[string]any) event {
+	if payload == nil {
+		return event{typ: typ}
+	}
+	raw, _ := json.Marshal(payload)
+	return event{typ: typ, args: []json.RawMessage{raw}}
+}
+
+func adPlaying(id string, dur float64, skippable, bumper bool) event {
+	return ev("adPlaying", map[string]any{
+		"adVideoId": id, "contentVideoId": "content-1",
+		"duration": dur, "isSkippable": skippable, "isBumper": bumper,
+	})
+}
+
+func TestAdWithNoEndEventIsClosedByDeadline(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true})
+
+	c.handleEvent(adPlaying("ad-A", 30, true, false))
+	fake.waitFor(t, "setVolume", 1)
+	fake.waitFor(t, "skipAd", 1)
+	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "0" {
+		t.Fatalf("first setVolume should mute, got %+v", cmd)
+	}
+
+	// Well inside the ad's own duration: still active, retrying.
+	k.advance(20 * time.Second)
+	c.tick()
+	if !c.Stats().AdActive {
+		t.Fatal("ad should still be active at 20s of a 30s ad")
+	}
+
+	// Past duration + grace with no end event: closed as lost, volume back.
+	k.advance(25 * time.Second)
+	c.tick()
+	st := c.Stats()
+	if st.AdActive {
+		t.Fatal("ad should have been closed by the deadline")
+	}
+	if st.AdsLost != 1 || st.AdsSkipped != 0 {
+		t.Fatalf("expected 1 lost / 0 skipped, got lost=%d skipped=%d", st.AdsLost, st.AdsSkipped)
+	}
+	if len(st.Recent) != 1 || st.Recent[0].Outcome != "lost" {
+		t.Fatalf("expected a lost record, got %+v", st.Recent)
+	}
+	fake.waitFor(t, "setVolume", 2)
+	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "100" {
+		t.Fatalf("volume should be restored to 100, got %+v", cmd)
+	}
+
+	// And nothing keeps retrying afterwards.
+	before := fake.count("skipAd")
+	for i := 0; i < 5; i++ {
+		k.advance(time.Second)
+		c.tick()
+	}
+	c.settle()
+	if fake.count("skipAd") != before {
+		t.Fatalf("skipAd kept being sent after the ad was closed: %d -> %d", before, fake.count("skipAd"))
+	}
+}
+
+func TestSkipRetriesAreBounded(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true})
+	// An ad whose duration is never reported and never ends by itself.
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "1", "isSkipEnabled": "false"}))
+	for i := 0; i < 80; i++ {
+		k.advance(time.Second)
+		c.tick()
+	}
+	c.settle()
+	if n := fake.count("skipAd"); n > maxAdTries {
+		t.Fatalf("skipAd sent %d times, cap is %d", n, maxAdTries)
+	}
+	// The unknown-duration limit eventually closes it.
+	k.advance(adUnknownLimit)
+	c.tick()
+	if c.Stats().AdActive {
+		t.Fatal("ad with unknown duration should have been closed")
+	}
+}
+
+func TestAdPodProducesOneRecordPerAd(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true})
+
+	c.handleEvent(adPlaying("ad-A", 6, false, true))
+	k.advance(6 * time.Second)
+	c.handleEvent(adPlaying("ad-B", 15, true, false))
+	k.advance(2 * time.Second)
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "0"}))
+	c.settle()
+
+	st := c.Stats()
+	if st.AdsHandled != 2 {
+		t.Fatalf("pod of two ads should count 2, got %d", st.AdsHandled)
+	}
+	if len(st.Recent) != 2 {
+		t.Fatalf("expected 2 records, got %+v", st.Recent)
+	}
+	// Newest first.
+	if st.Recent[0].AdVideoID != "ad-B" || st.Recent[0].Outcome != "skipped" {
+		t.Fatalf("second ad should be recorded as skipped: %+v", st.Recent[0])
+	}
+	if st.Recent[1].AdVideoID != "ad-A" || st.Recent[1].Reason != "next ad in pod" || !st.Recent[1].Bumper {
+		t.Fatalf("first ad should be closed by the pod: %+v", st.Recent[1])
+	}
+	if st.AdsSkipped != 1 {
+		t.Fatalf("only the second ad was cut short, got skipped=%d", st.AdsSkipped)
+	}
+	// Muted once on the way in, restored once on the way out: the pod does
+	// not un-mute between ads.
+	if n := fake.count("setVolume"); n != 2 {
+		t.Fatalf("expected mute + restore (2 setVolume), got %d: %+v", n, fake.cmds)
+	}
+}
+
+func TestScreenDisconnectClearsAdAndRestoresVolume(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true})
+	c.handleEvent(adPlaying("ad-A", 30, true, false))
+	fake.waitFor(t, "setVolume", 1)
+	k.advance(3 * time.Second)
+
+	c.handleEvent(ev("loungeScreenDisconnected", nil))
+	st := c.Stats()
+	if st.AdActive || st.Online {
+		t.Fatalf("disconnect should clear the ad and mark the screen offline: %+v", st)
+	}
+	fake.waitFor(t, "setVolume", 2)
+	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "100" {
+		t.Fatalf("volume should be restored on disconnect, got %+v", cmd)
+	}
+	if st.Recent[0].Reason != "screen disconnected" {
+		t.Fatalf("record should say why: %+v", st.Recent[0])
+	}
+}
+
+func TestLoungeStatusReportsScreenPresence(t *testing.T) {
+	c, _, _ := newTestController(t, Options{})
+	devices := `[{"type":"REMOTE_CONTROL","name":"Orbis"},{"type":"LOUNGE_SCREEN","name":"YouTube on TV"}]`
+	c.handleEvent(ev("loungeStatus", map[string]any{"devices": devices}))
+	if !c.Stats().Online {
+		t.Fatal("a LOUNGE_SCREEN in the device list means the screen is online")
+	}
+	c.handleEvent(ev("loungeStatus", map[string]any{"devices": `[{"type":"REMOTE_CONTROL"}]`}))
+	if c.Stats().Online {
+		t.Fatal("no screen in the device list means offline")
+	}
+}
+
+func TestPausedAdExtendsDeadline(t *testing.T) {
+	c, _, k := newTestController(t, Options{SkipAds: true})
+	c.handleEvent(adPlaying("ad-A", 15, false, false))
+	k.advance(5 * time.Second)
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "2", "currentTime": "5"}))
+	k.advance(60 * time.Second)
+	c.tick()
+	if !c.Stats().AdActive {
+		t.Fatal("a paused ad must not expire on wall-clock time")
+	}
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "5"}))
+	k.advance(5 * time.Second) // 10s of actual ad time
+	c.tick()
+	if !c.Stats().AdActive {
+		t.Fatal("resumed ad at 10s of 15s should still be active")
+	}
+	k.advance(20 * time.Second) // 30s of ad time, past 15s + grace
+	c.tick()
+	if c.Stats().AdActive {
+		t.Fatal("resumed ad should expire once its adjusted deadline passes")
+	}
+}
+
+func TestSkippedAdCountsSecondsSaved(t *testing.T) {
+	c, _, k := newTestController(t, Options{SkipAds: true})
+	c.handleEvent(adPlaying("ad-A", 30, true, false))
+	k.advance(2 * time.Second)
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "0"}))
+	st := c.Stats()
+	if st.AdsSkipped != 1 || st.SecondsSaved < 27 || st.SecondsSaved > 29 {
+		t.Fatalf("expected ~28s saved from a 30s ad cut at 2s, got %+v", st)
+	}
+	if st.Recent[0].Watched != 2 {
+		t.Fatalf("watched should be 2.0s, got %v", st.Recent[0].Watched)
+	}
+}
+
+func TestMuteSegmentMutesThenRestores(t *testing.T) {
+	c, fake, k := newTestController(t, Options{Categories: []string{"sponsor"}})
+	c.mu.Lock()
+	c.videoID = "vid"
+	c.segments = []Segment{{Category: "sponsor", Action: ActionMute, Start: 10, End: 20}}
+	c.mu.Unlock()
+
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "9"}))
+	k.advance(3 * time.Second) // position 12
+	c.tick()
+	fake.waitFor(t, "setVolume", 1)
+	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "0" {
+		t.Fatalf("should mute inside a mute segment, got %+v", cmd)
+	}
+	if n := fake.count("seekTo"); n != 0 {
+		t.Fatalf("a mute segment must not seek, got %d seekTo", n)
+	}
+	k.advance(10 * time.Second) // position 22
+	c.tick()
+	fake.waitFor(t, "setVolume", 2)
+	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "100" {
+		t.Fatalf("should restore after the segment, got %+v", cmd)
+	}
+	if st := c.Stats(); st.SegmentsMuted != 1 {
+		t.Fatalf("expected 1 muted segment, got %+v", st)
+	}
+}
+
+func TestSkipSegmentSeeksPastIt(t *testing.T) {
+	c, fake, k := newTestController(t, Options{Categories: []string{"sponsor"}, Offset: 0.5})
+	c.mu.Lock()
+	c.segments = []Segment{{Category: "sponsor", Action: ActionSkip, Start: 10, End: 20}}
+	c.mu.Unlock()
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "9"}))
+	k.advance(2 * time.Second)
+	c.tick()
+	fake.waitFor(t, "seekTo", 1)
+	if cmd, _ := fake.last("seekTo"); cmd.args["newTime"] != "20.500" {
+		t.Fatalf("seek target should be end + offset, got %+v", cmd)
+	}
+}
+
+func TestViewerVolumeIsNotOverwrittenByOurMute(t *testing.T) {
+	c, fake, _ := newTestController(t, Options{MuteAds: true})
+	c.handleEvent(ev("onVolumeChanged", map[string]any{"volume": "35"}))
+	c.handleEvent(adPlaying("ad-A", 10, false, false))
+	// The TV echoes our own mute back; it must not become the restore level.
+	c.handleEvent(ev("onVolumeChanged", map[string]any{"volume": "0"}))
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "0"}))
+	fake.waitFor(t, "setVolume", 2)
+	if cmd, _ := fake.last("setVolume"); cmd.args["volume"] != "35" {
+		t.Fatalf("restore should return to the viewer's 35, got %+v", cmd)
+	}
+}

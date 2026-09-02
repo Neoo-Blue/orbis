@@ -622,6 +622,9 @@ function AdBlockSection({ config, save }: SectionProps) {
           <SwitchRow label="Prevent DNS bypass" checked={config.adblock.block_dns_bypass}
             hint="Sinkholes the bootstrap names of public DoH resolvers, so a browser cannot silently route around this filter."
             onChange={(v) => save({ 'adblock.block_dns_bypass': v })} />
+          <SwitchRow label="Block streaming-device ads and viewing telemetry" checked={config.adblock.streaming_ads}
+            hint="A built-in list of the hosts smart TVs, streaming sticks and media apps use only to fetch ads or report what you watch: Samsung, LG, Roku, Fire TV, Vizio, the ACR vendors, CTV ad exchanges. Nothing a stream needs is on it."
+            onChange={(v) => save({ 'adblock.streaming_ads': v })} />
           <NumberSetting label="Refresh lists every" value={config.adblock.update_interval_hours}
             min={1} max={720} suffix="hours"
             onSave={(v) => save({ 'adblock.update_interval_hours': v })} />
@@ -734,6 +737,12 @@ function ProxySection({ config, status, save, toast }: SectionProps) {
           <SwitchRow label="Strip YouTube ad slots" checked={config.mitm.filters.youtube}
             hint="Removes adPlacements, playerAds and adSlots from the InnerTube player response, and drops ad-tracking pings. Works on web and the native apps; does not touch server-side stitched ads."
             onChange={(v) => save({ 'mitm.filters.youtube': v })} />
+          <SwitchRow label="YouTube in-page engine" checked={config.mitm.filters.youtube_in_page}
+            hint="Injects a small script into YouTube pages that removes ad structures inside the client and drives the player past any ad break that still starts. It matches behaviour rather than field names, so it keeps working the week YouTube renames something."
+            onChange={(v) => save({ 'mitm.filters.youtube_in_page': v })} />
+          <SwitchRow label="SponsorBlock in the browser" checked={config.mitm.filters.youtube_sponsorblock}
+            hint="The in-page engine also skips and mutes SponsorBlock segments, using the categories chosen on the YouTube page. The browser asks Orbis for segments; it never talks to SponsorBlock itself."
+            onChange={(v) => save({ 'mitm.filters.youtube_sponsorblock': v })} />
           <SwitchRow label="Drop tracker beacons" checked={config.mitm.filters.tracker_beacons}
             hint="Answers analytics endpoints with a 204 or a transparent pixel instead of forwarding the request. Saves the round trip and the data."
             onChange={(v) => save({ 'mitm.filters.tracker_beacons': v })} />

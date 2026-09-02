@@ -236,6 +236,11 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	// Native YouTube ad control (Lounge engine): no CA, drives the player on
 	// cast-capable devices.
 	a.Lounge = lounge.New(cfg, logf)
+	if a.MITM != nil {
+		// The in-page engine gets its SponsorBlock segments from Orbis, so a
+		// browser never talks to the segment database directly.
+		a.MITM.SponsorSegments = a.Lounge.Segments
+	}
 
 	// Event delivery.
 	a.Notifier = notify.New(cfg, logf)

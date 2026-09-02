@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	apiBase  = "https://www.youtube.com/api/lounge"
-	bindURL  = apiBase + "/bc/bind"
-	tokenURL = apiBase + "/pairing/get_lounge_token_batch"
+	apiBase   = "https://www.youtube.com/api/lounge"
+	bindURL   = apiBase + "/bc/bind"
+	tokenURL  = apiBase + "/pairing/get_lounge_token_batch"
 	screenURL = apiBase + "/pairing/get_screen"
-	origin   = "https://www.youtube.com"
+	origin    = "https://www.youtube.com"
 	// userAgent is a plausible desktop UA. The Lounge endpoint rejects some
 	// obviously-bot agents; a normal browser string is the safe choice.
 	userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
@@ -168,12 +168,12 @@ type Session struct {
 
 	hc *http.Client
 
-	mu    sync.Mutex
-	sid   string
-	gsid  string
-	aid   int
-	rid   int
-	ofs   int
+	mu   sync.Mutex
+	sid  string
+	gsid string
+	aid  int
+	rid  int
+	ofs  int
 
 	onEvent func(event)
 }
@@ -351,17 +351,31 @@ func (s *Session) sendCommand(ctx context.Context, command string, args map[stri
 	return nil
 }
 
+// maxFrameRunes bounds one frame so a corrupt or hostile length prefix cannot
+// make the session allocate without limit. Real frames are a few kilobytes;
+// the largest legitimate one carries a whole playlist.
+const maxFrameRunes = 4 << 20
+
 // readStream parses the Google browser-channel wire format: a sequence of
-// "<length>\n<json>" frames, where <length> is the rune count of the JSON that
-// follows and the JSON is an array of [aid, [type, args...]] entries.
+// "<length>\n<json>" frames, where the JSON is an array of [aid, [type,
+// args...]] entries.
+//
+// The length prefix is the only tricky part. The server measures it the way
+// JavaScript measures a string — in UTF-16 code units — so a single emoji in a
+// video title counts as two while being one code point. Reading code points
+// instead falls one short on that frame, and because the frames are packed
+// back to back with no delimiter, every frame after it is misread too: the
+// session goes quiet and ads stop being skipped, with nothing in the log to
+// say why.
+//
+// So the count is read as UTF-16 units, and then treated as a hint rather than
+// gospel: the frame ends where its JSON actually closes. That is correct under
+// either convention, and self-corrects if the server ever changes its mind.
 func readStream(r io.Reader, dispatch func(event)) error {
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
-			if err == io.EOF && strings.TrimSpace(line) == "" {
-				return nil
-			}
 			if err == io.EOF {
 				return nil
 			}
@@ -371,20 +385,12 @@ func readStream(r io.Reader, dispatch func(event)) error {
 		if convErr != nil || n <= 0 {
 			continue // keep-alive / blank frame
 		}
-		// The length is a rune count; read exactly n runes so multibyte
-		// titles (emoji, CJK) do not desync the framing.
-		buf := make([]rune, 0, n)
-		var readErr error
-		for i := 0; i < n; i++ {
-			ru, _, e := br.ReadRune()
-			if e != nil {
-				readErr = e
-				break
-			}
-			buf = append(buf, ru)
+		if n > maxFrameRunes {
+			return fmt.Errorf("browser channel: implausible frame length %d", n)
 		}
-		if len(buf) > 0 {
-			for _, ev := range parseFrame([]byte(string(buf))) {
+		frame, readErr := readFrame(br, n)
+		if len(frame) > 0 {
+			for _, ev := range parseFrame(frame) {
 				dispatch(ev)
 			}
 		}
@@ -395,6 +401,76 @@ func readStream(r io.Reader, dispatch func(event)) error {
 			return readErr
 		}
 	}
+}
+
+// readFrame reads one frame, stopping at whichever comes first: the declared
+// length in UTF-16 code units, or the close of the JSON value. If the declared
+// length runs out mid-value it keeps reading until the value closes.
+func readFrame(br *bufio.Reader, n int) ([]byte, error) {
+	var buf []rune
+	var sc frameScanner
+	units := 0
+	for units < n && !sc.complete() {
+		ru, _, err := br.ReadRune()
+		if err != nil {
+			return []byte(string(buf)), err
+		}
+		buf = append(buf, ru)
+		sc.feed(ru)
+		units += utf16Len(ru)
+	}
+	for !sc.complete() && len(buf) < maxFrameRunes {
+		ru, _, err := br.ReadRune()
+		if err != nil {
+			return []byte(string(buf)), err
+		}
+		buf = append(buf, ru)
+		sc.feed(ru)
+	}
+	return []byte(string(buf)), nil
+}
+
+// frameScanner tracks JSON nesting one rune at a time, so the end of a frame
+// can be found without rescanning everything read so far.
+type frameScanner struct {
+	depth   int
+	inStr   bool
+	escaped bool
+	started bool
+}
+
+func (s *frameScanner) feed(r rune) {
+	if s.inStr {
+		switch {
+		case s.escaped:
+			s.escaped = false
+		case r == '\\':
+			s.escaped = true
+		case r == '"':
+			s.inStr = false
+		}
+		return
+	}
+	switch r {
+	case '"':
+		s.inStr = true
+	case '[', '{':
+		s.depth++
+		s.started = true
+	case ']', '}':
+		s.depth--
+	}
+}
+
+func (s *frameScanner) complete() bool { return s.started && s.depth <= 0 && !s.inStr }
+
+// utf16Len is how many UTF-16 code units a rune occupies, which is how the
+// server counted it.
+func utf16Len(r rune) int {
+	if r > 0xFFFF {
+		return 2
+	}
+	return 1
 }
 
 // parseFrame decodes one JSON frame into events. Malformed entries are skipped

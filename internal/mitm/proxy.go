@@ -5,12 +5,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/netip"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,6 +50,10 @@ type Proxy struct {
 
 	// OnRequest reports every intercepted request to the ad pipeline.
 	OnRequest func(clientIP netip.Addr, host, path, referer string, respBytes int64)
+
+	// SponsorSegments answers the in-page engine's segment lookups. The
+	// result is serialised as JSON. Nil disables the endpoint.
+	SponsorSegments func(ctx context.Context, videoID string) (any, error)
 }
 
 type Stats struct {
@@ -55,9 +63,20 @@ type Stats struct {
 	Filtered      atomic.Int64
 	AdsStripped   atomic.Int64
 	BeaconsKilled atomic.Int64
-	Errors        atomic.Int64
-	BytesIn       atomic.Int64
-	BytesOut      atomic.Int64
+	// InPageStripped and InPageSkipped are reported by the injected engine
+	// running on a real client, which is the only place the effect of the
+	// in-page layer is observable at all.
+	InPageStripped atomic.Int64
+	InPageSkipped  atomic.Int64
+	InPageSegments atomic.Int64
+	// ServerStitched counts player responses whose ads are muxed into the
+	// content stream. Nothing can be stripped from those; counting them is
+	// what tells the difference between a filter that is broken and a stream
+	// that is unfilterable.
+	ServerStitched atomic.Int64
+	Errors         atomic.Int64
+	BytesIn        atomic.Int64
+	BytesOut       atomic.Int64
 }
 
 func New(cfg *config.Config, ca *CA, log func(string, ...any)) *Proxy {
@@ -98,8 +117,11 @@ func (p *Proxy) Stats() map[string]any {
 		"accepted": p.stats.Accepted.Load(), "intercepted": p.stats.Intercepted.Load(),
 		"spliced": p.stats.Spliced.Load(), "filtered": p.stats.Filtered.Load(),
 		"ads_stripped": p.stats.AdsStripped.Load(), "beacons_killed": p.stats.BeaconsKilled.Load(),
-		"errors":   p.stats.Errors.Load(),
-		"bytes_in": p.stats.BytesIn.Load(), "bytes_out": p.stats.BytesOut.Load(),
+		"inpage_stripped": p.stats.InPageStripped.Load(), "inpage_skipped": p.stats.InPageSkipped.Load(),
+		"inpage_segments": p.stats.InPageSegments.Load(),
+		"server_stitched": p.stats.ServerStitched.Load(),
+		"errors":          p.stats.Errors.Load(),
+		"bytes_in":        p.stats.BytesIn.Load(), "bytes_out": p.stats.BytesOut.Load(),
 		"running": p.Running(),
 	}
 }
@@ -322,10 +344,24 @@ func (p *Proxy) roundTrip(ctx context.Context, req *http.Request, host string, c
 	path := req.URL.Path
 	referer := req.Header.Get("Referer")
 
+	// The in-page engine's segment lookups are answered here, from Orbis's
+	// own SponsorBlock client, and never forwarded to YouTube.
+	if path == InPageSegmentsPath && isYouTubeHost(host) {
+		resp := p.sponsorResponse(ctx, req)
+		if p.OnRequest != nil {
+			p.OnRequest(clientIP, host, path, referer, resp.ContentLength)
+		}
+		return resp, true, nil
+	}
+
 	// Request-side filtering: drop tracker beacons before they reach the
 	// network at all, which saves the round trip and the data.
 	if verdict := p.filters.FilterRequest(host, path, req); verdict.Drop {
-		p.stats.BeaconsKilled.Add(1)
+		if verdict.Reason == "orbis-inpage-report" {
+			p.recordInPageReport(req)
+		} else {
+			p.stats.BeaconsKilled.Add(1)
+		}
 		if p.OnRequest != nil {
 			p.OnRequest(clientIP, host, path, referer, 0)
 		}
@@ -354,6 +390,74 @@ func (p *Proxy) roundTrip(ctx context.Context, req *http.Request, host string, c
 		p.OnRequest(clientIP, host, path, referer, size)
 	}
 	return resp, filtered, nil
+}
+
+// recordInPageReport folds the injected engine's counters into the proxy
+// stats. The report is best-effort by design: a malformed or oversized one is
+// dropped without affecting the 204 the page already expects.
+func (p *Proxy) recordInPageReport(req *http.Request) {
+	if req.Body == nil {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(req.Body, 4096))
+	req.Body.Close()
+	if err != nil {
+		return
+	}
+	var rep struct {
+		Stripped int64 `json:"stripped"`
+		Burned   int64 `json:"burned"`
+		Skips    int64 `json:"skips"`
+		Segments int64 `json:"segments"`
+	}
+	if json.Unmarshal(body, &rep) != nil {
+		return
+	}
+	// The page reports the increase since its own last report, not a running
+	// total, so several clients simply add up and a reload cannot make the
+	// counter jump or go backwards. Each delta is capped: a counter is
+	// evidence, and a page cannot be allowed to manufacture it.
+	const maxDelta = 1000
+	if rep.Stripped > 0 {
+		p.stats.InPageStripped.Add(min(rep.Stripped, maxDelta))
+	}
+	if n := rep.Burned + rep.Skips; n > 0 {
+		p.stats.InPageSkipped.Add(min(n, maxDelta))
+	}
+	if rep.Segments > 0 {
+		p.stats.InPageSegments.Add(min(rep.Segments, maxDelta))
+	}
+}
+
+// videoIDRe is the shape of a YouTube video id. Anything else is refused
+// before it reaches the segment client.
+var videoIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
+
+// sponsorResponse builds the JSON answer for a segment lookup. Failures are
+// answered with an empty list rather than an error: the engine treats "no
+// segments" and "could not find out" identically, and a 5xx would only make
+// it retry.
+func (p *Proxy) sponsorResponse(ctx context.Context, req *http.Request) *http.Response {
+	c := p.cfg.Snapshot()
+	vid := req.URL.Query().Get("v")
+	empty := []byte(`{"video_id":"","segments":[]}`)
+	verdict := RequestVerdict{Status: http.StatusOK, ContentType: "application/json", Reason: "orbis-sponsorblock", Body: empty}
+	if !c.MITM.Filters.YouTube || !c.MITM.Filters.YouTubeSponsorBlock || p.SponsorSegments == nil || !videoIDRe.MatchString(vid) {
+		return syntheticResponse(req, verdict)
+	}
+	lctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	result, err := p.SponsorSegments(lctx, vid)
+	if err != nil {
+		p.log("mitm: sponsorblock lookup for %s failed: %v", vid, err)
+		return syntheticResponse(req, verdict)
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return syntheticResponse(req, verdict)
+	}
+	verdict.Body = body
+	return syntheticResponse(req, verdict)
 }
 
 // shouldIntercept decides per connection. Bypass wins over intercept so a
@@ -507,30 +611,109 @@ func writeError(w io.Writer, code int, msg string) {
 
 // writeResponse serialises a response and reports whether the connection can
 // be reused.
+//
+// The body is never re-read into memory here. The filter chain has already
+// buffered anything it wanted to rewrite (and normalised the headers to
+// match); everything else is still the live upstream stream, and a video
+// segment has to reach the client as it arrives rather than after the proxy
+// has collected all of it. Content-Encoding is likewise left exactly as the
+// origin set it unless the filter chain decoded the body, because relabelling
+// a body that is still compressed makes it unreadable.
 func writeResponse(w net.Conn, resp *http.Response, req *http.Request) bool {
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-	if err != nil {
-		return false
+	bodyAllowed := resp.StatusCode >= 200 &&
+		resp.StatusCode != http.StatusNoContent &&
+		resp.StatusCode != http.StatusNotModified &&
+		req.Method != http.MethodHead
+
+	// Framing: a known length is preferable because it keeps the connection
+	// reusable; an unknown one is chunked, which HTTP/1.1 clients all speak.
+	chunked := false
+	if bodyAllowed {
+		if resp.ContentLength >= 0 {
+			resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
+		} else {
+			resp.Header.Del("Content-Length")
+			chunked = true
+		}
+	} else {
+		resp.Header.Del("Content-Length")
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	resp.ContentLength = int64(len(body))
-	resp.Header.Set("Content-Length", fmt.Sprint(len(body)))
-	resp.Header.Del("Content-Encoding") // body was decompressed by the filter chain
-	resp.TransferEncoding = nil
+	resp.Header.Del("Transfer-Encoding")
 
 	keepAlive := !resp.Close && req.ProtoAtLeast(1, 1) &&
 		!strings.EqualFold(req.Header.Get("Connection"), "close")
+	if chunked && !req.ProtoAtLeast(1, 1) {
+		// HTTP/1.0 has no chunked encoding; the only length signal it has is
+		// the close of the connection.
+		keepAlive = false
+	}
 	if keepAlive {
 		resp.Header.Set("Connection", "keep-alive")
 	} else {
 		resp.Header.Set("Connection", "close")
 	}
+	if chunked && keepAlive {
+		resp.Header.Set("Transfer-Encoding", "chunked")
+	}
+
+	var head bytes.Buffer
+	fmt.Fprintf(&head, "HTTP/1.1 %d %s\r\n", resp.StatusCode, statusText(resp.StatusCode))
+	if err := resp.Header.Write(&head); err != nil {
+		return false
+	}
+	head.WriteString("\r\n")
+
 	_ = w.SetWriteDeadline(time.Now().Add(60 * time.Second))
-	if err := resp.Write(w); err != nil {
+	if _, err := w.Write(head.Bytes()); err != nil {
+		return false
+	}
+	if !bodyAllowed {
+		_ = w.SetWriteDeadline(time.Time{})
+		return keepAlive
+	}
+
+	// A long download must not die on a 60 s deadline set once up front, so
+	// the deadline is extended as bytes actually move.
+	pw := &progressWriter{conn: w, every: 60 * time.Second}
+	var err error
+	if chunked && keepAlive {
+		cw := httputil.NewChunkedWriter(pw)
+		_, err = io.Copy(cw, resp.Body)
+		if cerr := cw.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil {
+			_, err = pw.Write([]byte("\r\n"))
+		}
+	} else {
+		_, err = io.Copy(pw, resp.Body)
+	}
+	if err != nil {
 		return false
 	}
 	_ = w.SetWriteDeadline(time.Time{})
 	return keepAlive
+}
+
+// statusText keeps a non-standard upstream status code from producing a
+// malformed status line.
+func statusText(code int) string {
+	if t := http.StatusText(code); t != "" {
+		return t
+	}
+	return "Status"
+}
+
+// progressWriter pushes the write deadline forward on every successful write,
+// so the timeout bounds a stalled peer rather than a large transfer.
+type progressWriter struct {
+	conn  net.Conn
+	every time.Duration
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	_ = p.conn.SetWriteDeadline(time.Now().Add(p.every))
+	return p.conn.Write(b)
 }
 
 func syntheticResponse(req *http.Request, v RequestVerdict) *http.Response {

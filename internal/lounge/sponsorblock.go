@@ -10,7 +10,17 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+)
+
+// Segment actions. A skip segment moves the playhead past itself; a mute
+// segment leaves the picture alone and silences the audio for its duration,
+// which is what SponsorBlock uses for segments where skipping would cut
+// something the viewer needs to see (a sponsor read over on-screen content).
+const (
+	ActionSkip = "skip"
+	ActionMute = "mute"
 )
 
 // SponsorBlock is a thin client for the crowd-sourced segment database. It is
@@ -21,17 +31,34 @@ import (
 // only the first four hex characters of sha256(videoID), receives every video
 // sharing that prefix, and filters locally. The server never learns which
 // video was actually watched.
+//
+// Results are cached briefly so a page that reloads, a TV that buffers and
+// re-reports, or the in-page engine and the Lounge engine looking at the same
+// video do not each cost a round trip to the public API.
 type SponsorBlock struct {
 	base string
 	hc   *http.Client
+
+	mu    sync.Mutex
+	cache map[string]sbCached
 }
 
-// Segment is one skippable region, in seconds.
+type sbCached struct {
+	at   time.Time
+	segs []Segment
+}
+
+const (
+	sbCacheTTL = 10 * time.Minute
+	sbCacheMax = 512
+)
+
+// Segment is one skippable or mutable region, in seconds.
 type Segment struct {
 	Category string  `json:"category"`
-	Action   string  `json:"actionType"`
-	Start    float64 `json:"-"`
-	End      float64 `json:"-"`
+	Action   string  `json:"action"`
+	Start    float64 `json:"start"`
+	End      float64 `json:"end"`
 }
 
 func NewSponsorBlock(base string) *SponsorBlock {
@@ -42,8 +69,9 @@ func NewSponsorBlock(base string) *SponsorBlock {
 		base += "/"
 	}
 	return &SponsorBlock{
-		base: base,
-		hc:   &http.Client{Timeout: 15 * time.Second},
+		base:  base,
+		hc:    &http.Client{Timeout: 15 * time.Second},
+		cache: map[string]sbCached{},
 	}
 }
 
@@ -57,19 +85,28 @@ type sbVideo struct {
 	} `json:"segments"`
 }
 
-// Segments returns the skip segments for videoID limited to the given
-// categories, sorted by start time and filtered to plain "skip" actions
-// (muting or full-video categories are ignored: seeking past them is the only
-// action a TV remote can take).
+// Segments returns the segments for videoID limited to the given categories,
+// sorted by start time. Only skip and mute actions are returned: a
+// point-of-interest or full-video label is information, not something a
+// player can act on.
 func (s *SponsorBlock) Segments(ctx context.Context, videoID string, categories []string) ([]Segment, error) {
 	if videoID == "" || len(categories) == 0 {
 		return nil, nil
 	}
+	key := videoID + "|" + strings.Join(categories, ",")
+	s.mu.Lock()
+	if c, ok := s.cache[key]; ok && time.Since(c.at) < sbCacheTTL {
+		s.mu.Unlock()
+		return append([]Segment(nil), c.segs...), nil
+	}
+	s.mu.Unlock()
+
 	sum := sha256.Sum256([]byte(videoID))
 	prefix := hex.EncodeToString(sum[:])[:4]
 
 	catJSON, _ := json.Marshal(categories)
-	u := fmt.Sprintf("%sskipSegments/%s?categories=%s", s.base, prefix, url.QueryEscape(string(catJSON)))
+	u := fmt.Sprintf("%sskipSegments/%s?categories=%s&actionTypes=%s", s.base, prefix,
+		url.QueryEscape(string(catJSON)), url.QueryEscape(`["skip","mute"]`))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -80,6 +117,7 @@ func (s *SponsorBlock) Segments(ctx context.Context, videoID string, categories 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
+		s.remember(key, nil)
 		return nil, nil // no segments for this prefix
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -103,9 +141,11 @@ func (s *SponsorBlock) Segments(ctx context.Context, videoID string, categories 
 			if !want[seg.Category] {
 				continue
 			}
-			// "skip" is the only action a seek can perform; "mute"/"poi"/
-			// "full" are not something we can honour on a cast player.
-			if seg.Action != "" && seg.Action != "skip" {
+			action := seg.Action
+			if action == "" {
+				action = ActionSkip
+			}
+			if action != ActionSkip && action != ActionMute {
 				continue
 			}
 			if len(seg.Segment) != 2 || seg.Segment[1] <= seg.Segment[0] {
@@ -113,14 +153,37 @@ func (s *SponsorBlock) Segments(ctx context.Context, videoID string, categories 
 			}
 			out = append(out, Segment{
 				Category: seg.Category,
-				Action:   "skip",
+				Action:   action,
 				Start:    seg.Segment[0],
 				End:      seg.Segment[1],
 			})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Start < out[j].Start })
+	s.remember(key, out)
 	return out, nil
+}
+
+func (s *SponsorBlock) remember(key string, segs []Segment) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.cache) >= sbCacheMax {
+		// Drop the oldest half rather than one entry at a time; the cache is
+		// small and this keeps the eviction cost negligible.
+		type kv struct {
+			k  string
+			at time.Time
+		}
+		all := make([]kv, 0, len(s.cache))
+		for k, v := range s.cache {
+			all = append(all, kv{k, v.at})
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].at.Before(all[j].at) })
+		for _, e := range all[:len(all)/2] {
+			delete(s.cache, e.k)
+		}
+	}
+	s.cache[key] = sbCached{at: time.Now(), segs: segs}
 }
 
 // SegmentAt returns the segment covering t (with a small tolerance so a report

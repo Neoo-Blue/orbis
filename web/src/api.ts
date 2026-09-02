@@ -7,7 +7,7 @@ import type {
   ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
   OnboardingState, PlacementCheck, TopoGraph, InterceptStatus, DNSRecord,
-  AlertRule, ReportData,
+  AlertRule, ReportData, BuiltinList,
 } from './types'
 
 export class ApiError extends Error {
@@ -131,7 +131,7 @@ export const api = {
 
   adblock: {
     status: () => get<Record<string, unknown>>('/adblock/status'),
-    lists: () => get<{ lists: BlockList[] }>('/adblock/lists'),
+    lists: () => get<{ lists: BlockList[]; builtin: BuiltinList[] }>('/adblock/lists'),
     addList: (list: { name: string; url: string; category: string; enabled: boolean }) =>
       post<{ ok: boolean }>('/adblock/lists', list),
     deleteList: (name: string) => del<{ ok: boolean }>(`/adblock/lists/${encodeURIComponent(name)}`),

@@ -2,10 +2,9 @@ package mitm
 
 import (
 	"bytes"
-	"compress/gzip"
 	"encoding/json"
-	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
@@ -44,6 +43,16 @@ func (f *FilterChain) FilterRequest(host, path string, req *http.Request) Reques
 	}
 	lp := strings.ToLower(path)
 
+	// The injected engine's counter endpoint is answered here and never
+	// forwarded. It exists so the UI can show that the in-page layer is alive
+	// on a real client, which is otherwise invisible from the network.
+	if lp == InPageReportPath && isYouTubeHost(host) {
+		return RequestVerdict{
+			Drop: true, Status: http.StatusNoContent,
+			ContentType: "text/plain", Reason: "orbis-inpage-report",
+		}
+	}
+
 	if c.MITM.Filters.YouTube && isYouTubeHost(host) {
 		// These endpoints exist solely to report ad playback and to fetch ad
 		// creatives. Dropping them removes the ad request round-trip and
@@ -81,13 +90,31 @@ func (f *FilterChain) FilterRequest(host, path string, req *http.Request) Reques
 
 // FilterResponse rewrites a response body in place. It returns whether the
 // body was modified and the (post-filter) body size for the ad pipeline.
+//
+// A response is only buffered when it is a plausible rewrite target. Anything
+// else — video segments above all — keeps its original body, its original
+// Content-Encoding and its original framing, and streams through untouched.
 func (f *FilterChain) FilterResponse(host, path string, req *http.Request, resp *http.Response, stats *Stats) (bool, int64) {
 	c := f.cfg.Snapshot()
 	if !c.MITM.Enabled || resp.Body == nil {
 		return false, resp.ContentLength
 	}
+	// Responses that cannot carry a body are never rewritten, and buffering
+	// one would strip the framing the client is waiting for.
+	if req != nil && req.Method == http.MethodHead {
+		return false, resp.ContentLength
+	}
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusNotModified:
+		return false, resp.ContentLength
+	}
+	// A ranged response is a slice of a document, not a document; rewriting
+	// one would produce bytes that do not match the range that was asked for.
+	if resp.StatusCode == http.StatusPartialContent {
+		return false, resp.ContentLength
+	}
 
-	ctype := resp.Header.Get("Content-Type")
+	ctype := strings.ToLower(resp.Header.Get("Content-Type"))
 	isJSON := strings.Contains(ctype, "json")
 	isHTML := strings.Contains(ctype, "html")
 
@@ -96,20 +123,22 @@ func (f *FilterChain) FilterResponse(host, path string, req *http.Request, resp 
 	if !isJSON && !isHTML {
 		return false, resp.ContentLength
 	}
-	const maxBody = 24 << 20
-	if resp.ContentLength > maxBody {
+	if resp.ContentLength > maxRewriteBody {
 		return false, resp.ContentLength
 	}
 
-	body, err := readBody(resp)
-	if err != nil {
-		return false, 0
+	body, ok := takeBody(resp)
+	if !ok {
+		// takeBody has already restored a streamable body.
+		return false, resp.ContentLength
 	}
-	original := len(body)
 	modified := false
 
 	switch {
 	case c.MITM.Filters.YouTube && isYouTubeHost(host) && isJSON && wantsYouTubeFilter(path):
+		if hasServerStitchedAds(body) {
+			stats.ServerStitched.Add(1)
+		}
 		if out, n := stripYouTubeAds(body); n > 0 {
 			body = out
 			modified = true
@@ -131,6 +160,19 @@ func (f *FilterChain) FilterResponse(host, path string, req *http.Request, resp 
 		}
 	}
 
+	// The in-page engine goes in last so it sits after any rewrite above, and
+	// only on YouTube documents, where it is the layer that survives a
+	// response-shape change the static filter has not learned yet.
+	if c.MITM.Filters.YouTube && c.MITM.Filters.YouTubeInPage && isHTML && isYouTubeHost(host) {
+		if out, ok := injectPlayerEngine(body, InPageOptions{
+			SponsorBlock: c.MITM.Filters.YouTubeSponsorBlock,
+			Offset:       0,
+		}); ok {
+			body = out
+			modified = true
+		}
+	}
+
 	if c.MITM.Filters.HTMLCosmetic && isHTML {
 		if out, ok := injectCosmeticCSS(body); ok {
 			body = out
@@ -138,8 +180,7 @@ func (f *FilterChain) FilterResponse(host, path string, req *http.Request, resp 
 		}
 	}
 
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	resp.ContentLength = int64(len(body))
+	setPlainBody(resp, body)
 	if modified {
 		resp.Header.Set("X-Orbis-Filtered", "1")
 		// A rewritten body must not be cached by the client under the
@@ -148,25 +189,7 @@ func (f *FilterChain) FilterResponse(host, path string, req *http.Request, resp 
 		resp.Header.Del("Last-Modified")
 		resp.Header.Set("Cache-Control", "no-store")
 	}
-	_ = original
 	return modified, int64(len(body))
-}
-
-// readBody decompresses and reads the full body.
-func readBody(resp *http.Response) ([]byte, error) {
-	var r io.Reader = resp.Body
-	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
-		gz, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			// Some origins mislabel; fall back to the raw bytes rather than
-			// failing the whole response.
-			return io.ReadAll(io.LimitReader(resp.Body, 24<<20))
-		}
-		defer gz.Close()
-		r = gz
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(io.LimitReader(r, 24<<20))
 }
 
 func isYouTubeHost(host string) bool {
@@ -271,6 +294,41 @@ var youtubeAdKeys = []string{
 	"clientForcedAdParams",
 	"instreamAdPlayerOverlayRenderer",
 	"adNotify",
+	// The slot/layout metadata the newer InnerTube shapes hang ads off. These
+	// appear beside a renderer rather than inside it, so removing the
+	// renderer alone leaves the player still expecting a slot to fill.
+	"adPlacementRenderer",
+	"adSlotMetadata",
+	"adSlotLoggingData",
+	"adLayoutMetadata",
+	"adLayoutLoggingData",
+	"playerLegacyDesktopWatchAdsRenderer",
+	"clientSideAdConfig",
+	"adPlaybackContextParams",
+	"adPlacementConfig",
+	"adCpn",
+}
+
+// serverStitchedMarkers identify a response whose ads are muxed into the same
+// media stream as the content (server-side ad insertion). There is nothing to
+// remove in that case — the ad and the video are literally the same bytes —
+// but knowing it happened is the difference between "the filter is broken"
+// and "this stream cannot be filtered by anyone", so it is counted and
+// surfaced rather than passed over in silence.
+var serverStitchedMarkers = []string{
+	"ssaMetadata",
+	"serverStitchedAdPlacement",
+	"AD_PLACEMENT_KIND_SERVER_STITCHED",
+}
+
+// hasServerStitchedAds reports whether a player response carries SSAI markers.
+func hasServerStitchedAds(body []byte) bool {
+	for _, m := range serverStitchedMarkers {
+		if bytes.Contains(body, []byte(m)) {
+			return true
+		}
+	}
+	return false
 }
 
 // stripYouTubeAds removes ad structures from an InnerTube JSON response and
@@ -279,10 +337,10 @@ func stripYouTubeAds(body []byte) ([]byte, int) {
 	// A cheap prefilter: most responses are not player responses at all, and
 	// unmarshalling a multi-megabyte JSON blob for nothing is wasteful. The
 	// probe set has to include every key the walker removes, or a response
-	// carrying only a newer key would be skipped entirely.
-	if !containsAnyKey(body, youtubeAdKeys) &&
-		!bytes.Contains(body, []byte("adSlotRenderer")) &&
-		!bytes.Contains(body, []byte("promotedSparklesWebRenderer")) {
+	// carrying only a newer key would be skipped entirely — which is how a
+	// feed full of promotedVideoRenderer used to sail straight through while
+	// the walker that would have caught it never ran.
+	if !containsAnyKey(body, youtubeAdKeys) && !containsAnyKey(body, adRenderers) {
 		return body, 0
 	}
 	var doc map[string]any
@@ -380,6 +438,22 @@ var adRenderers = []string{
 	"brandVideoSingletonRenderer",
 	"brandVideoShelfRenderer",
 	"inFeedAdLayoutRenderer",
+	// Masthead, carousel and companion units, plus the Shorts and mobile
+	// shapes. Each is a whole entry in a list, so dropping the entry is what
+	// makes the row close up rather than leave a blank card behind.
+	"carouselAdRenderer",
+	"primetimePromoRenderer",
+	"videoMastheadAdV3Renderer",
+	"videoMastheadAdV2Renderer",
+	"actionCompanionAdRenderer",
+	"imageCompanionAdRenderer",
+	"videoDisplayFullButtonedAdRenderer",
+	"adsFeedRenderer",
+	"promotedItemRenderer",
+	"compactPromotedItemRenderer",
+	"shortsAdCardRenderer",
+	"adDivergentRenderer",
+	"featuredPromoRenderer",
 }
 
 // walkRemoveRenderers drops array entries whose sole content is an ad
@@ -394,15 +468,14 @@ func walkRemoveRenderers(node any, depth int) int {
 	case map[string]any:
 		for key, child := range v {
 			if arr, ok := child.([]any); ok {
-				filtered := arr[:0]
-				for _, item := range arr {
-					if isAdItem(item) {
-						removed++
-						continue
-					}
-					filtered = append(filtered, item)
-				}
-				v[key] = filtered
+				kept := compactAdItems(arr, &removed)
+				v[key] = kept
+				// Recurse over what survived, not over the slice we just
+				// compacted in place: its tail still aliases entries that
+				// were removed, and walking those counts them twice and
+				// re-walks subtrees that are no longer in the document.
+				removed += walkRemoveRenderers(kept, depth+1)
+				continue
 			}
 			removed += walkRemoveRenderers(child, depth+1)
 		}
@@ -412,6 +485,24 @@ func walkRemoveRenderers(node any, depth int) int {
 		}
 	}
 	return removed
+}
+
+// compactAdItems returns arr without its ad entries, compacting in place.
+func compactAdItems(arr []any, removed *int) []any {
+	kept := arr[:0]
+	for _, item := range arr {
+		if isAdItem(item) {
+			*removed++
+			continue
+		}
+		kept = append(kept, item)
+	}
+	// Clear the tail so the removed entries are not kept alive by the
+	// backing array for as long as the document is.
+	for i := len(kept); i < len(arr); i++ {
+		arr[i] = nil
+	}
+	return kept
 }
 
 func isAdItem(item any) bool {
@@ -505,29 +596,89 @@ func removeNested(doc map[string]any, path []string, keys []string) int {
 	return 0
 }
 
-// stripYouTubeInlineAds rewrites the ytInitialPlayerResponse embedded in the
-// watch page HTML. The web client reads it from there on first load, so
-// filtering only the API endpoint leaves the first video's ad intact.
+// inlinePayloads are the assignments a YouTube HTML document embeds its own
+// data in. The client reads the first video's player response from the page
+// rather than calling the API, so a filter that only knows the API endpoint
+// lets the first ad of every session through. The exact spelling varies by
+// surface and has changed more than once — desktop, mobile web and the TV
+// page each write it differently — so all of the known forms are tried.
+var inlinePayloads = []string{
+	"var ytInitialPlayerResponse = ",
+	"var ytInitialPlayerResponse=",
+	"ytInitialPlayerResponse = ",
+	"ytInitialPlayerResponse=",
+	`window["ytInitialPlayerResponse"] = `,
+	`window["ytInitialPlayerResponse"]=`,
+	"var ytInitialData = ",
+	"var ytInitialData=",
+	`window["ytInitialData"] = `,
+	`window["ytInitialData"]=`,
+}
+
+// stripYouTubeInlineAds rewrites every embedded payload in a watch or feed
+// page. It rebuilds the document once at the end so a page carrying both a
+// player response and a feed payload is filtered in a single pass.
 func stripYouTubeInlineAds(body []byte) ([]byte, int) {
-	const marker = "var ytInitialPlayerResponse = "
-	idx := bytes.Index(body, []byte(marker))
-	if idx < 0 {
+	var spans []inlineSpan
+	total := 0
+
+	for _, marker := range inlinePayloads {
+		off := 0
+		for {
+			idx := bytes.Index(body[off:], []byte(marker))
+			if idx < 0 {
+				break
+			}
+			start := off + idx + len(marker)
+			off = start
+			end := matchJSONObject(body, start)
+			if end <= start {
+				continue
+			}
+			// A shorter marker can match inside a longer one already handled
+			// (`ytInitialPlayerResponse=` inside `var ytInitialPlayerResponse=`),
+			// which would rewrite the same object twice and corrupt the page.
+			if overlapsAny(spans, start, end) {
+				off = end
+				continue
+			}
+			rewritten, n := stripYouTubeAds(body[start:end])
+			if n > 0 {
+				spans = append(spans, inlineSpan{start, end, rewritten})
+				total += n
+			}
+			off = end
+		}
+	}
+	if total == 0 {
 		return body, 0
 	}
-	start := idx + len(marker)
-	end := matchJSONObject(body, start)
-	if end <= start {
-		return body, 0
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+
+	out := make([]byte, 0, len(body))
+	prev := 0
+	for _, s := range spans {
+		out = append(out, body[prev:s.start]...)
+		out = append(out, s.repl...)
+		prev = s.end
 	}
-	rewritten, n := stripYouTubeAds(body[start:end])
-	if n == 0 {
-		return body, 0
+	out = append(out, body[prev:]...)
+	return out, total
+}
+
+// inlineSpan is one embedded payload and the bytes that replace it.
+type inlineSpan struct {
+	start, end int
+	repl       []byte
+}
+
+func overlapsAny(spans []inlineSpan, start, end int) bool {
+	for _, s := range spans {
+		if start < s.end && s.start < end {
+			return true
+		}
 	}
-	out := make([]byte, 0, len(body)+len(rewritten)-(end-start))
-	out = append(out, body[:start]...)
-	out = append(out, rewritten...)
-	out = append(out, body[end:]...)
-	return out, n
+	return false
 }
 
 // matchJSONObject finds the end of the JSON object starting at `start`,

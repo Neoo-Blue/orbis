@@ -495,7 +495,25 @@ func (s *Server) handleLists(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeOK(w, map[string]any{"lists": metas})
+	cfg := s.cfg.Snapshot()
+	// The built-in lists live in the binary, not the database, so they are
+	// described here rather than stored: the UI shows them beside the
+	// subscriptions with the same switch semantics.
+	builtin := []map[string]any{
+		{
+			"id": "streaming-ads", "name": "Streaming devices: ads and viewing telemetry",
+			"entries": adblock.StreamingAdDomainCount(), "enabled": cfg.AdBlock.StreamingAds,
+			"category": "ads", "key": "adblock.streaming_ads",
+			"description": "Samsung, LG, Roku, Fire TV, Vizio and the ACR vendors inside other brands; the CTV ad exchanges; music-app ad trackers. Only hosts no stream depends on.",
+		},
+		{
+			"id": "doh-bypass", "name": "Public encrypted-DNS resolvers",
+			"entries": adblock.DoHBypassDomainCount(), "enabled": cfg.AdBlock.BlockDNSBypass,
+			"category": "bypass", "key": "adblock.block_dns_bypass",
+			"description": "The well-known DoH and DoQ endpoints a device can use to route around this resolver.",
+		},
+	}
+	writeOK(w, map[string]any{"lists": metas, "builtin": builtin})
 }
 
 func (s *Server) handleAddList(w http.ResponseWriter, r *http.Request) {

@@ -325,6 +325,11 @@ type AdBlockConfig struct {
 	// BlockDNSBypass sinkholes known public DoH endpoints so clients cannot
 	// route around the resolver.
 	BlockDNSBypass bool `yaml:"block_dns_bypass" json:"block_dns_bypass"`
+	// StreamingAds enables the built-in list of smart-TV, streaming-stick and
+	// media-app advertising and viewing-telemetry hosts. It is curated to
+	// the hosts that only ever serve ads or report what is being watched;
+	// nothing on it is needed for a stream to play.
+	StreamingAds bool `yaml:"streaming_ads" json:"streaming_ads"`
 }
 
 type BlockList struct {
@@ -393,6 +398,17 @@ type MITMFilters struct {
 	// neuters ad-tracking pings. Works on web, mobile web and the native
 	// apps (which use the same InnerTube API).
 	YouTube bool `yaml:"youtube" json:"youtube"`
+	// YouTubeInPage injects a small script into YouTube HTML documents that
+	// strips ad structures inside the client and drives the player past any
+	// ad break that still starts. It is the layer that keeps working when
+	// YouTube renames a field: the static filter matches names, the in-page
+	// engine matches behaviour. Requires YouTube filtering and the CA.
+	YouTubeInPage bool `yaml:"youtube_in_page" json:"youtube_in_page"`
+	// YouTubeSponsorBlock lets the in-page engine skip and mute SponsorBlock
+	// segments in any browser that trusts the CA, with no extension. It uses
+	// the same categories and minimum length as the Lounge engine, and the
+	// lookups go through Orbis, so the browser never talks to SponsorBlock.
+	YouTubeSponsorBlock bool `yaml:"youtube_sponsorblock" json:"youtube_sponsorblock"`
 	// GenericJSONAds removes common ad payload keys from JSON responses of
 	// hosts matching InterceptHosts.
 	GenericJSONAds bool `yaml:"generic_json_ads" json:"generic_json_ads"`
@@ -760,6 +776,7 @@ func Default() *Config {
 			SNIBlocking:         true,
 			CNAMEUncloak:        true,
 			BlockDNSBypass:      true,
+			StreamingAds:        true,
 			Lists:               DefaultLists(),
 			SmartCapture: SmartCaptureConfig{
 				Enabled:             true,
@@ -787,10 +804,12 @@ func Default() *Config {
 			},
 			BlockQUIC: true,
 			Filters: MITMFilters{
-				YouTube:        true,
-				GenericJSONAds: true,
-				HTMLCosmetic:   false,
-				TrackerBeacons: true,
+				YouTube:             true,
+				YouTubeInPage:       true,
+				YouTubeSponsorBlock: true,
+				GenericJSONAds:      true,
+				HTMLCosmetic:        false,
+				TrackerBeacons:      true,
 			},
 		},
 		YouTube: YouTubeConfig{

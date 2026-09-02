@@ -377,7 +377,7 @@ export interface AppConfig {
   adblock: {
     enabled: boolean; lists: BlockList[]; update_interval_hours: number
     allowlist: string[]; denylist: string[]; sni_blocking: boolean
-    cname_uncloak: boolean; block_dns_bypass: boolean
+    cname_uncloak: boolean; block_dns_bypass: boolean; streaming_ads: boolean
     smart_capture: {
       enabled: boolean; min_observations: number; auto_block_score: number
       review_score: number; use_ai: boolean; interval_minutes: number
@@ -387,7 +387,10 @@ export interface AppConfig {
   mitm: {
     enabled: boolean; listen_http: string; listen_tls: string; ca_dir: string
     intercept_hosts: string[]; bypass_hosts: string[]; only_clients: string[]
-    filters: { youtube: boolean; generic_json_ads: boolean; html_cosmetic: boolean; tracker_beacons: boolean }
+    filters: {
+      youtube: boolean; youtube_in_page: boolean; youtube_sponsorblock: boolean
+      generic_json_ads: boolean; html_cosmetic: boolean; tracker_beacons: boolean
+    }
   }
   firewall: {
     enabled: boolean
@@ -434,18 +437,39 @@ export interface AppConfig {
 
 // ---- YouTube (Lounge engine) ----
 
+export interface AdRecord {
+  at: string
+  ad_video_id: string
+  content_video_id: string
+  duration: number
+  watched: number
+  skippable: boolean
+  bumper: boolean
+  muted: boolean
+  attempts: number
+  outcome: 'skipped' | 'played' | 'lost'
+  reason: string
+}
+
 export interface LoungeDeviceStats {
   screen_id: string
   name: string
   connected: boolean
+  online: boolean
   video_id: string
   position: number
   ad_active: boolean
   ads_handled: number
+  ads_skipped: number
+  ads_lost: number
   segments_skipped: number
+  segments_muted: number
   segments_loaded: number
+  seconds_saved: number
   last_error?: string
   last_event?: string
+  last_event_at?: string
+  recent: AdRecord[]
 }
 
 export interface DiscoveredScreen {
@@ -748,4 +772,14 @@ export interface ReportData {
   top_talkers: Array<{ label: string; value: number }>
   top_blocked: Array<{ label: string; value: number }>
   top_countries: Array<{ label: string; value: number }>
+}
+
+export interface BuiltinList {
+  id: string
+  name: string
+  entries: number
+  enabled: boolean
+  category: string
+  key: string
+  description: string
 }

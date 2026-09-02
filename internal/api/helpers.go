@@ -151,6 +151,8 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 		return setBool(&c.AdBlock.CNAMEUncloak, raw)
 	case "adblock.block_dns_bypass":
 		return setBool(&c.AdBlock.BlockDNSBypass, raw)
+	case "adblock.streaming_ads":
+		return setBool(&c.AdBlock.StreamingAds, raw)
 	case "adblock.update_interval_hours":
 		return setInt(&c.AdBlock.UpdateIntervalHours, raw)
 	case "adblock.allowlist":
@@ -182,6 +184,10 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 		return setStrSlice(&c.MITM.OnlyClients, raw)
 	case "mitm.filters.youtube":
 		return setBool(&c.MITM.Filters.YouTube, raw)
+	case "mitm.filters.youtube_in_page":
+		return setBool(&c.MITM.Filters.YouTubeInPage, raw)
+	case "mitm.filters.youtube_sponsorblock":
+		return setBool(&c.MITM.Filters.YouTubeSponsorBlock, raw)
 	case "mitm.filters.generic_json_ads":
 		return setBool(&c.MITM.Filters.GenericJSONAds, raw)
 	case "mitm.filters.html_cosmetic":

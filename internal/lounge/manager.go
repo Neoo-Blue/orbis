@@ -285,6 +285,26 @@ func (m *Manager) persistDevice(dev config.LoungeDevice) error {
 	})
 }
 
+// Segments answers the in-page engine's request for a video's sponsor
+// segments. It uses the same categories and minimum length as the Lounge
+// engine so a segment is treated the same way on a laptop and on a
+// television, and it is the only path by which a browser gets segments: the
+// browser asks Orbis, Orbis asks SponsorBlock, and the lookup is cached.
+func (m *Manager) Segments(ctx context.Context, videoID string) (any, error) {
+	lc := m.cfg.Snapshot().YouTube.Lounge
+	segs, err := m.sb.Segments(ctx, videoID, lc.SkipCategories)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Segment, 0, len(segs))
+	for _, s := range segs {
+		if s.Action == ActionMute || lc.MinSkipLength <= 0 || s.End-s.Start >= lc.MinSkipLength {
+			out = append(out, s)
+		}
+	}
+	return map[string]any{"video_id": videoID, "segments": out}, nil
+}
+
 // Status is the full picture for the API/UI.
 type Status struct {
 	Enabled      bool               `json:"enabled"`
@@ -310,14 +330,16 @@ type CoverageRow struct {
 // coverageMatrix is fixed: it states plainly what each engine can and cannot do
 // so the UI never implies a device is handled when it is not.
 var coverageMatrix = []CoverageRow{
-	{"Apple TV / smart TV / console", "Lounge remote", true, true,
-		"No certificate, nothing installed on the TV. Auto-pairs over DIAL when the device allows same-network linking; otherwise one-time TV code."},
-	{"Desktop / laptop browser", "MITM InnerTube filter", false, true,
-		"Needs the Orbis CA trusted on that machine, plus the QUIC block so YouTube falls back to interceptable TCP. uBlock Origin is the simpler no-CA alternative."},
-	{"Mobile browser (iOS/Android)", "MITM InnerTube filter", false, true,
-		"Works only with the Orbis CA trusted; a content blocker in the browser is easier."},
+	{"Apple TV / smart TV / console / Chromecast", "Lounge remote", true, true,
+		"No certificate, nothing installed on the TV. Orbis attaches as a remote, mutes the ad the moment it starts and skips it the moment YouTube allows. Auto-pairs over DIAL when the device allows same-network linking; otherwise a one-time TV code. Every ad is recorded below so you can see it working."},
+	{"Desktop / laptop browser", "Response filter + in-page engine", false, true,
+		"Needs the Orbis CA trusted on that machine, plus the QUIC block so YouTube falls back to interceptable TCP. Ad structures are removed before the page sees them, an in-page engine drives past anything that still starts, and SponsorBlock segments are skipped with no extension. uBlock Origin remains the simpler no-CA alternative on a laptop."},
+	{"TV browser / mobile browser", "Response filter + in-page engine", false, true,
+		"The same two layers, in any browser that will trust a CA: the browser on a Samsung or LG set, Safari on iOS, Chrome on Android. A content blocker in the browser is easier where one exists."},
 	{"Mobile YouTube app", "none", true, false,
-		"Cannot be filtered from the network: the app pins certificates and ignores user CAs, and is not a castable screen. Use a patched client (ReVanced/uYou)."},
+		"Cannot be filtered from the network: the app pins certificates and ignores user CAs, and is not a castable screen. Casting from the app to a TV puts the TV under the Lounge engine. Otherwise, a patched client (ReVanced/uYou)."},
+	{"Server-side stitched ads", "none", true, false,
+		"When YouTube muxes the ad into the same stream as the video, no filter anywhere can separate them. Orbis counts how often this happens so a silent filter and an unfilterable stream are not mistaken for each other."},
 }
 
 func (m *Manager) Status() Status {

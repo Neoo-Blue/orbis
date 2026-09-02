@@ -145,18 +145,29 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	// YouTube Lounge engine.
 	if app.Lounge != nil {
 		lst := app.Lounge.Status()
-		connected, ads, segs := 0, 0, 0
+		connected, online, ads, skipped, lost, segs := 0, 0, 0, 0, 0, 0
+		saved := 0.0
 		for _, d := range lst.Devices {
 			if d.Connected {
 				connected++
 			}
+			if d.Online {
+				online++
+			}
 			ads += d.AdsHandled
-			segs += d.SegmentsSkipped
+			skipped += d.AdsSkipped
+			lost += d.AdsLost
+			segs += d.SegmentsSkipped + d.SegmentsMuted
+			saved += d.SecondsSaved
 		}
 		m.gauge("orbis_lounge_devices", "Paired YouTube screens.", float64(len(lst.Devices)))
 		m.gauge("orbis_lounge_connected", "Screens with a live session.", float64(connected))
-		m.counter("orbis_lounge_ads_total", "Ads skipped or muted.", float64(ads))
-		m.counter("orbis_lounge_segments_total", "SponsorBlock segments skipped.", float64(segs))
+		m.gauge("orbis_lounge_online", "Screens currently present in the lounge.", float64(online))
+		m.counter("orbis_lounge_ads_total", "Ads seen on paired screens.", float64(ads))
+		m.counter("orbis_lounge_ads_skipped_total", "Ads cut short by Orbis.", float64(skipped))
+		m.counter("orbis_lounge_ads_lost_total", "Ads whose end the player never reported.", float64(lost))
+		m.counter("orbis_lounge_segments_total", "SponsorBlock segments skipped or muted.", float64(segs))
+		m.counter("orbis_lounge_seconds_saved_total", "Seconds of ads and segments not watched.", saved)
 	}
 
 	// Firewall counters, one series per named rule. A failure to read them is

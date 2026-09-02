@@ -1092,6 +1092,8 @@ func (s *Server) handleCAInfo(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{
 		"ca":           s.app.CA.Info(),
 		"download":     "/orbis-ca.crt",
+		"mobileconfig": "/orbis-ca.mobileconfig",
+		"setup_url":    "/setup",
 		"instructions": mitm.TrustInstructions(),
 	})
 }

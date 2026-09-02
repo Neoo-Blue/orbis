@@ -602,10 +602,24 @@ function InStream() {
         </Card>
 
         <Card title="Certificate" actions={
-          <a className="btn sm" href="/orbis-ca.crt" download><Icons.download size={13} /> Download</a>
+          <a className="btn sm" href="/orbis-ca.crt" download><Icons.download size={13} /> .crt</a>
         }>
           {!ca ? <Loading what="certificate" /> : (
             <div style={{ display: 'grid', gap: 11 }}>
+              <div style={{ background: 'color-mix(in srgb, var(--accent) 8%, transparent)', border: '1px solid var(--line-soft)', borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 560, marginBottom: 3 }}>Set up a device in one tap</div>
+                <div className="hint" style={{ marginBottom: 10 }}>
+                  Open <code>http://{location.host}/setup</code> in the device's browser. It detects the
+                  platform and hands it the right file. On an iPhone or Mac that is a profile that installs
+                  the certificate in one step; no certificate is needed on a TV.
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <a className="btn sm primary" href="/setup" target="_blank" rel="noreferrer">Open setup page</a>
+                  <a className="btn sm" href={String(ca.mobileconfig ?? '/orbis-ca.mobileconfig')} download>
+                    <Icons.download size={13} /> Apple profile
+                  </a>
+                </div>
+              </div>
               <dl className="kv">
                 <dt>Subject</dt><dd>{String(ca.ca.subject)}</dd>
                 <dt>Expires</dt><dd>{String(ca.ca.expires_in_days)} days</dd>

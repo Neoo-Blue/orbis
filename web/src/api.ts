@@ -286,6 +286,8 @@ export const api = {
       get<{
         ca: Record<string, unknown>
         download: string
+        mobileconfig: string
+        setup_url: string
         instructions: Array<{ platform: string; steps: string }>
       }>('/proxy/ca'),
     action: (action: 'start' | 'stop') => post<Record<string, unknown>>(`/proxy/${action}`),

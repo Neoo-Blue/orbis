@@ -66,6 +66,8 @@ func (s *Server) Start() error {
 	// onboarded has no way to present a session, and the certificate is
 	// public by definition.
 	r.Get("/orbis-ca.crt", s.handleCACert)
+	r.Get("/orbis-ca.mobileconfig", s.handleCAMobileConfig)
+	r.Get("/setup", s.handleSetup)
 
 	// Prometheus scrapes cannot present a session cookie, so /metrics sits
 	// outside the auth wrapper and is guarded by an optional bearer token.

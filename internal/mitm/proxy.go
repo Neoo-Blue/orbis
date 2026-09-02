@@ -59,6 +59,10 @@ type Proxy struct {
 	// sbLimiter bounds segment lookups per client, so a page cannot turn
 	// Orbis into an amplifier against the segment database.
 	sbLimiter clientLimiter
+
+	// pins remembers which clients reject the certificate for which hosts,
+	// so a pinned app is spliced through instead of broken.
+	pins pinTracker
 }
 
 type Stats struct {
@@ -77,6 +81,9 @@ type Stats struct {
 	// InPageProbes counts ad-blocker detection probes the engine answered
 	// in place of the network.
 	InPageProbes atomic.Int64
+	// PinBypasses counts the times a client was spliced through because it
+	// kept rejecting the certificate (a pinned app, or no CA installed).
+	PinBypasses atomic.Int64
 	// ServerStitched counts player responses whose ads are muxed into the
 	// content stream. Nothing can be stripped from those; counting them is
 	// what tells the difference between a filter that is broken and a stream
@@ -127,6 +134,7 @@ func (p *Proxy) Stats() map[string]any {
 		"ads_stripped": p.stats.AdsStripped.Load(), "beacons_killed": p.stats.BeaconsKilled.Load(),
 		"inpage_stripped": p.stats.InPageStripped.Load(), "inpage_skipped": p.stats.InPageSkipped.Load(),
 		"inpage_segments": p.stats.InPageSegments.Load(), "inpage_probes": p.stats.InPageProbes.Load(),
+		"pin_bypasses": p.stats.PinBypasses.Load(), "pinned": p.pins.active(time.Now()),
 		"server_stitched": p.stats.ServerStitched.Load(),
 		"errors":          p.stats.Errors.Load(),
 		"bytes_in":        p.stats.BytesIn.Load(), "bytes_out": p.stats.BytesOut.Load(),
@@ -270,6 +278,13 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 		p.splice(ctx, client, origDst, peeked)
 		return
 	}
+	if p.pins.bypassed(clientIP, host, time.Now()) {
+		// This client has told us, by rejecting the certificate, that it
+		// will not accept interception for this host. Pass it through.
+		p.stats.Spliced.Add(1)
+		p.splice(ctx, client, origDst, peeked)
+		return
+	}
 
 	leaf, err := p.ca.Leaf(host)
 	if err != nil {
@@ -289,6 +304,14 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		p.stats.Errors.Add(1)
+		if rejectedCertificate(err) {
+			if name, tripped := p.pins.fail(clientIP, host, time.Now()); tripped {
+				p.stats.PinBypasses.Add(1)
+				p.log("mitm: %s rejects the certificate for %s (%v); splicing %s for %s. "+
+					"A pinned app, or the CA is not trusted on that device.",
+					clientIP, host, err, name, pinBypassFor)
+			}
+		}
 		return
 	}
 	p.stats.Intercepted.Add(1)

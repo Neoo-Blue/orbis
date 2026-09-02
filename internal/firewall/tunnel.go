@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -51,6 +52,13 @@ type TunnelConfig struct {
 	// LANSubnets are the source ranges that may be steered into an outbound
 	// tunnel.
 	LANSubnets []string
+	// WANHasIPv6 is whether this node can actually reach the IPv6 internet.
+	// Without it, IPv6 from a tunnel client must be refused outright and
+	// never redirected into the proxy: a refusal makes the client fall back
+	// to IPv4 at once, whereas a proxy that accepts the connection and then
+	// cannot dial out fails the app mid-handshake, past the point where it
+	// would have fallen back.
+	WANHasIPv6 bool
 	// IPv6 adds the equivalent v6 rules.
 	IPv6 bool
 
@@ -162,6 +170,8 @@ func BuildTunnelConfig(cfg config.Config) TunnelConfig {
 			tc.LANSubnets = append(tc.LANSubnets, z.Subnets...)
 		}
 	}
+
+	tc.WANHasIPv6 = wanHasIPv6()
 
 	if cfg.MITM.Enabled {
 		tc.FilterProxy = true
@@ -334,6 +344,12 @@ func renderTunnelRuleset(tc TunnelConfig) string {
 	w("    type filter hook forward priority filter - 10; policy accept;")
 	w("    ct state established,related accept")
 	w("    ct state invalid drop")
+	if !tc.WANHasIPv6 {
+		// No IPv6 uplink: say so immediately. Silently dropping leaves the
+		// client waiting on every IPv6-preferring app; an unreachable makes
+		// it try IPv4 within milliseconds.
+		w("    iifname @tunnel_ifaces oifname \"%s\" meta nfproto ipv6 counter reject with icmpv6 type addr-unreachable comment \"no ipv6 uplink: refuse so clients fall back to ipv4\"", tc.WAN)
+	}
 	// Egress: tunnel -> internet. This is the exit-node path.
 	w("    iifname @tunnel_ifaces oifname \"%s\" counter accept comment \"tunnel to internet\"", tc.WAN)
 	w("    iifname \"%s\" oifname @tunnel_ifaces counter accept comment \"internet back to tunnel\"", tc.WAN)
@@ -384,15 +400,23 @@ func renderTunnelRuleset(tc TunnelConfig) string {
 	if tc.FilterProxy && (len(tc.ProxyZoneIfaces) > 0 || len(tc.ProxyTunnelIfaces) > 0) {
 		w("  chain proxy_redirect {")
 		w("    type nat hook prerouting priority dstnat - 20;")
+		v4c, v6c := splitFamilies(tc.ProxyClients)
+		// IPv6 is only ever redirected when the proxy could dial IPv6 out
+		// again, and when a v6 client has been opted in. An "ip saddr"
+		// guard alone never matches a v6 packet, which used to let every
+		// tunnel client's IPv6 fall straight through into the proxy.
+		if !tc.WANHasIPv6 || len(v6c) == 0 || !tc.IPv6 {
+			w("    meta nfproto ipv6 return comment \"ipv6 is never proxied here\"")
+		} else {
+			w("    ip6 saddr != { %s } return comment \"only redirect opted-in clients\"", strings.Join(v6c, ", "))
+		}
 		if len(tc.ProxyClients) > 0 {
 			// An explicit client list means only those devices have been
 			// given the CA; intercepting anything else would break it.
-			v4, v6 := splitFamilies(tc.ProxyClients)
-			if len(v4) > 0 {
-				w("    ip saddr != { %s } return comment \"only redirect opted-in clients\"", strings.Join(v4, ", "))
-			}
-			if len(v6) > 0 && tc.IPv6 {
-				w("    ip6 saddr != { %s } return", strings.Join(v6, ", "))
+			if len(v4c) > 0 {
+				w("    ip saddr != { %s } return comment \"only redirect opted-in clients\"", strings.Join(v4c, ", "))
+			} else {
+				w("    meta nfproto ipv4 return comment \"no opted-in ipv4 clients\"")
 			}
 		}
 		// Never redirect the node's own outbound traffic into its own proxy;
@@ -441,4 +465,26 @@ func dedupe(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// wanHasIPv6 reports whether the kernel has an IPv6 default route, which is
+// the only honest test of whether IPv6 traffic can be forwarded anywhere. It
+// reads /proc rather than shelling out, because the ruleset is rebuilt on
+// every tunnel change and must not depend on iproute2 being present.
+func wanHasIPv6() bool {
+	data, err := os.ReadFile("/proc/net/ipv6_route")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		// dest prefixlen src srcprefixlen nexthop metric refcnt use flags iface
+		if len(f) < 10 {
+			continue
+		}
+		if f[0] == strings.Repeat("0", 32) && f[1] == "00" && f[9] != "lo" {
+			return true
+		}
+	}
+	return false
 }

@@ -14,11 +14,11 @@ import (
 
 func TestTunnelRulesetHasTheThreeThingsAnExitNodeNeeds(t *testing.T) {
 	tc := TunnelConfig{
-		Interfaces: []string{"tailscale0", "wg0"},
-		Subnets:    []string{"100.64.0.0/10", "10.66.0.1/24"},
-		WAN:        "eth0",
+		Interfaces:  []string{"tailscale0", "wg0"},
+		Subnets:     []string{"100.64.0.0/10", "10.66.0.1/24"},
+		WAN:         "eth0",
 		RedirectDNS: true,
-		DNSPort:    53,
+		DNSPort:     53,
 	}
 	out := renderTunnelRuleset(tc)
 
@@ -218,5 +218,46 @@ func TestTunnelClientsAreNotInterceptedByDefault(t *testing.T) {
 	tc3 := BuildTunnelConfig(*cfg)
 	if len(tc3.Interfaces) > 0 && len(tc3.ProxyTunnelIfaces) == 0 {
 		t.Fatal("an explicit client list should opt in")
+	}
+}
+
+func TestTunnelWithoutIPv6UplinkRefusesAndNeverProxiesIPv6(t *testing.T) {
+	tc := TunnelConfig{
+		Interfaces: []string{"tailscale0"}, Subnets: []string{"100.64.0.0/10"}, WAN: "eth0",
+		RedirectDNS: true, DNSPort: 53, IPv6: true, WANHasIPv6: false,
+		FilterProxy: true, ProxyHTTP: 3128, ProxyTLS: 3129,
+		ProxyClients: []string{"192.168.50.24"}, ProxyTunnelIfaces: []string{"tailscale0"},
+	}
+	s := renderTunnelRuleset(tc)
+	if !strings.Contains(s, "meta nfproto ipv6 return") {
+		t.Fatalf("with no IPv6 uplink, IPv6 must never be redirected into the proxy:\n%s", s)
+	}
+	if !strings.Contains(s, `meta nfproto ipv6 counter reject with icmpv6 type addr-unreachable`) {
+		t.Fatal("with no IPv6 uplink, tunnel IPv6 must be refused so clients fall back to IPv4")
+	}
+	// The v6 guard has to come before the redirect rules.
+	if strings.Index(s, "meta nfproto ipv6 return") > strings.Index(s, "tcp dport 443 redirect") {
+		t.Fatal("the IPv6 guard must precede the redirect")
+	}
+	// The v4 opt-in guard is still there.
+	if !strings.Contains(s, "ip saddr != { 192.168.50.24 } return") {
+		t.Fatal("v4 opt-in guard missing")
+	}
+}
+
+func TestTunnelWithIPv6UplinkStillGuardsV6ByOptIn(t *testing.T) {
+	tc := TunnelConfig{
+		Interfaces: []string{"tailscale0"}, Subnets: []string{"100.64.0.0/10", "fd7a:115c:a1e0::/48"}, WAN: "eth0",
+		DNSPort: 53, IPv6: true, WANHasIPv6: true,
+		FilterProxy: true, ProxyHTTP: 3128, ProxyTLS: 3129,
+		ProxyClients: []string{"192.168.50.24"}, ProxyTunnelIfaces: []string{"tailscale0"},
+	}
+	s := renderTunnelRuleset(tc)
+	if strings.Contains(s, "reject with icmpv6") {
+		t.Fatal("with an IPv6 uplink there is nothing to refuse")
+	}
+	// No v6 client opted in: v6 still never proxied.
+	if !strings.Contains(s, "meta nfproto ipv6 return") {
+		t.Fatal("without a v6 client opted in, IPv6 must not be proxied even with an uplink")
 	}
 }

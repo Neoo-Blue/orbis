@@ -63,6 +63,61 @@ type Proxy struct {
 	// pins remembers which clients reject the certificate for which hosts,
 	// so a pinned app is spliced through instead of broken.
 	pins pinTracker
+
+	// spliceLog keeps pass-through failures visible without letting a
+	// broken client flood the journal.
+	spliceLog rateLog
+}
+
+// spliceFallback returns the name-based IPv4 target to try when the literal
+// destination could not be reached, or "" when there is nothing sensible
+// to try: no name to dial, or a failure that a different address would not
+// fix (a refused connection, a timeout).
+func spliceFallback(dst, sni string, err error) string {
+	if sni == "" || err == nil {
+		return ""
+	}
+	host, port, perr := net.SplitHostPort(dst)
+	if perr != nil {
+		return ""
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.To4() != nil {
+		// Only an IPv6 literal earns a v4 retry; a v4 failure is a real
+		// failure.
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "unreachable") && !strings.Contains(msg, "no route") {
+		return ""
+	}
+	return net.JoinHostPort(sni, port)
+}
+
+// rateLog emits at most one line per interval, with a count of what it
+// swallowed in between.
+type rateLog struct {
+	mu        sync.Mutex
+	last      time.Time
+	swallowed int
+}
+
+func (r *rateLog) maybe(log func(string, ...any), format string, args ...any) {
+	r.mu.Lock()
+	now := time.Now()
+	if now.Sub(r.last) < 30*time.Second {
+		r.swallowed++
+		r.mu.Unlock()
+		return
+	}
+	n := r.swallowed
+	r.swallowed = 0
+	r.last = now
+	r.mu.Unlock()
+	if n > 0 {
+		format += fmt.Sprintf(" (and %d more like it in the last 30s)", n)
+	}
+	log(format, args...)
 }
 
 type Stats struct {
@@ -84,6 +139,14 @@ type Stats struct {
 	// PinBypasses counts the times a client was spliced through because it
 	// kept rejecting the certificate (a pinned app, or no CA installed).
 	PinBypasses atomic.Int64
+	// SpliceFailed counts pass-through connections the proxy could not open
+	// to the origin. Until this existed, a whole class of breakage (every
+	// IPv6 connection from a tunnel client on a node with no IPv6 uplink)
+	// was invisible: counted as an error, never named.
+	SpliceFailed atomic.Int64
+	// SpliceFallback counts pass-through connections recovered by dialling
+	// the origin by name over IPv4 after the literal address was unreachable.
+	SpliceFallback atomic.Int64
 	// ServerStitched counts player responses whose ads are muxed into the
 	// content stream. Nothing can be stripped from those; counting them is
 	// what tells the difference between a filter that is broken and a stream
@@ -135,6 +198,7 @@ func (p *Proxy) Stats() map[string]any {
 		"inpage_stripped": p.stats.InPageStripped.Load(), "inpage_skipped": p.stats.InPageSkipped.Load(),
 		"inpage_segments": p.stats.InPageSegments.Load(), "inpage_probes": p.stats.InPageProbes.Load(),
 		"pin_bypasses": p.stats.PinBypasses.Load(), "pinned": p.pins.active(time.Now()),
+		"splice_failed": p.stats.SpliceFailed.Load(), "splice_fallback": p.stats.SpliceFallback.Load(),
 		"server_stitched": p.stats.ServerStitched.Load(),
 		"errors":          p.stats.Errors.Load(),
 		"bytes_in":        p.stats.BytesIn.Load(), "bytes_out": p.stats.BytesOut.Load(),
@@ -260,7 +324,7 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 		// Not TLS, or a truncated hello. Splice to the original destination
 		// rather than dropping: this path must never break a protocol we
 		// simply did not recognise.
-		p.splice(ctx, client, origDst, peeked)
+		p.splice(ctx, client, origDst, peeked, "")
 		return
 	}
 
@@ -268,28 +332,28 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 	if host == "" {
 		// No SNI: fall back to the destination address. Cannot mint a valid
 		// certificate for an unknown name, so splice.
-		p.splice(ctx, client, origDst, peeked)
+		p.splice(ctx, client, origDst, peeked, "")
 		return
 	}
 
 	clientIP := clientAddr(client)
 	if !p.shouldIntercept(host, clientIP) {
 		p.stats.Spliced.Add(1)
-		p.splice(ctx, client, origDst, peeked)
+		p.splice(ctx, client, origDst, peeked, host)
 		return
 	}
 	if p.pins.bypassed(clientIP, host, time.Now()) {
 		// This client has told us, by rejecting the certificate, that it
 		// will not accept interception for this host. Pass it through.
 		p.stats.Spliced.Add(1)
-		p.splice(ctx, client, origDst, peeked)
+		p.splice(ctx, client, origDst, peeked, host)
 		return
 	}
 
 	leaf, err := p.ca.Leaf(host)
 	if err != nil {
 		p.stats.Errors.Add(1)
-		p.splice(ctx, client, origDst, peeked)
+		p.splice(ctx, client, origDst, peeked, host)
 		return
 	}
 
@@ -672,12 +736,31 @@ func clientMatches(addr netip.Addr, spec string) bool {
 }
 
 // splice copies bytes in both directions without looking at them.
-func (p *Proxy) splice(ctx context.Context, client net.Conn, dst string, prefix []byte) {
+//
+// The origin is dialled at the address the client asked for. When that
+// address is unreachable from here (the usual case: a client with IPv6 on a
+// node with no IPv6 uplink) and the client named the host in its hello, the
+// same host is dialled by name over IPv4 instead. TLS is end to end, so the
+// origin does not care which of its addresses was used, and the client gets
+// its page instead of a connection that opened and then died.
+func (p *Proxy) splice(ctx context.Context, client net.Conn, dst string, prefix []byte, sni string) {
 	d := net.Dialer{Timeout: 10 * time.Second}
 	server, err := d.DialContext(ctx, "tcp", dst)
 	if err != nil {
-		p.stats.Errors.Add(1)
-		return
+		if alt := spliceFallback(dst, sni, err); alt != "" {
+			var err2 error
+			server, err2 = d.DialContext(ctx, "tcp4", alt)
+			if err2 == nil {
+				p.stats.SpliceFallback.Add(1)
+				err = nil
+			}
+		}
+		if err != nil {
+			p.stats.Errors.Add(1)
+			p.stats.SpliceFailed.Add(1)
+			p.spliceLog.maybe(p.log, "mitm: pass-through to %s failed: %v", dst, err)
+			return
+		}
 	}
 	defer server.Close()
 	_ = client.SetReadDeadline(time.Time{})

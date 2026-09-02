@@ -116,3 +116,19 @@ func TestRejectedCertificateIgnoresTimeouts(t *testing.T) {
 		t.Fatal("a bad-certificate alert is a rejection")
 	}
 }
+
+func TestSpliceFallbackOnlyForUnreachableIPv6WithAName(t *testing.T) {
+	unreach := errors.New("dial tcp [2603:1063:8::371]:443: connect: network is unreachable")
+	if got := spliceFallback("[2603:1063:8::371]:443", "www.linkedin.com", unreach); got != "www.linkedin.com:443" {
+		t.Fatalf("an unreachable IPv6 origin with a name should retry by name over v4, got %q", got)
+	}
+	if got := spliceFallback("[2603:1063:8::371]:443", "", unreach); got != "" {
+		t.Fatal("no name, nothing to retry")
+	}
+	if got := spliceFallback("13.107.42.14:443", "www.linkedin.com", errors.New("connect: network is unreachable")); got != "" {
+		t.Fatal("an IPv4 failure is a real failure")
+	}
+	if got := spliceFallback("[2603:1063:8::371]:443", "www.linkedin.com", errors.New("connect: connection refused")); got != "" {
+		t.Fatal("a refusal is not fixed by a different address")
+	}
+}

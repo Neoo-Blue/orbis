@@ -16,8 +16,10 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
 	"github.com/Neoo-Blue/orbis/internal/intercept"
+	"github.com/Neoo-Blue/orbis/internal/issues"
 	"github.com/Neoo-Blue/orbis/internal/report"
 	"github.com/Neoo-Blue/orbis/internal/store"
+	"github.com/google/uuid"
 )
 
 // App implements ai.Backend. Every one of these methods is also what the REST
@@ -68,6 +70,81 @@ func (a *App) AdCandidates(status string, minScore float64, limit int) ([]store.
 	return a.Store.Candidates(status, minScore, limit)
 }
 
+// LookupIP places an address for the assistant: where it is, whose network it
+// is on, its reverse name, and whether it is one of our own devices.
+func (a *App) LookupIP(ip string) (map[string]any, error) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return nil, fmt.Errorf("%q is not an IP address", ip)
+	}
+	out := map[string]any{"ip": addr.String(), "private": geoip.IsPrivate(addr)}
+	if c := a.Registry.ByIP(addr); c != nil {
+		name := c.Label
+		if name == "" {
+			name = c.Hostname
+		}
+		out["device"] = map[string]any{
+			"id": c.ID, "name": name, "mac": c.MAC, "vendor": c.Vendor, "type": c.DeviceType, "online": c.Online,
+		}
+	}
+	if !geoip.IsPrivate(addr) {
+		loc := a.Geo.LookupAddr(addr)
+		out["country"] = loc.Country
+		out["country_name"] = loc.CountryName
+		out["city"] = loc.City
+		out["asn"] = loc.ASN
+		out["network"] = loc.ASOrg
+		out["anycast"] = loc.Anycast
+		out["accuracy"] = loc.Accuracy
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Second)
+	defer cancel()
+	if names, err := net.DefaultResolver.LookupAddr(ctx, addr.String()); err == nil && len(names) > 0 {
+		for i := range names {
+			names[i] = strings.TrimSuffix(names[i], ".")
+		}
+		out["reverse_dns"] = names
+	}
+	return out, nil
+}
+
+// YouTubeStatus is the Lounge engine's state, for the assistant.
+func (a *App) YouTubeStatus() any {
+	if a.Lounge == nil {
+		return nil
+	}
+	return a.Lounge.Status()
+}
+
+// Series reads a per-minute metric, downsampled when buckets is set.
+func (a *App) Series(metric string, since time.Time, buckets int) ([]map[string]any, error) {
+	if buckets > 0 {
+		return a.Store.SeriesDownsampled(metric, since, buckets)
+	}
+	return a.Store.Series(metric, since)
+}
+
+func (a *App) CountryTotals(since time.Time) ([]map[string]any, error) {
+	return a.Store.CountryTotals(since)
+}
+
+func (a *App) Leases() ([]store.Lease, error) { return a.Store.Leases() }
+
+func (a *App) AuditLog(limit int) ([]store.AuditEntry, error) { return a.Store.AuditLog(limit) }
+
+// recordBrief persists an AI brief as an event and, when asked, pushes it
+// through the notification sinks like any other event.
+func (a *App) recordBrief(ev store.Event, notify bool) {
+	_ = a.Store.AddEvent(ev)
+	if notify && a.Notifier != nil {
+		a.Notifier.Send(ev)
+	}
+	a.Bus.Publish(Event{Type: "event.new", Data: map[string]any{
+		"severity": ev.Severity, "category": ev.Category, "title": ev.Title, "detail": ev.Detail,
+	}})
+	a.Bus.Publish(Event{Type: "ai.brief", Data: ev.Data})
+}
+
 // SystemStatus is the single call the dashboard and the assistant both use to
 // answer "is everything working".
 func (a *App) SystemStatus() map[string]any {
@@ -96,15 +173,23 @@ func (a *App) SystemStatus() map[string]any {
 	if a.CA != nil {
 		status["ca"] = a.CA.Info()
 	}
-	status["ai"] = map[string]any{
-		"enabled":     cfg.AI.Enabled,
-		"configured":  a.AI.Configured(),
-		"provider":    cfg.AI.Provider,
-		"model":       cfg.AI.Model,
-		"fast_model":  cfg.AI.FastModel,
-		"allow_write": cfg.AI.AllowWrite,
-		"anomaly":     cfg.AI.Anomaly.Enabled,
+	aiStatus := map[string]any{
+		"enabled":       cfg.AI.Enabled,
+		"configured":    a.AI.Configured(),
+		"provider":      cfg.AI.Provider,
+		"model":         cfg.AI.Model,
+		"fast_model":    cfg.AI.FastModel,
+		"allow_write":   cfg.AI.AllowWrite,
+		"anomaly":       cfg.AI.Anomaly.Enabled,
+		"prefer_free":   cfg.AI.PreferFree,
+		"brief_enabled": cfg.AI.Brief.Enabled,
 	}
+	if r := a.AI.Router(); r != nil {
+		aiStatus["active_model"] = r.ActiveModel(cfg.AI)
+		aiStatus["free_today"] = r.FreeRequestsToday()
+		aiStatus["free_budget"] = cfg.AI.FreeDailyBudget
+	}
+	status["ai"] = aiStatus
 	return status
 }
 
@@ -370,7 +455,117 @@ func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error
 // ---- build / backup support ----
 
 // SetBuild records the version string for the status surface and backups.
-func (a *App) SetBuild(v string) { a.build = v }
+func (a *App) SetBuild(v string) {
+	a.build = v
+	if a.Issues != nil {
+		a.Issues.SetVersion(v)
+	}
+}
+
+// ---- memory and the specialist ----
+
+func (a *App) Notes(limit int) ([]store.Note, error) { return a.Store.Notes(limit) }
+
+func (a *App) SaveNote(note, source string) (*store.Note, error) {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return nil, fmt.Errorf("note is empty")
+	}
+	if len(note) > 1000 {
+		note = note[:1000]
+	}
+	n := store.Note{ID: uuid.NewString(), TS: time.Now(), Note: note, Source: source}
+	if err := a.Store.SaveNote(n); err != nil {
+		return nil, err
+	}
+	a.Store.Audit(source, "note.save", n.ID, "", note, "ok")
+	return &n, nil
+}
+
+func (a *App) DeleteNote(id string) error {
+	if err := a.Store.DeleteNote(id); err != nil {
+		return err
+	}
+	a.Store.Audit("api", "note.delete", id, "", "", "ok")
+	return nil
+}
+
+func (a *App) Recommendations(status string, limit int) ([]store.Recommendation, error) {
+	return a.Store.Recommendations(status, limit)
+}
+
+// DecideRecommendation applies the operator's answer. Accepting an allow adds
+// the domain to the allowlist; accepting a block adds a wildcard block. Both
+// go through the same paths the UI uses, so they land in the audit log and
+// the matcher is rebuilt immediately. Dismissals are remembered.
+func (a *App) DecideRecommendation(id, decision, actor string) (*store.Recommendation, error) {
+	rec, err := a.Store.Recommendation(id)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return nil, fmt.Errorf("no such recommendation")
+	}
+	switch decision {
+	case "accept":
+		note := "specialist: " + rec.Reason
+		switch rec.Kind {
+		case "allow":
+			if err := a.AllowDomain(rec.Domain, note); err != nil {
+				return nil, err
+			}
+			a.FlushDNSCache(rec.Domain)
+		case "block":
+			if err := a.BlockDomain(rec.Domain, true, note); err != nil {
+				return nil, err
+			}
+			a.FlushDNSCache(rec.Domain)
+		}
+		if err := a.Store.DecideRecommendation(id, "accepted", actor); err != nil {
+			return nil, err
+		}
+	case "dismiss":
+		if err := a.Store.DecideRecommendation(id, "dismissed", actor); err != nil {
+			return nil, err
+		}
+	case "reopen":
+		if err := a.Store.DecideRecommendation(id, "open", actor); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("decision must be accept, dismiss or reopen")
+	}
+	a.Store.Audit(actor, "recommendation."+decision, rec.Kind+":"+rec.Domain, "", rec.Reason, "ok")
+	a.Bus.Publish(Event{Type: "ai.recommendation", Data: map[string]any{"id": id, "decision": decision}})
+	return a.Store.Recommendation(id)
+}
+
+// ReportIssue records a problem raised by a person (through the form or the
+// assistant) and files it when reporting is enabled.
+func (a *App) ReportIssue(ctx context.Context, title, detail, actor string) (*store.Issue, error) {
+	if a.Issues == nil {
+		return nil, fmt.Errorf("problem recording is unavailable")
+	}
+	source := "user"
+	if strings.HasPrefix(actor, "assistant") {
+		source = "assistant"
+	}
+	issue, err := a.Issues.Record(ctx, issues.Input{
+		Severity: store.SevNotice, Category: "report", Title: title, Detail: detail, Source: source,
+	})
+	if err != nil || issue == nil {
+		return issue, err
+	}
+	a.Store.Audit(actor, "issue.create", issue.ID, "", issue.Title, "ok")
+	if a.Cfg.Snapshot().Issues.GitHub.Enabled {
+		if filed, err := a.Issues.Report(ctx, issue.ID, false); err == nil && filed != nil {
+			return filed, nil
+		} else if err != nil {
+			a.log("issues: report failed: %v", err)
+		}
+	}
+	return issue, nil
+}
 
 // Build returns the version string this daemon was compiled as.
 func (a *App) Build() string { return a.build }

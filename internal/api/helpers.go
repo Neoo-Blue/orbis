@@ -285,6 +285,54 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 		return setBool(&c.AI.Anomaly.NewDeviceAlert, raw)
 	case "ai.anomaly.interval_minutes":
 		return setInt(&c.AI.Anomaly.IntervalMinutes, raw)
+	case "ai.prefer_free":
+		return setBool(&c.AI.PreferFree, raw)
+	case "ai.auto_discover":
+		return setBool(&c.AI.AutoDiscover, raw)
+	case "ai.model_chain":
+		return setStrSlice(&c.AI.ModelChain, raw)
+	case "ai.fast_model_chain":
+		return setStrSlice(&c.AI.FastModelChain, raw)
+	case "ai.probe_interval_hours":
+		return setInt(&c.AI.ProbeIntervalHours, raw)
+	case "ai.free_daily_budget":
+		return setInt(&c.AI.FreeDailyBudget, raw)
+	case "ai.brief.enabled":
+		return setBool(&c.AI.Brief.Enabled, raw)
+	case "ai.brief.interval_hours":
+		return setInt(&c.AI.Brief.IntervalHours, raw)
+	case "ai.brief.notify":
+		return setBool(&c.AI.Brief.Notify, raw)
+	case "ai.review.enabled":
+		return setBool(&c.AI.Review.Enabled, raw)
+	case "ai.review.interval_hours":
+		return setInt(&c.AI.Review.IntervalHours, raw)
+	case "ai.review.max_suggestions":
+		return setInt(&c.AI.Review.MaxSuggestions, raw)
+
+	case "issues.enabled":
+		return setBool(&c.Issues.Enabled, raw)
+	case "issues.auto_capture":
+		return setBool(&c.Issues.AutoCapture, raw)
+	case "issues.redact_extra":
+		return setStrSlice(&c.Issues.RedactExtra, raw)
+	case "issues.github.enabled":
+		return setBool(&c.Issues.GitHub.Enabled, raw)
+	case "issues.github.repo":
+		return setStr(&c.Issues.GitHub.Repo, raw)
+	case "issues.github.token":
+		if v, ok := raw.(string); ok && v != config.MaskedSecret {
+			c.Issues.GitHub.Token = v
+			return true
+		}
+	case "issues.github.relay_url":
+		return setStr(&c.Issues.GitHub.RelayURL, raw)
+	case "issues.github.auto_report":
+		return setBool(&c.Issues.GitHub.AutoReport, raw)
+	case "issues.github.max_per_day":
+		return setInt(&c.Issues.GitHub.MaxPerDay, raw)
+	case "issues.github.include_diagnostics":
+		return setBool(&c.Issues.GitHub.IncludeDiagnostics, raw)
 
 	case "capture.enabled":
 		return setBool(&c.Capture.Enabled, raw)

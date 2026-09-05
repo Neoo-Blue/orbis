@@ -22,6 +22,7 @@ import { FirewallPage } from './pages/Firewall'
 import { NetworkPage } from './pages/Network'
 import { VPNPage } from './pages/VPN'
 import { AssistantPage } from './pages/Assistant'
+import { ProblemsPage } from './pages/Problems'
 import { EventsPage } from './pages/Events'
 import { SettingsPage } from './pages/Settings'
 import { Login } from './pages/Login'
@@ -31,7 +32,7 @@ import { CommandPalette } from './CommandPalette'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems'
 
 const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
@@ -51,6 +52,7 @@ const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?
   { id: 'intercept', label: 'Interception', icon: 'route' },
   { id: 'vpn', label: 'VPN', icon: 'key' },
   { id: 'assistant', label: 'Assistant', icon: 'chat', group: 'Operate' },
+  { id: 'problems', label: 'Problems', icon: 'alert', group: 'Operate' },
   { id: 'events', label: 'Events', icon: 'bell' },
   { id: 'alerts', label: 'Alerts', icon: 'alert' },
   { id: 'reports', label: 'Reports', icon: 'grid' },
@@ -258,6 +260,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {route === 'network' && <NetworkPage status={status} />}
           {route === 'vpn' && <VPNPage />}
           {route === 'assistant' && <AssistantPage />}
+          {route === 'problems' && <ProblemsPage />}
           {route === 'events' && <EventsPage />}
           {route === 'alerts' && <AlertsPage />}
           {route === 'reports' && <ReportsPage />}

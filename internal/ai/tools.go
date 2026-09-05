@@ -28,6 +28,30 @@ type Backend interface {
 	SystemStatus() map[string]any
 	AdCandidates(status string, minScore float64, limit int) ([]store.AdCandidate, error)
 
+	// DiagnoseDomain traces why a name is blocked or allowed: rewrites,
+	// per-device policy, blocklists and CNAME uncloaking, in resolver order.
+	DiagnoseDomain(ctx context.Context, domain, clientID string, resolve bool) (map[string]any, error)
+	// LookupIP places an address: country, city, network operator, reverse
+	// name, and whether it is one of our own devices.
+	LookupIP(ip string) (map[string]any, error)
+	// YouTubeStatus is the Lounge ad-skipping engine's state.
+	YouTubeStatus() any
+	// Series reads a per-minute metric, optionally downsampled to buckets.
+	Series(metric string, since time.Time, buckets int) ([]map[string]any, error)
+	CountryTotals(since time.Time) ([]map[string]any, error)
+	Leases() ([]store.Lease, error)
+	AuditLog(limit int) ([]store.AuditEntry, error)
+
+	// Memory: operator notes and the specialist's standing suggestions.
+	Notes(limit int) ([]store.Note, error)
+	SaveNote(note, source string) (*store.Note, error)
+	DeleteNote(id string) error
+	Recommendations(status string, limit int) ([]store.Recommendation, error)
+	DecideRecommendation(id, decision, actor string) (*store.Recommendation, error)
+	// ReportIssue records a problem (scrubbed) and files it when reporting
+	// is enabled.
+	ReportIssue(ctx context.Context, title, detail, actor string) (*store.Issue, error)
+
 	// Mutating operations.
 	AddRule(r *store.Rule) error
 	DeleteRule(id string) error
@@ -144,8 +168,139 @@ func Tools(allowWrite bool) []ToolDef {
 				"limit":     numProp("Max records (default 30)"),
 			}, nil),
 		},
+		{
+			Name: "device_detail",
+			Description: "Everything about one device in one call: identity, whether it is " +
+				"online, what it talked to most, what was blocked for it, and its recent " +
+				"events. Pass client_id when known, otherwise a search term (name, IP, MAC, " +
+				"vendor). Use this before answering \"what is the TV doing\".",
+			Schema: objSchema(map[string]any{
+				"client_id": strProp("The device id"),
+				"search":    strProp("Find the device by hostname, label, IP, MAC or vendor"),
+				"hours":     numProp("Time window in hours (default 24, max 720)"),
+			}, nil),
+		},
+		{
+			Name: "explain_domain",
+			Description: "Why a domain is blocked or allowed on this network, as a trace in the " +
+				"order the resolver decides: rewrites, per-device policy, the blocklists " +
+				"(with the list and rule that matched), and CNAME uncloaking. The definitive " +
+				"answer to \"why is X not loading\" and \"is Y blocked\".",
+			Schema: objSchema(map[string]any{
+				"domain":    strProp("The hostname to explain"),
+				"client_id": strProp("Optional device, so per-device policy is included"),
+				"resolve":   boolProp("Also resolve the name through this node to follow CNAMEs (default true)"),
+			}, []string{"domain"}),
+		},
+		{
+			Name: "lookup_ip",
+			Description: "Who an IP address belongs to: country, city, network operator (ASN), " +
+				"reverse DNS, whether it is anycast, whether it is a device on this network, " +
+				"and the recent connections to it.",
+			Schema: objSchema(map[string]any{
+				"ip": strProp("IPv4 or IPv6 address"),
+			}, []string{"ip"}),
+		},
+		{
+			Name: "youtube_status",
+			Description: "The YouTube ad-skipping engine: paired televisions, whether each is " +
+				"online, and per-screen ad counts (skipped, played, time saved). Use for any " +
+				"question about YouTube ads on TVs.",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "traffic_timeline",
+			Description: "A metric over time as evenly spaced points, for questions like " +
+				"\"when was the network busiest\" or \"did blocking spike overnight\".",
+			Schema: objSchema(map[string]any{
+				"metric": enumProp("Which series", []string{
+					"throughput_in", "throughput_out", "dns_queries_total", "dns_blocked_total", "flows_active",
+				}),
+				"hours":  numProp("Look back this many hours (default 6, max 168)"),
+				"points": numProp("How many points to return (default 24, max 200)"),
+			}, []string{"metric"}),
+		},
+		{
+			Name:        "country_breakdown",
+			Description: "Traffic by destination country: connections, bytes and blocked count per country.",
+			Schema: objSchema(map[string]any{
+				"hours": numProp("Time window in hours (default 24)"),
+				"limit": numProp("How many countries (default 15, max 50)"),
+			}, nil),
+		},
+		{
+			Name:        "dhcp_leases",
+			Description: "Current DHCP leases handed out by this node: address, MAC, hostname, expiry, static or dynamic.",
+			Schema:      objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "audit_log",
+			Description: "Who changed what: every configuration change made through the UI, " +
+				"the API or the assistant, newest first.",
+			Schema: objSchema(map[string]any{
+				"limit":  numProp("Max entries (default 50, max 300)"),
+				"search": strProp("Filter by action, target or actor substring"),
+			}, nil),
+		},
+		{
+			Name: "list_recommendations",
+			Description: "The blocklist specialist's standing suggestions: domains that look " +
+				"wrongly blocked (allow), new ad or tracking hosts worth blocking (block), and " +
+				"things worth a look (investigate), each with the evidence. Open ones await a " +
+				"decision; accepted and dismissed ones are the operator's memory.",
+			Schema: objSchema(map[string]any{
+				"status": enumProp("Filter", []string{"open", "accepted", "dismissed", "expired"}),
+				"limit":  numProp("Max items (default 30)"),
+			}, nil),
+		},
+		{
+			Name: "list_notes",
+			Description: "Facts the operator asked to be remembered about this network (which " +
+				"device is whose, what a service is for, what not to block). Check these before " +
+				"calling anything suspicious.",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "remember",
+			Description: "Remember a fact about this network for future conversations, briefs and " +
+				"reviews. Use when the operator tells you something worth keeping: \"the NAS backs " +
+				"up to Backblaze at 3am\", \"192.168.50.24 is my phone\". One fact per call.",
+			Schema: objSchema(map[string]any{
+				"note": strProp("The fact, in one or two sentences"),
+			}, []string{"note"}),
+		},
+		{
+			Name:        "forget_note",
+			Description: "Delete a remembered fact by id (from list_notes).",
+			Schema: objSchema(map[string]any{
+				"id": strProp("The note id"),
+			}, []string{"id"}),
+		},
 
 		// ---- mutating ----
+		{
+			Name: "decide_recommendation",
+			Description: "Accept or dismiss one of the specialist's suggestions. Accepting an " +
+				"allow suggestion adds the domain to the allowlist; accepting a block suggestion " +
+				"blocks it and its subdomains. Dismissing is remembered so it is not suggested again.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"id":       strProp("The recommendation id"),
+				"decision": enumProp("What to do", []string{"accept", "dismiss"}),
+			}, []string{"id", "decision"}),
+		},
+		{
+			Name: "report_problem",
+			Description: "Record a problem with Orbis itself (a feature misbehaving, a wrong " +
+				"block that keeps coming back, a crash) so it can be fixed. The report is " +
+				"scrubbed of addresses, device names and keys on this node; if GitHub reporting " +
+				"is enabled it is filed on the project's issue board.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"title":  strProp("One line: what is wrong"),
+				"detail": strProp("What was expected, what happened, how to reproduce"),
+			}, []string{"title", "detail"}),
+		},
 		{
 			Name: "block_domain",
 			Description: "Add a domain to the local blocklist. Use wildcard to also cover every " +
@@ -284,6 +439,7 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"set_rule_enabled": true, "delete_firewall_rule": true, "apply_firewall": true,
 		"set_client_blocked": true, "label_client": true, "decide_ad_candidate": true,
 		"flush_dns_cache": true, "refresh_blocklists": true,
+		"decide_recommendation": true, "report_problem": true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -405,7 +561,140 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		return jsonOf(b.AdCandidates(strArg(args, "status"), floatArg(args, "min_score", 0),
 			intArg(args, "limit", 30, 200)))
 
+	case "device_detail":
+		return deviceDetail(b, args)
+
+	case "explain_domain":
+		domain := strArg(args, "domain")
+		if domain == "" {
+			return "", fmt.Errorf("domain is required")
+		}
+		resolve := true
+		if v, ok := args["resolve"].(bool); ok {
+			resolve = v
+		}
+		return jsonOf(b.DiagnoseDomain(ctx, domain, strArg(args, "client_id"), resolve))
+
+	case "lookup_ip":
+		ip := strArg(args, "ip")
+		if ip == "" {
+			return "", fmt.Errorf("ip is required")
+		}
+		info, err := b.LookupIP(ip)
+		if err != nil {
+			return "", err
+		}
+		since := time.Now().Add(-24 * time.Hour)
+		if flows, err := b.QueryFlows(store.FlowQuery{Since: &since, Search: ip, Limit: 10, OrderBy: "bytes"}); err == nil {
+			info["recent_connections"] = summarizeFlows(flows)
+		}
+		return jsonOf(info, nil)
+
+	case "youtube_status":
+		return jsonOf(b.YouTubeStatus(), nil)
+
+	case "traffic_timeline":
+		metric := strArg(args, "metric")
+		switch metric {
+		case "throughput_in", "throughput_out", "dns_queries_total", "dns_blocked_total", "flows_active":
+		default:
+			return "", fmt.Errorf("unknown metric %q", metric)
+		}
+		since := hoursAgo(args, "hours", 6, 168)
+		points, err := b.Series(metric, since, intArg(args, "points", 24, 200))
+		if err != nil {
+			return "", err
+		}
+		unit := "count"
+		if strings.HasPrefix(metric, "throughput") {
+			unit = "bytes_per_second"
+		}
+		return jsonOf(map[string]any{"metric": metric, "unit": unit, "points": points}, nil)
+
+	case "country_breakdown":
+		since := hoursAgo(args, "hours", 24, 720)
+		rows, err := b.CountryTotals(since)
+		if err != nil {
+			return "", err
+		}
+		if limit := intArg(args, "limit", 15, 50); len(rows) > limit {
+			rows = rows[:limit]
+		}
+		return jsonOf(map[string]any{"count": len(rows), "countries": rows}, nil)
+
+	case "dhcp_leases":
+		return jsonOf(b.Leases())
+
+	case "audit_log":
+		entries, err := b.AuditLog(intArg(args, "limit", 50, 300))
+		if err != nil {
+			return "", err
+		}
+		if needle := strings.ToLower(strArg(args, "search")); needle != "" {
+			filtered := entries[:0]
+			for _, e := range entries {
+				hay := strings.ToLower(e.Actor + " " + e.Action + " " + e.Target + " " + e.After)
+				if strings.Contains(hay, needle) {
+					filtered = append(filtered, e)
+				}
+			}
+			entries = filtered
+		}
+		return jsonOf(map[string]any{"count": len(entries), "entries": entries}, nil)
+
+	case "list_recommendations":
+		recs, err := b.Recommendations(strArg(args, "status"), intArg(args, "limit", 30, 200))
+		if err != nil {
+			return "", err
+		}
+		return jsonOf(map[string]any{"count": len(recs), "recommendations": recs}, nil)
+
+	case "list_notes":
+		return jsonOf(b.Notes(100))
+
+	case "remember":
+		note := strArg(args, "note")
+		if note == "" {
+			return "", fmt.Errorf("note is required")
+		}
+		n, err := b.SaveNote(note, "assistant ("+actor+")")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Remembered (id %s).", n.ID), nil
+
+	case "forget_note":
+		if err := b.DeleteNote(strArg(args, "id")); err != nil {
+			return "", err
+		}
+		return "Forgotten.", nil
+
 	// ---- mutating ----
+	case "decide_recommendation":
+		rec, err := b.DecideRecommendation(strArg(args, "id"), strArg(args, "decision"), actor)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s suggestion for %s is now %s.", rec.Kind, rec.Domain, rec.Status), nil
+
+	case "report_problem":
+		title := strArg(args, "title")
+		if title == "" {
+			return "", fmt.Errorf("title is required")
+		}
+		issue, err := b.ReportIssue(ctx, title, strArg(args, "detail"), "assistant ("+actor+")")
+		if err != nil {
+			return "", err
+		}
+		if issue == nil {
+			return "Problem recording is disabled in Settings → Problem reports.", nil
+		}
+		if issue.GitHubURL != "" {
+			return fmt.Sprintf("Recorded and filed: %s", issue.GitHubURL), nil
+		}
+		return fmt.Sprintf("Recorded locally as %q (status %s). It appears on the Problems page; GitHub reporting is %s.",
+			issue.Title, issue.Status, map[bool]string{true: "on", false: "off"}[issue.Status == "reported"]), nil
+
 	case "block_domain":
 		domain := strArg(args, "domain")
 		if domain == "" {
@@ -673,4 +962,98 @@ func enabledWord(b bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+// deviceDetail composes the per-device picture from the existing read paths,
+// so the model gets one result instead of five round-trips.
+func deviceDetail(b Backend, args map[string]any) (string, error) {
+	clients := b.Clients()
+	var target *store.Client
+	if id := strArg(args, "client_id"); id != "" {
+		for i := range clients {
+			if clients[i].ID == id {
+				target = &clients[i]
+				break
+			}
+		}
+		if target == nil {
+			return "", fmt.Errorf("no device with id %s", id)
+		}
+	} else if needle := strings.ToLower(strArg(args, "search")); needle != "" {
+		var matches []store.Client
+		for _, c := range clients {
+			if clientMatches(c, needle) {
+				matches = append(matches, c)
+			}
+		}
+		switch len(matches) {
+		case 0:
+			return "", fmt.Errorf("no device matches %q", needle)
+		case 1:
+			target = &matches[0]
+		default:
+			options := make([]map[string]any, 0, len(matches))
+			for _, c := range matches {
+				options = append(options, map[string]any{"id": c.ID, "name": displayName(c), "ip": c.IP, "vendor": c.Vendor, "online": c.Online})
+			}
+			return jsonOf(map[string]any{
+				"ambiguous": true, "message": "Several devices match; call again with one client_id.",
+				"matches": options,
+			}, nil)
+		}
+	} else {
+		return "", fmt.Errorf("client_id or search is required")
+	}
+
+	since := hoursAgo(args, "hours", 24, 720)
+	c := *target
+	out := map[string]any{
+		"id": c.ID, "name": displayName(c), "ip": c.IP, "mac": c.MAC, "vendor": c.Vendor,
+		"os": c.OSGuess, "type": c.DeviceType, "zone": c.Zone, "online": c.Online, "blocked": c.Blocked,
+		"policy_id": c.PolicyID, "vpn_route": c.VPNRoute, "notes": c.Notes,
+		"first_seen": c.FirstSeen.Format(time.RFC3339), "last_seen": c.LastSeen.Format(time.RFC3339),
+		"active_connections": c.ActiveFlows,
+		"rate_in_bps":        int64(c.RateIn * 8),
+		"rate_out_bps":       int64(c.RateOut * 8),
+		"lifetime_bytes_in":  c.RxBytes,
+		"lifetime_bytes_out": c.TxBytes,
+	}
+	if rows, err := b.TopDestinations(since, c.ID, 12); err == nil {
+		out["top_destinations"] = rows
+	}
+	if queries, err := b.DNSLog(since, c.ID, false, "", 300); err == nil {
+		blocked := 0
+		domains := map[string]int{}
+		var blockedNames []map[string]any
+		for _, q := range queries {
+			if q.Blocked {
+				blocked++
+				if len(blockedNames) < 15 {
+					blockedNames = append(blockedNames, map[string]any{"domain": q.Name, "blocked_by": q.BlockSource, "time": q.TS.Format(time.RFC3339)})
+				}
+			}
+			domains[q.Name]++
+		}
+		out["dns"] = map[string]any{
+			"lookups_sampled": len(queries), "blocked": blocked,
+			"distinct_domains": len(domains), "recent_blocked": blockedNames,
+		}
+	}
+	if events, err := b.Events(since, "", false, 300); err == nil {
+		var mine []map[string]any
+		for _, e := range events {
+			if e.ClientID == c.ID {
+				mine = append(mine, map[string]any{"time": e.TS.Format(time.RFC3339), "severity": e.Severity, "category": e.Category, "title": e.Title})
+			}
+		}
+		out["events"] = mine
+	}
+	active := 0
+	for _, f := range b.ActiveFlows(2000) {
+		if f.ClientID == c.ID {
+			active++
+		}
+	}
+	out["active_connections_now"] = active
+	return jsonOf(out, nil)
 }

@@ -301,4 +301,89 @@ var migrations = []string{
 		decided_at INTEGER NOT NULL,
 		PRIMARY KEY (client_id, host, scope)
 	)`,
+	// The assistant's model catalogue and probe results, so a restart keeps
+	// yesterday's ranking instead of running blind until the next probe.
+	`CREATE TABLE IF NOT EXISTS ai_models (
+		id          TEXT PRIMARY KEY,
+		name        TEXT NOT NULL DEFAULT '',
+		free        INTEGER NOT NULL DEFAULT 0,
+		context     INTEGER NOT NULL DEFAULT 0,
+		max_output  INTEGER NOT NULL DEFAULT 0,
+		tools       INTEGER NOT NULL DEFAULT 0,
+		reasoning   INTEGER NOT NULL DEFAULT 0,
+		structured  INTEGER NOT NULL DEFAULT 0,
+		tool_ok     INTEGER,
+		json_ok     INTEGER,
+		latency_ms  INTEGER NOT NULL DEFAULT 0,
+		last_probe  INTEGER NOT NULL DEFAULT 0,
+		last_error  TEXT NOT NULL DEFAULT '',
+		chat_rank   INTEGER NOT NULL DEFAULT 0,
+		fast_rank   INTEGER NOT NULL DEFAULT 0
+	)`,
+	// Per-day, per-model request counters. The free tier has a daily cap, and
+	// the router needs to know how much of it is spent across restarts.
+	`CREATE TABLE IF NOT EXISTS ai_usage (
+		day        TEXT NOT NULL,
+		model      TEXT NOT NULL,
+		requests   INTEGER NOT NULL DEFAULT 0,
+		failures   INTEGER NOT NULL DEFAULT 0,
+		tokens_in  INTEGER NOT NULL DEFAULT 0,
+		tokens_out INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (day, model)
+	)`,
+	// Periodic network briefs written by the assistant.
+	`CREATE TABLE IF NOT EXISTS ai_briefs (
+		id        TEXT PRIMARY KEY,
+		ts        INTEGER NOT NULL,
+		hours     INTEGER NOT NULL,
+		model     TEXT NOT NULL DEFAULT '',
+		severity  TEXT NOT NULL DEFAULT 'info',
+		headline  TEXT NOT NULL,
+		body      TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ai_briefs_ts ON ai_briefs(ts)`,
+	// Problems recorded on this node, scrubbed, with their GitHub state.
+	`CREATE TABLE IF NOT EXISTS issues (
+		id            TEXT PRIMARY KEY,
+		fingerprint   TEXT NOT NULL UNIQUE,
+		first_seen    INTEGER NOT NULL,
+		last_seen     INTEGER NOT NULL,
+		occurrences   INTEGER NOT NULL DEFAULT 1,
+		severity      TEXT NOT NULL,
+		category      TEXT NOT NULL,
+		title         TEXT NOT NULL,
+		detail        TEXT NOT NULL DEFAULT '',
+		diagnostics   TEXT NOT NULL DEFAULT '',
+		source        TEXT NOT NULL DEFAULT 'auto',
+		status        TEXT NOT NULL DEFAULT 'open',
+		github_number INTEGER NOT NULL DEFAULT 0,
+		github_url    TEXT NOT NULL DEFAULT '',
+		reported_at   INTEGER NOT NULL DEFAULT 0,
+		last_error    TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_issues_last ON issues(last_seen)`,
+	// The assistant's standing recommendations and the operator's decisions
+	// on them: the memory that stops the same suggestion coming back.
+	`CREATE TABLE IF NOT EXISTS ai_recommendations (
+		id          TEXT PRIMARY KEY,
+		ts          INTEGER NOT NULL,
+		kind        TEXT NOT NULL,
+		domain      TEXT NOT NULL,
+		reason      TEXT NOT NULL DEFAULT '',
+		confidence  REAL NOT NULL DEFAULT 0,
+		evidence    TEXT NOT NULL DEFAULT '{}',
+		status      TEXT NOT NULL DEFAULT 'open',
+		decided_at  INTEGER NOT NULL DEFAULT 0,
+		decided_by  TEXT NOT NULL DEFAULT '',
+		model       TEXT NOT NULL DEFAULT '',
+		UNIQUE (kind, domain)
+	)`,
+	// Free-text facts the operator (or the assistant, when asked) wants
+	// remembered about this network. Fed to every prompt.
+	`CREATE TABLE IF NOT EXISTS ai_notes (
+		id      TEXT PRIMARY KEY,
+		ts      INTEGER NOT NULL,
+		note    TEXT NOT NULL,
+		source  TEXT NOT NULL DEFAULT 'operator'
+	)`,
 }

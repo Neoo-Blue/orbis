@@ -136,6 +136,9 @@ func (s *Server) mount(r chi.Router) {
 		r.Post("/{id}/ack", s.handleAckEvent)
 	})
 
+	s.mountAI(r)
+	s.mountIssues(r)
+
 	r.Route("/chat", func(r chi.Router) {
 		r.Get("/conversations", s.handleConversations)
 		r.Get("/conversations/{id}", s.handleConversation)
@@ -1245,6 +1248,11 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			// Anything that changes which interfaces carry tunnel traffic,
 			// or where it egresses, invalidates the tunnel ruleset.
 			s.app.SyncTunnelRules()
+		case key == "ai.enabled", key == "ai.provider", key == "ai.api_key", key == "ai.base_url",
+			key == "ai.auto_discover":
+			// A new provider or key deserves a fresh ranking straight away
+			// rather than at the next scheduled probe.
+			s.app.AI.Router().RequestProbe()
 		}
 	}
 	writeOK(w, map[string]any{"applied": applied, "config": s.cfg.Redacted()})

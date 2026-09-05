@@ -1,11 +1,17 @@
 // Package ai provides the assistant: a chat interface that can actually
-// inspect and change the firewall, a classifier for ambiguous ad domains, and
-// a background analyser that looks for behaviour worth waking someone up for.
+// inspect and change the firewall, a classifier for ambiguous ad domains, a
+// background analyser that looks for behaviour worth waking someone up for,
+// and a periodic brief that says what happened while nobody was looking.
 //
 // Two provider shapes are supported — Anthropic's Messages API and the
 // OpenAI-compatible chat-completions shape used by OpenAI, OpenRouter and
 // Ollama — because an operator running this on their own hardware should not
 // be forced to send their network's traffic metadata to a specific vendor.
+//
+// On OpenRouter the client routes through free models by preference (see
+// router.go): the catalogue is probed on a timer, ranked, and walked at call
+// time with per-model cooldowns, so a busy or withdrawn free model costs one
+// failed attempt rather than a broken assistant.
 package ai
 
 import (
@@ -19,6 +25,7 @@ import (
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/store"
 )
 
 type Role string
@@ -67,23 +74,35 @@ type Response struct {
 	TokensIn   int
 	TokensOut  int
 	Model      string
+	// Attempts is how many models were tried before this one answered.
+	Attempts int
 }
 
 type Client struct {
-	cfg  *config.Config
-	http *http.Client
+	cfg    *config.Config
+	http   *http.Client
+	router *Router
+	log    func(string, ...any)
 }
 
-func NewClient(cfg *config.Config) *Client {
-	return &Client{
-		cfg: cfg,
-		http: &http.Client{
-			// Long enough for a slow local model, short enough that a hung
-			// provider does not wedge a background sweep forever.
-			Timeout: 180 * time.Second,
-		},
+// NewClient builds the client and its router. The store may be nil (tests);
+// the ranking and usage counters then live only in memory.
+func NewClient(cfg *config.Config, st *store.Store, log func(string, ...any)) *Client {
+	if log == nil {
+		log = func(string, ...any) {}
 	}
+	httpc := &http.Client{
+		// Long enough for a slow local model, short enough that a hung
+		// provider does not wedge a background sweep forever.
+		Timeout: 180 * time.Second,
+	}
+	c := &Client{cfg: cfg, http: httpc, log: log}
+	c.router = NewRouter(cfg, st, httpc, log)
+	return c
 }
+
+// Router exposes the model router for the API and metrics.
+func (c *Client) Router() *Router { return c.router }
 
 func (c *Client) Configured() bool {
 	cfg := c.cfg.Snapshot().AI
@@ -96,26 +115,108 @@ func (c *Client) Configured() bool {
 	return cfg.APIKey != "" || cfg.BaseURL != ""
 }
 
-// Complete runs one model turn.
+// Complete runs one model turn, walking the router's candidate list until a
+// model answers. A failure that is the same for every model (bad key, no
+// credit, caller went away) stops the walk immediately.
 func (c *Client) Complete(ctx context.Context, system string, msgs []Message, tools []ToolDef, useFast bool) (*Response, error) {
+	return c.complete(ctx, system, msgs, tools, useFast, false, nil)
+}
+
+// CompleteJSON is Complete for callers that need machine-readable output.
+// Reasoning is switched off where the model allows it (several free models
+// otherwise leak their chain of thought into the content and spend the whole
+// budget on it), and an answer that fails validate counts as a failed attempt
+// so the next candidate gets a turn instead of the caller getting garbage.
+func (c *Client) CompleteJSON(ctx context.Context, system string, msgs []Message, useFast bool, validate func(text string) error) (*Response, error) {
+	return c.complete(ctx, system, msgs, nil, useFast, true, validate)
+}
+
+func (c *Client) complete(ctx context.Context, system string, msgs []Message, tools []ToolDef, useFast, structured bool, validate func(string) error) (*Response, error) {
 	cfg := c.cfg.Snapshot().AI
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("AI is disabled in configuration")
 	}
-	model := cfg.Model
-	if useFast && cfg.FastModel != "" {
-		model = cfg.FastModel
+	fam := familyChat
+	if useFast {
+		fam = familyFast
 	}
-	if model == "" {
+	candidates := c.router.Candidates(cfg, fam)
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no model configured")
 	}
 
+	var lastErr error
+	for i, model := range candidates {
+		resp, err := c.completeOnce(ctx, cfg, model, fam, structured, system, msgs, tools)
+		if err == nil && validate != nil {
+			if verr := validate(resp.Text); verr != nil {
+				err = &ProviderError{Status: 200, Message: "output was not the expected JSON: " + trimErr(verr.Error())}
+				resp = nil
+			}
+		}
+		c.router.Report(model, err, resp)
+		if err == nil {
+			if resp.Model == "" {
+				resp.Model = model
+			}
+			resp.Attempts = i + 1
+			return resp, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if _, retriable := classify(err); !retriable {
+			return nil, err
+		}
+		if i+1 < len(candidates) {
+			c.log("ai: %s: %s; trying %s", model, trimErr(err.Error()), candidates[i+1])
+		}
+	}
+	if len(candidates) > 1 {
+		return nil, fmt.Errorf("all %d models failed, last (%s): %w", len(candidates), candidates[len(candidates)-1], lastErr)
+	}
+	return nil, lastErr
+}
+
+// completeOnce sends one request to one model. structured asks for reasoning
+// to be switched off regardless of family, for callers that parse the output.
+func (c *Client) completeOnce(ctx context.Context, cfg config.AIConfig, model string, fam family, structured bool, system string, msgs []Message, tools []ToolDef) (*Response, error) {
+	if model == "" {
+		return nil, fmt.Errorf("no model configured")
+	}
 	switch strings.ToLower(cfg.Provider) {
 	case "", "anthropic":
 		return c.completeAnthropic(ctx, cfg, model, system, msgs, tools)
 	default:
-		return c.completeOpenAI(ctx, cfg, model, system, msgs, tools)
+		opts := requestOptions{maxTokens: orDefault(cfg.MaxTokens, 4096)}
+		if c.router != nil {
+			opts = c.router.options(cfg, model, fam)
+			if structured && !c.router.isLocked(model) && isOpenRouter(cfg) {
+				opts.reasoningOff = true
+			}
+		}
+		resp, err := c.completeOpenAI(ctx, cfg, model, opts, system, msgs, tools)
+		if err != nil && opts.reasoningOff && isReasoningLocked(err) {
+			// The model insists on thinking. Remember that and ask again
+			// plainly; this costs one round-trip once, not on every call.
+			if c.router != nil {
+				c.router.noteReasoningLocked(model)
+			}
+			opts.reasoningOff = false
+			return c.completeOpenAI(ctx, cfg, model, opts, system, msgs, tools)
+		}
+		return resp, err
 	}
+}
+
+func isReasoningLocked(err error) bool {
+	pe, ok := err.(*ProviderError)
+	if !ok || pe.status() != 400 {
+		return false
+	}
+	m := strings.ToLower(pe.Message)
+	return strings.Contains(m, "reasoning")
 }
 
 // ---- Anthropic ----
@@ -215,7 +316,7 @@ func (c *Client) completeAnthropic(ctx context.Context, cfg config.AIConfig, mod
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if parsed.Error != nil {
-		return nil, fmt.Errorf("%s: %s", parsed.Error.Type, parsed.Error.Message)
+		return nil, &ProviderError{Status: 200, Message: parsed.Error.Type + ": " + parsed.Error.Message}
 	}
 
 	out := &Response{
@@ -239,7 +340,7 @@ func (c *Client) completeAnthropic(ctx context.Context, cfg config.AIConfig, mod
 
 // ---- OpenAI-compatible ----
 
-func (c *Client) completeOpenAI(ctx context.Context, cfg config.AIConfig, model, system string, msgs []Message, tools []ToolDef) (*Response, error) {
+func (c *Client) completeOpenAI(ctx context.Context, cfg config.AIConfig, model string, opts requestOptions, system string, msgs []Message, tools []ToolDef) (*Response, error) {
 	base := cfg.BaseURL
 	if base == "" {
 		switch strings.ToLower(cfg.Provider) {
@@ -277,16 +378,26 @@ func (c *Client) completeOpenAI(ctx context.Context, cfg config.AIConfig, model,
 				}
 				entry["tool_calls"] = calls
 			}
+			if entry["content"] == nil && len(m.ToolCalls) == 0 {
+				continue
+			}
 			apiMsgs = append(apiMsgs, entry)
 		default:
 			apiMsgs = append(apiMsgs, map[string]any{"role": "user", "content": m.Content})
 		}
 	}
 
+	maxTokens := opts.maxTokens
+	if maxTokens <= 0 {
+		maxTokens = orDefault(cfg.MaxTokens, 4096)
+	}
 	body := map[string]any{
 		"model":      model,
 		"messages":   apiMsgs,
-		"max_tokens": orDefault(cfg.MaxTokens, 4096),
+		"max_tokens": maxTokens,
+	}
+	if opts.reasoningOff {
+		body["reasoning"] = map[string]any{"enabled": false}
 	}
 	if len(tools) > 0 {
 		apiTools := make([]map[string]any, 0, len(tools))
@@ -334,18 +445,19 @@ func (c *Client) completeOpenAI(ctx context.Context, cfg config.AIConfig, model,
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 		} `json:"usage"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
+		Error *providerErrorBody `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if parsed.Error != nil {
-		return nil, fmt.Errorf("%s", parsed.Error.Message)
+		// OpenRouter delivers upstream failures inside an HTTP 200 body.
+		// Surface the upstream code so the router can tell a rate limit
+		// from a broken model.
+		return nil, &ProviderError{Status: 200, Code: parsed.Error.code(), Message: parsed.Error.text()}
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, fmt.Errorf("model returned no choices")
+		return nil, &ProviderError{Status: 200, Message: "model returned no choices"}
 	}
 	choice := parsed.Choices[0]
 	out := &Response{
@@ -364,7 +476,55 @@ func (c *Client) completeOpenAI(ctx context.Context, cfg config.AIConfig, model,
 			ID: tc.ID, Name: tc.Function.Name, Input: json.RawMessage(args),
 		})
 	}
+	if len(out.ToolCalls) == 0 && strings.TrimSpace(out.Text) == "" {
+		// A reasoning model that spent the whole budget thinking, or a
+		// provider hiccup. Either way there is nothing to show; the next
+		// candidate gets a turn.
+		return nil, &ProviderError{Status: 200, Message: fmt.Sprintf("empty completion (finish_reason=%s)", orDefaultStr(choice.FinishReason, "unknown"))}
+	}
 	return out, nil
+}
+
+// providerErrorBody is the error object OpenAI-shaped providers return. The
+// code arrives as a number from OpenRouter and as a string from others.
+type providerErrorBody struct {
+	Message  string          `json:"message"`
+	Code     json.RawMessage `json:"code"`
+	Metadata struct {
+		Raw          string `json:"raw"`
+		ProviderName string `json:"provider_name"`
+	} `json:"metadata"`
+}
+
+func (e *providerErrorBody) code() int {
+	if len(e.Code) == 0 {
+		return 0
+	}
+	var n int
+	if err := json.Unmarshal(e.Code, &n); err == nil {
+		return n
+	}
+	var s string
+	if err := json.Unmarshal(e.Code, &s); err == nil {
+		fmt.Sscanf(s, "%d", &n)
+	}
+	return n
+}
+
+func (e *providerErrorBody) text() string {
+	msg := strings.TrimSpace(e.Message)
+	if raw := strings.TrimSpace(e.Metadata.Raw); raw != "" && !strings.Contains(msg, raw) {
+		// "Provider returned error" alone says nothing; the raw upstream
+		// text ("temporarily rate-limited upstream") is the useful part.
+		if len(raw) > 200 {
+			raw = raw[:200] + "…"
+		}
+		msg = msg + " (" + raw + ")"
+	}
+	if msg == "" {
+		msg = "unknown provider error"
+	}
+	return msg
 }
 
 func (c *Client) post(ctx context.Context, url string, body any, headers map[string]string) ([]byte, error) {
@@ -395,16 +555,31 @@ func (c *Client) post(ctx context.Context, url string, body any, headers map[str
 		// Surface the provider's own message: "insufficient credit" and
 		// "model not found" need different fixes and a generic 4xx hides that.
 		msg := strings.TrimSpace(string(raw))
+		var wrapped struct {
+			Error *providerErrorBody `json:"error"`
+		}
+		code := 0
+		if json.Unmarshal(raw, &wrapped) == nil && wrapped.Error != nil {
+			msg = wrapped.Error.text()
+			code = wrapped.Error.code()
+		}
 		if len(msg) > 500 {
 			msg = msg[:500]
 		}
-		return nil, fmt.Errorf("provider returned %d: %s", resp.StatusCode, msg)
+		return nil, &ProviderError{Status: resp.StatusCode, Code: code, Message: msg}
 	}
 	return raw, nil
 }
 
 func orDefault(v, def int) int {
 	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+func orDefaultStr(v, def string) string {
+	if v == "" {
 		return def
 	}
 	return v

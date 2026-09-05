@@ -260,9 +260,19 @@ func (m *Manager) Status() map[string]any {
 // Run keeps lists fresh in the background.
 func (m *Manager) Run(ctx context.Context) {
 	// Rebuild immediately from whatever is already stored so blocking works
-	// from the first second, then refresh from the network.
-	if err := m.Rebuild(); err != nil {
-		m.log("adblock: initial rebuild failed: %v", err)
+	// as early as possible, then refresh from the network. Until this first
+	// build lands the resolver answers unfiltered; the log line makes the
+	// length of that window visible.
+	m.mu.Lock()
+	built := !m.lastBuild.IsZero()
+	m.mu.Unlock()
+	if !built {
+		start := time.Now()
+		if err := m.Rebuild(); err != nil {
+			m.log("adblock: initial rebuild failed: %v", err)
+		} else {
+			m.log("adblock: initial index ready after %s; lookups before this were unfiltered", time.Since(start).Round(time.Millisecond))
+		}
 	}
 	go func() {
 		if err := m.UpdateAll(ctx, false); err != nil {

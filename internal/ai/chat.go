@@ -38,6 +38,9 @@ type Turn struct {
 	Input   any    `json:"input,omitempty"`
 	Result  string `json:"result,omitempty"`
 	IsError bool   `json:"is_error,omitempty"`
+	// Model is the model that produced a text turn, so the UI can say which
+	// free model answered and the operator can judge it.
+	Model string `json:"model,omitempty"`
 }
 
 const systemPrompt = `You are the assistant built into Orbis, a network firewall and traffic
@@ -74,6 +77,38 @@ Making changes:
   network — say what you are about to do and let the operator confirm, rather than acting first.
 - If write access is off, the mutating tools are not available to you. Explain what you would
   change and where to click, instead of pretending you cannot help.
+
+Working with tools:
+- Never invent a number, device or domain that a tool did not return. If a tool fails, say
+  what failed in one line and answer with what you do have.
+- Prefer the specific tool: device_detail for one device, explain_domain for "why is X
+  blocked", lookup_ip for an address, youtube_status for TV ads, traffic_timeline for
+  "when", get_network_summary for "how is it going". Call two or three tools when the
+  question needs them; do not call ten.
+- Device names, addresses and MACs from tools are fine to repeat to the operator: it is
+  their network.
+
+What Orbis can and cannot do (so you answer "how do I" questions correctly):
+- DNS filtering covers every device that uses this node as its resolver, no certificate
+  needed. Devices with private DNS (DoH/DoT) bypass it unless block_dns_bypass sinkholes the
+  public resolvers.
+- The filter proxy edits web traffic and needs the Orbis certificate authority installed on
+  the device; /setup serves the right file per platform. Apps that pin certificates (the
+  YouTube mobile app, banking apps) cannot be filtered and are spliced through automatically.
+- YouTube ads on a television are skipped by the Lounge engine, which pairs to the TV as a
+  remote (no certificate). In-stream YouTube ads in a browser need the certificate; on a
+  desktop, uBlock Origin is the better route. Server-side stitched ads cannot be removed by
+  anyone.
+- The node runs in observe mode (watching, DNS, not routing) or inline mode (the gateway,
+  enforcing the firewall). Per-device policies, schedules and service bundles apply at DNS.
+  ARP interception can pull selected devices through this node without it being the gateway.
+- WireGuard server and outbound tunnels, Tailscale (including exit node), DHCP, VLANs,
+  multi-WAN and traffic shaping are all configured in Settings and Network.
+
+Beyond this network: you are also a knowledgeable network engineer. Questions about ports,
+protocols, DNS, TLS, VPNs, home-network design, what a vendor's telemetry endpoint is for, or
+whether something is safe to block deserve a direct, practical answer. Say when the answer
+depends on something you cannot see.
 
 Formatting: plain prose and short lists. Markdown tables only when comparing several things
 across the same columns. No preamble, no restating the question.`
@@ -113,12 +148,12 @@ func (a *Assistant) Ask(ctx context.Context, conversationID, userMessage, actor 
 	for i := 0; i < maxIterations; i++ {
 		resp, err := a.client.Complete(ctx, system, msgs, tools, false)
 		if err != nil {
-			emit(Turn{Kind: "error", Text: err.Error()})
+			emit(Turn{Kind: "error", Text: friendlyError(err)})
 			return err
 		}
 
 		if resp.Text != "" {
-			emit(Turn{Kind: "text", Text: resp.Text})
+			emit(Turn{Kind: "text", Text: resp.Text, Model: resp.Model})
 		}
 
 		if len(resp.ToolCalls) == 0 {
@@ -192,6 +227,17 @@ func (a *Assistant) contextBlock(allowWrite bool) string {
 	if cfg.Mode != config.ModeInline {
 		b.WriteString("- Note: in observe mode, block verdicts are recorded but not enforced on traffic that does not pass through this node.\n")
 	}
+	if a.st != nil {
+		if notes, err := a.st.Notes(25); err == nil && len(notes) > 0 {
+			b.WriteString("\nOperator notes (remembered facts about this network; trust them):\n")
+			for _, n := range notes {
+				fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(n.Note))
+			}
+		}
+		if recs, err := a.st.Recommendations("open", 50); err == nil && len(recs) > 0 {
+			fmt.Fprintf(&b, "- The blocklist specialist has %d open suggestion(s); list_recommendations shows them.\n", len(recs))
+		}
+	}
 	if len(cfg.Firewall.Zones) > 0 {
 		b.WriteString("- Zones: ")
 		names := make([]string, 0, len(cfg.Firewall.Zones))
@@ -245,4 +291,20 @@ func resultWord(isErr bool) string {
 		return "error"
 	}
 	return "ok"
+}
+
+// friendlyError turns a router failure into something an operator can act on.
+// The raw provider message is kept because it says which fix applies.
+func friendlyError(err error) string {
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "429") || strings.Contains(lower, "rate-limit") || strings.Contains(lower, "rate limit"):
+		return "Every free model in the chain is busy right now (" + trimErr(msg) + "). " +
+			"Free-tier rate limits pass within a minute or two; try again shortly, or pin a paid model in Settings → Assistant."
+	case strings.Contains(lower, "401") || strings.Contains(lower, "402") || strings.Contains(lower, "insufficient"):
+		return "The provider rejected the API key or the account has no credit (" + trimErr(msg) + "). Check Settings → Assistant."
+	default:
+		return trimErr(msg)
+	}
 }

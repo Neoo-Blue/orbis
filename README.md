@@ -209,6 +209,36 @@ proxy can see it.
 
 **The one thing to know about the mobile app.** It will not be filtered from the network. Cast it.
 
+## The assistant, free models, and the periodic checks
+
+The built-in assistant talks to Anthropic, OpenAI, OpenRouter or a local Ollama. On
+OpenRouter it prefers the **free models**: the catalogue is fetched on a timer, every
+free model that can call tools is probed with a fixed tool round-trip and a two-domain
+classification, the survivors are ranked, and each request walks that ranking with
+short per-model cooldowns (a rate-limited free model costs one failed attempt, not a
+broken assistant). Your pinned model is the guaranteed last link. Usage is counted per
+UTC day against the free tier's 1,000-request cap. Settings → Assistant shows the
+ranking, the chains in effect, today's spend, and lets you pin your own order.
+
+On a schedule the assistant also writes a **network brief** (what happened, anything
+worth a look, node health) and runs a **blocklist review** that suggests names to allow
+(collateral damage: CDNs, first-party APIs, push and update hosts), names to block (from
+smart capture's evidence) and things to investigate. You accept or dismiss each one;
+decisions are remembered so a dismissed idea does not come back. `remember` lets you
+keep facts about your network that every prompt then sees.
+
+## Problem reports
+
+What goes wrong on a node is recorded on the **Problems** page: subsystem start
+failures, blocklists that stop parsing, an assistant that cannot reach any model, and
+anything you report yourself. Every record is scrubbed first: addresses, MAC addresses,
+device names, hostnames outside the project's own infrastructure, keys and email
+addresses become placeholders. Nothing leaves the node unless you enable GitHub
+reporting, and the preview shows the exact text before it is sent. Reports carry a
+fingerprint so the same bug from many nodes is one issue with a count. Use your own
+fine-grained token, or the project relay (`deploy/issue-relay`), which files on your
+behalf without a token and applies a second pass of redaction.
+
 ## Modes and placement
 
 **Observe** (the default) watches whatever traffic reaches it and records what it would have done.

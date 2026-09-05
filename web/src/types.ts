@@ -320,6 +320,111 @@ export interface ChatTurn {
   input?: unknown
   result?: string
   is_error?: boolean
+  model?: string
+}
+
+// ---- assistant plumbing ----
+
+export interface AIModelInfo {
+  id: string
+  name: string
+  free: boolean
+  context: number
+  max_output: number
+  tools: boolean
+  reasoning: boolean
+  structured: boolean
+  tool_ok: boolean | null
+  json_ok: boolean | null
+  latency_ms: number
+  chat_rank: number
+  fast_rank: number
+  last_error: string
+  last_probe?: string
+  cooldown_until?: string
+  requests_today?: number
+  failures_today?: number
+  tokens_out_today?: number
+  reasoning_locked?: boolean
+}
+
+export interface AIModelsStatus {
+  provider: string
+  openrouter: boolean
+  prefer_free: boolean
+  auto_discover: boolean
+  configured: boolean
+  enabled: boolean
+  model: string
+  fast_model: string
+  models: AIModelInfo[]
+  chat_chain: string[]
+  fast_chain: string[]
+  usage: Array<{ model: string; requests: number; failures: number; tokens_in: number; tokens_out: number }>
+  requests_today: number
+  free_today: number
+  free_budget: number
+  free_cap: number
+  probing: boolean
+  probe_error: string
+  last_probe?: string
+  day: string
+}
+
+export interface Recommendation {
+  id: string
+  ts: string
+  kind: 'allow' | 'block' | 'investigate'
+  domain: string
+  reason: string
+  confidence: number
+  evidence?: Record<string, unknown>
+  status: 'open' | 'accepted' | 'dismissed' | 'expired'
+  decided_at?: string
+  decided_by?: string
+  model?: string
+}
+
+export interface AINote {
+  id: string
+  ts: string
+  note: string
+  source: string
+}
+
+export interface Issue {
+  id: string
+  fingerprint: string
+  first_seen: string
+  last_seen: string
+  occurrences: number
+  severity: 'info' | 'notice' | 'warning' | 'critical'
+  category: string
+  title: string
+  detail: string
+  diagnostics?: string
+  source: 'auto' | 'user' | 'assistant'
+  status: 'open' | 'reported' | 'dismissed' | 'resolved'
+  github_number?: number
+  github_url?: string
+  reported_at?: string
+  last_error?: string
+}
+
+export interface IssuesResponse {
+  issues: Issue[]
+  recording: { enabled: boolean; auto_capture: boolean }
+  github: { enabled: boolean; repo: string; ready: boolean; via: 'token' | 'relay'; auto_report: boolean; max_per_day: number }
+}
+
+export interface AIBrief {
+  id: string
+  ts: string
+  hours: number
+  model: string
+  severity: 'info' | 'notice' | 'warning'
+  headline: string
+  body: string
 }
 
 export interface ChatMessage {
@@ -430,6 +535,18 @@ export interface AppConfig {
       enabled: boolean; interval_minutes: number; beacon_min_samples: number
       beacon_jitter_tolerance: number; new_device_alert: boolean
       exfil_bytes_threshold: number; use_ai: boolean
+    }
+    prefer_free: boolean; auto_discover: boolean
+    model_chain: string[]; fast_model_chain: string[]
+    probe_interval_hours: number; free_daily_budget: number
+    brief: { enabled: boolean; interval_hours: number; notify: boolean }
+    review: { enabled: boolean; interval_hours: number; max_suggestions: number }
+  }
+  issues: {
+    enabled: boolean; auto_capture: boolean; redact_extra: string[]
+    github: {
+      enabled: boolean; repo: string; token: string; relay_url: string
+      auto_report: boolean; max_per_day: number; include_diagnostics: boolean
     }
   }
   geoip: { city_db: string; asn_db: string }

@@ -1,5 +1,6 @@
 import type {
-  AdCandidate, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery,
+  AdCandidate, AIBrief, AIModelsStatus, AINote, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery,
+  Issue, IssuesResponse, Recommendation,
   EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule,
   Summary, SysctlStatus, SystemStatus, TailscaleStatus, WGPeer,
   YouTubeStatus, DiscoveredScreen, LoungeDevice,
@@ -297,6 +298,32 @@ export const api = {
     list: (opts: { hours?: number; severity?: string; unack_only?: boolean; limit?: number } = {}) =>
       get<{ count: number; events: EventItem[] }>(`/events${qs(opts)}`),
     ack: (id: string) => post<{ ok: boolean }>(`/events/${id}/ack`),
+  },
+
+  ai: {
+    models: () => get<AIModelsStatus>('/ai/models'),
+    probe: () => post<{ started: boolean }>('/ai/probe'),
+    briefs: (limit = 10) => get<{ briefs: AIBrief[] }>(`/ai/briefs${qs({ limit })}`),
+    runBrief: (hours?: number) => post<AIBrief>('/ai/briefs/run', hours ? { hours } : {}),
+    recommendations: (status = '') =>
+      get<{ recommendations: Recommendation[]; review: { enabled: boolean; interval_hours: number } }>(`/ai/recommendations${qs({ status })}`),
+    decide: (id: string, decision: 'accept' | 'dismiss' | 'reopen') =>
+      post<{ recommendation: Recommendation }>(`/ai/recommendations/${id}`, { decision }),
+    runReview: (hours?: number) => post<{ added: Recommendation[] }>('/ai/review/run', hours ? { hours } : {}),
+    notes: () => get<{ notes: AINote[] }>('/ai/notes'),
+    addNote: (note: string) => post<{ note: AINote }>('/ai/notes', { note }),
+    deleteNote: (id: string) => del<{ ok: boolean }>(`/ai/notes/${id}`),
+  },
+
+  issues: {
+    list: (status = '') => get<IssuesResponse>(`/issues${qs({ status })}`),
+    create: (title: string, detail: string, report: boolean) =>
+      post<{ issue: Issue; report_error?: string }>('/issues', { title, detail, report }),
+    preview: (id: string) => get<{ title: string; body: string; labels: string[]; repo: string }>(`/issues/${id}/preview`),
+    report: (id: string) => post<{ issue: Issue }>(`/issues/${id}/report`),
+    setStatus: (id: string, status: 'open' | 'dismissed' | 'resolved') =>
+      post<{ issue: Issue }>(`/issues/${id}/status`, { status }),
+    remove: (id: string) => del<{ ok: boolean }>(`/issues/${id}`),
   },
 
   chat: {

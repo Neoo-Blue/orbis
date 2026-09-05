@@ -49,6 +49,7 @@ type Config struct {
 	VPN       VPNConfig       `yaml:"vpn" json:"vpn"`
 	Tailscale TailscaleConfig `yaml:"tailscale" json:"tailscale"`
 	AI        AIConfig        `yaml:"ai" json:"ai"`
+	Issues    IssuesConfig    `yaml:"issues" json:"issues"`
 	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
 	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
 
@@ -643,6 +644,95 @@ type AIConfig struct {
 	AllowWrite bool `yaml:"allow_write" json:"allow_write"`
 	// Anomaly turns on the background behavioural analyser.
 	Anomaly AnomalyConfig `yaml:"anomaly" json:"anomaly"`
+
+	// PreferFree walks the free-model chain before Model / FastModel. It only
+	// means anything on OpenRouter, where a credited account may use models
+	// with a ":free" suffix at no charge (1,000 requests a day, 20 a minute).
+	// Model and FastModel then act as the pinned fallback when every free
+	// candidate is busy, which on the free tier is ordinary weather.
+	PreferFree bool `yaml:"prefer_free" json:"prefer_free"`
+	// AutoDiscover fetches the provider's model catalogue on a timer, probes
+	// every free model that supports tool calling with a small, fixed test,
+	// and ranks them. Nothing about a model is written down in code: the
+	// ranking follows what the catalogue serves on the day.
+	AutoDiscover bool `yaml:"auto_discover" json:"auto_discover"`
+	// ModelChain / FastModelChain are operator-pinned orderings that take
+	// precedence over the probe ranking. Leave empty to trust the probe.
+	ModelChain     []string `yaml:"model_chain" json:"model_chain"`
+	FastModelChain []string `yaml:"fast_model_chain" json:"fast_model_chain"`
+	// ProbeIntervalHours between catalogue refreshes and re-probes.
+	ProbeIntervalHours int `yaml:"probe_interval_hours" json:"probe_interval_hours"`
+	// FreeDailyBudget is how many free-tier requests the router will spend per
+	// day before it stops offering free candidates and goes straight to the
+	// pinned model. OpenRouter caps a credited account at 1,000; leaving room
+	// under the cap keeps the last few requests of the day from failing.
+	FreeDailyBudget int `yaml:"free_daily_budget" json:"free_daily_budget"`
+	// Brief is the periodic AI network check.
+	Brief BriefConfig `yaml:"brief" json:"brief"`
+	// Review is the scheduled blocklist review: allow/block suggestions with
+	// the operator's decisions remembered.
+	Review ReviewConfig `yaml:"review" json:"review"`
+}
+
+// ReviewConfig schedules the ad-blocking specialist.
+type ReviewConfig struct {
+	Enabled       bool `yaml:"enabled" json:"enabled"`
+	IntervalHours int  `yaml:"interval_hours" json:"interval_hours"`
+	// MaxSuggestions caps how many open suggestions one review may add.
+	MaxSuggestions int `yaml:"max_suggestions" json:"max_suggestions"`
+}
+
+// IssuesConfig is the problem recorder: what goes wrong on this node is
+// written down locally, scrubbed of anything that identifies the network, and
+// optionally filed on the project's GitHub issue board so it can be fixed for
+// everyone. Nothing leaves the node unless GitHub reporting is switched on.
+type IssuesConfig struct {
+	// Enabled records problems locally. Safe to leave on: nothing is sent.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// AutoCapture turns warning and critical events, subsystem start
+	// failures and assistant outages into issue records without a click.
+	AutoCapture bool `yaml:"auto_capture" json:"auto_capture"`
+	// RedactExtra are additional strings to scrub from anything reported,
+	// on top of addresses, MACs, device names, keys and email addresses.
+	RedactExtra []string     `yaml:"redact_extra" json:"redact_extra"`
+	GitHub      GitHubReport `yaml:"github" json:"github"`
+}
+
+// GitHubReport files scrubbed issues on a GitHub repository, either directly
+// with the operator's own token or through a relay that holds the project's.
+type GitHubReport struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Repo is owner/name.
+	Repo string `yaml:"repo" json:"repo"`
+	// Token is a fine-grained personal access token with Issues: write on
+	// Repo. Secret; never returned by the API.
+	Token string `yaml:"token" json:"token"`
+	// RelayURL is an endpoint that files the issue on the node's behalf, for
+	// operators who have no write access to Repo. The same scrubbed payload
+	// is sent either way.
+	RelayURL string `yaml:"relay_url" json:"relay_url"`
+	// AutoReport files automatically captured issues without a click. User
+	// reports are always sent on request.
+	AutoReport bool `yaml:"auto_report" json:"auto_report"`
+	// MaxPerDay caps new issues filed automatically per UTC day.
+	MaxPerDay int `yaml:"max_per_day" json:"max_per_day"`
+	// IncludeDiagnostics attaches the scrubbed node snapshot (version,
+	// platform, subsystem states, recent log lines) to each report.
+	IncludeDiagnostics bool `yaml:"include_diagnostics" json:"include_diagnostics"`
+}
+
+// BriefConfig schedules the periodic network brief: the model reads the
+// window's summary (talkers, blocks, new devices, warnings, subsystem health)
+// and writes a short operator-facing note. It is the "did anything happen
+// while I was away" answer without having to ask.
+type BriefConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// IntervalHours between briefs. The window the brief covers is the same
+	// length, so consecutive briefs tile the day without gaps or overlap.
+	IntervalHours int `yaml:"interval_hours" json:"interval_hours"`
+	// Notify also sends each brief through the notification sinks (webhook,
+	// email) as an info event, rather than only recording it locally.
+	Notify bool `yaml:"notify" json:"notify"`
 }
 
 type AnomalyConfig struct {
@@ -859,6 +949,17 @@ func Default() *Config {
 			ExitNodeAllowLAN: true,
 			RouteTable:       52,
 		},
+		Issues: IssuesConfig{
+			Enabled:     true,
+			AutoCapture: true,
+			GitHub: GitHubReport{
+				Enabled:            false,
+				Repo:               "Neoo-Blue/orbis",
+				AutoReport:         true,
+				MaxPerDay:          5,
+				IncludeDiagnostics: true,
+			},
+		},
 		AI: AIConfig{
 			Enabled:    false,
 			Provider:   "anthropic",
@@ -874,6 +975,20 @@ func Default() *Config {
 				NewDeviceAlert:        true,
 				ExfilBytesThreshold:   256 << 20,
 				UseAI:                 false,
+			},
+			PreferFree:         true,
+			AutoDiscover:       true,
+			ProbeIntervalHours: 6,
+			FreeDailyBudget:    900,
+			Brief: BriefConfig{
+				Enabled:       false,
+				IntervalHours: 6,
+				Notify:        false,
+			},
+			Review: ReviewConfig{
+				Enabled:        false,
+				IntervalHours:  24,
+				MaxSuggestions: 8,
 			},
 		},
 	}
@@ -1133,6 +1248,9 @@ func (c *Config) Redacted() Config {
 	const mask = MaskedSecret
 	if cp.AI.APIKey != "" {
 		cp.AI.APIKey = mask
+	}
+	if cp.Issues.GitHub.Token != "" {
+		cp.Issues.GitHub.Token = mask
 	}
 	if cp.API.SessionKey != "" {
 		cp.API.SessionKey = mask

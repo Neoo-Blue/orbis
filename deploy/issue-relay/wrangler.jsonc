@@ -1,0 +1,18 @@
+{
+  // Orbis issue relay: files scrubbed problem reports from any Orbis node on
+  // the project's GitHub issue board, so operators do not need a token of
+  // their own. Deploy with `wrangler deploy`; set GITHUB_TOKEN as a secret.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "orbis-issue-relay",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+  "observability": { "enabled": true },
+  "vars": {
+    "REPO": "Neoo-Blue/orbis",
+    "MAX_PER_IP_PER_HOUR": "12",
+    "MAX_NEW_ISSUES_PER_DAY": "60"
+  },
+  "kv_namespaces": [
+    { "binding": "LIMITS", "id": "f982151f81fd47fa9beb525a462d9028" }
+  ]
+}

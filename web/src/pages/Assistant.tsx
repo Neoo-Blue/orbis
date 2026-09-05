@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, askAssistant } from '../api'
 import { usePoll } from '../hooks'
-import { Banner, Icons, Spinner, useToast } from '../ui'
-import { ago } from '../format'
-import type { ChatTurn } from '../types'
+import { Banner, Bar, Dot, Icons, Spinner, useToast } from '../ui'
+import { ago, num } from '../format'
+import type { AIBrief, ChatTurn, Recommendation } from '../types'
 import { uuid } from '../uuid'
 
 interface Bubble {
@@ -11,15 +11,20 @@ interface Bubble {
   role: 'user' | 'assistant'
   text: string
   tools: Array<{ tool: string; input?: unknown; result?: string; error?: boolean; pending: boolean }>
+  model?: string
 }
 
 const SUGGESTIONS = [
   'What is on my network right now?',
   'Anything unusual in the last few hours?',
   'Which device is using the most bandwidth, and what for?',
-  'Why is this domain being blocked?',
-  'Show me everything the smart TV talked to overnight',
-  'What ads did you block today?',
+  'Why is doubleclick.net blocked?',
+  'What did the TV talk to overnight?',
+  'How many YouTube ads were skipped this week?',
+  'When was the network busiest today?',
+  'Which countries does my traffic go to?',
+  'Explain what port 5353 is and whether I should block it',
+  'How do I install the certificate on an iPhone?',
 ]
 
 export function AssistantPage() {
@@ -33,9 +38,72 @@ export function AssistantPage() {
 
   const { data: status } = usePoll(() => api.status(), 30000)
   const { data: convs, refresh: refreshConvs } = usePoll(() => api.chat.conversations(), 0)
+  const { data: models } = usePoll(() => api.ai.models(), 60000)
+  const { data: briefs, refresh: refreshBriefs } = usePoll(() => api.ai.briefs(1), 120000)
+  const [briefBusy, setBriefBusy] = useState(false)
+  const { data: recData, refresh: refreshRecs } = usePoll(() => api.ai.recommendations('open'), 60000)
+  const { data: notesData, refresh: refreshNotes } = usePoll(() => api.ai.notes(), 120000)
+  const [reviewBusy, setReviewBusy] = useState(false)
+  const [decideBusy, setDecideBusy] = useState<string | null>(null)
+  const [noteDraft, setNoteDraft] = useState('')
+  const [showNotes, setShowNotes] = useState(false)
 
-  const configured = Boolean((status?.ai as Record<string, unknown>)?.configured)
-  const canWrite = Boolean((status?.ai as Record<string, unknown>)?.allow_write)
+  const runReview = async () => {
+    setReviewBusy(true)
+    try {
+      const res = await api.ai.runReview()
+      toast(res.added.length ? `${res.added.length} new suggestion${res.added.length === 1 ? '' : 's'}` : 'Nothing new to suggest', 'ok')
+      refreshRecs()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Review failed', 'err')
+    } finally {
+      setReviewBusy(false)
+    }
+  }
+  const decide = async (r: Recommendation, decision: 'accept' | 'dismiss') => {
+    setDecideBusy(r.id)
+    try {
+      await api.ai.decide(r.id, decision)
+      toast(decision === 'accept'
+        ? (r.kind === 'allow' ? `${r.domain} allowed` : r.kind === 'block' ? `${r.domain} blocked` : 'Noted')
+        : 'Dismissed, and remembered', 'ok')
+      refreshRecs()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not apply that', 'err')
+    } finally {
+      setDecideBusy(null)
+    }
+  }
+  const addNote = async () => {
+    const n = noteDraft.trim()
+    if (!n) return
+    try {
+      await api.ai.addNote(n)
+      setNoteDraft('')
+      refreshNotes()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not save the note', 'err')
+    }
+  }
+
+  const aiStatus = (status?.ai ?? {}) as Record<string, unknown>
+  const configured = Boolean(aiStatus.configured)
+  const canWrite = Boolean(aiStatus.allow_write)
+  const activeModel = typeof aiStatus.active_model === 'string' ? aiStatus.active_model : ''
+  const briefEvery = typeof aiStatus.brief_enabled === 'boolean' ? aiStatus.brief_enabled : false
+  const latestBrief: AIBrief | undefined = briefs?.briefs?.[0]
+
+  const runBrief = async () => {
+    setBriefBusy(true)
+    try {
+      await api.ai.runBrief()
+      refreshBriefs()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not write a brief', 'err')
+    } finally {
+      setBriefBusy(false)
+    }
+  }
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -62,7 +130,7 @@ export function AssistantPage() {
               }
             } catch { /* a corrupt row should not blank the transcript */ }
           }
-          out.push({ id: m.id, role: 'assistant', text: m.content, tools })
+          out.push({ id: m.id, role: 'assistant', text: m.content, tools, model: m.model })
         } else if (m.role === 'tool') {
           const last = out[out.length - 1]
           if (last?.role === 'assistant') {
@@ -102,6 +170,7 @@ export function AssistantPage() {
         switch (turn.kind) {
           case 'text':
             bubble.text = bubble.text ? `${bubble.text}\n\n${turn.text ?? ''}` : (turn.text ?? '')
+            if (turn.model) bubble.model = turn.model
             break
           case 'tool_call':
             bubble.tools.push({ tool: turn.tool ?? '', input: turn.input, pending: true })
@@ -163,16 +232,118 @@ export function AssistantPage() {
         )}
 
         {bubbles.length === 0 ? (
-          <div style={{ maxWidth: 720, margin: '8vh auto 0' }}>
+          <div style={{ maxWidth: 760, margin: '5vh auto 0', width: '100%' }}>
             <div style={{ textAlign: 'center', marginBottom: 22 }}>
               <div style={{ fontSize: 17, fontWeight: 560, marginBottom: 6 }}>
                 Ask about your network
               </div>
               <div style={{ color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.6 }}>
-                The assistant can read the flow table, DNS log, device list, events and rules —
-                and, with write access on, change them.
+                The assistant reads the flow table, DNS log, device list, events, rules and the
+                YouTube engine, explains why a domain is blocked, places any IP address, and
+                answers general networking questions. With write access on, it can also make changes.
               </div>
             </div>
+
+            {configured && (
+              <div className="brief" style={{ marginBottom: 20 }}>
+                <div className="brief-head">
+                  <Dot state={!latestBrief ? 'off' : latestBrief.severity === 'warning' ? 'err' : latestBrief.severity === 'notice' ? 'warn' : 'on'} />
+                  <strong>{latestBrief ? latestBrief.headline : 'No network check yet'}</strong>
+                  <button className="btn sm" disabled={briefBusy} onClick={runBrief}>
+                    {briefBusy ? <><Spinner /> checking…</> : latestBrief ? 'Check now' : 'Run first check'}
+                  </button>
+                </div>
+                {latestBrief ? (
+                  <>
+                    <div className="brief-body"><Markdown text={latestBrief.body} /></div>
+                    <div className="brief-foot">
+                      <span>{ago(latestBrief.ts)}</span>
+                      <span>·</span>
+                      <span>last {latestBrief.hours}h</span>
+                      <span>·</span>
+                      <span className="mono">{latestBrief.model}</span>
+                      {!briefEvery && <span>· scheduled briefs are off (Settings → Assistant)</span>}
+                    </div>
+                  </>
+                ) : (
+                  <div className="brief-body">
+                    A network check reads the last few hours of traffic, blocks, new devices and node
+                    health and writes a short note. {briefEvery ? 'The first scheduled one is on its way.' : 'Turn on scheduled briefs in Settings → Assistant, or run one now.'}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {configured && (
+              <div className="brief" style={{ marginBottom: 20 }}>
+                <div className="brief-head">
+                  <Dot state={(recData?.recommendations.length ?? 0) > 0 ? 'warn' : 'on'} />
+                  <strong>
+                    {recData && recData.recommendations.length > 0
+                      ? `${recData.recommendations.length} blocklist suggestion${recData.recommendations.length === 1 ? '' : 's'} waiting`
+                      : 'Blocklist specialist: nothing waiting'}
+                  </strong>
+                  <button className="btn sm" disabled={reviewBusy} onClick={runReview}>
+                    {reviewBusy ? <><Spinner /> reviewing…</> : 'Review now'}
+                  </button>
+                </div>
+                {recData && recData.recommendations.length > 0 ? (
+                  <div>
+                    {recData.recommendations.map((r) => (
+                      <div className="rec" key={r.id}>
+                        <span className={`kind ${r.kind}`}>{r.kind}</span>
+                        <div style={{ minWidth: 0 }}>
+                          <div className="domain">{r.domain}</div>
+                          <div className="reason">{r.reason}</div>
+                          <div className="hint" style={{ fontSize: 11, marginTop: 3 }}>
+                            {Math.round(r.confidence * 100)}% sure
+                            {r.evidence && 'devices' in r.evidence ? ` · blocked for ${String(r.evidence.devices)} device(s), ${String(r.evidence.lookups)} lookups` : ''}
+                            {r.evidence && 'blocked_by' in r.evidence && r.evidence.blocked_by ? ` · by ${String(r.evidence.blocked_by)}` : ''}
+                            {' · '}{ago(r.ts)}
+                          </div>
+                        </div>
+                        <div className="actions">
+                          <button className="btn sm primary" disabled={decideBusy === r.id} onClick={() => decide(r, 'accept')}>
+                            {r.kind === 'allow' ? 'Allow' : r.kind === 'block' ? 'Block' : 'Noted'}
+                          </button>
+                          <button className="btn sm" disabled={decideBusy === r.id} onClick={() => decide(r, 'dismiss')}>Dismiss</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="brief-body">
+                    Reviews look at what was blocked, for how many devices and by which list, plus what smart capture
+                    wants blocked, and suggest changes. {recData?.review.enabled ? `Scheduled every ${recData.review.interval_hours}h.` : 'Scheduled reviews are off (Settings → Assistant).'}
+                  </div>
+                )}
+                <div className="brief-foot" style={{ justifyContent: 'space-between' }}>
+                  <button className="btn sm" onClick={() => setShowNotes((v) => !v)}>
+                    {showNotes ? 'Hide' : 'Show'} remembered facts ({notesData?.notes.length ?? 0})
+                  </button>
+                </div>
+                {showNotes && (
+                  <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+                    <div className="hint" style={{ lineHeight: 1.6 }}>
+                      Facts the assistant keeps in mind for every answer, brief and review. Tell it "remember that…" in chat, or add one here.
+                    </div>
+                    {(notesData?.notes ?? []).map((n) => (
+                      <div key={n.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5 }}>
+                        <span style={{ flex: 1 }}>{n.note} <span className="hint" style={{ fontSize: 11 }}>· {n.source}, {ago(n.ts)}</span></span>
+                        <button className="btn sm" title="Forget" onClick={async () => { await api.ai.deleteNote(n.id); refreshNotes() }}>Forget</button>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input className="input" value={noteDraft} placeholder="192.168.50.111 is the NAS; it backs up to Backblaze nightly"
+                        onChange={(e) => setNoteDraft(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') addNote() }} />
+                      <button className="btn" disabled={!noteDraft.trim()} onClick={addNote}>Remember</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="chat-suggestions" style={{ justifyContent: 'center' }}>
               {SUGGESTIONS.map((s) => (
                 <button key={s} className="btn sm" onClick={() => send(s)} disabled={!configured}>{s}</button>
@@ -246,12 +417,22 @@ export function AssistantPage() {
             }}><Icons.plus size={14} /></button>
           )}
         </div>
-        {canWrite && (
-          <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 7 }}>
-            Write access is on — the assistant can change rules, blocklists and device access.
-            Everything it does is in the audit log.
-          </div>
-        )}
+        <div className="chat-status">
+          {activeModel && (
+            <span>Answering with <span className="mono">{activeModel}</span>
+              {models && models.chat_chain.length > 1 ? ` (+${models.chat_chain.length - 1} fallback${models.chat_chain.length > 2 ? 's' : ''})` : ''}
+            </span>
+          )}
+          {models?.openrouter && models.prefer_free && (
+            <span title="Free-tier requests used today, all models. Resets at midnight UTC.">
+              <Bar value={models.free_today} max={models.free_budget} tone={models.free_today / Math.max(1, models.free_budget) > 0.85 ? 'warn' : undefined} />
+              {' '}<span className="mono">{num(models.free_today)}/{num(models.free_budget)}</span> free today
+            </span>
+          )}
+          {canWrite && (
+            <span>Write access is on — changes land in the audit log.</span>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -278,6 +459,9 @@ function MessageBubble({ bubble }: { bubble: Bubble }) {
           </details>
         ))}
         {bubble.text && <Markdown text={bubble.text} />}
+        {bubble.role === 'assistant' && bubble.model && (
+          <div className="msg-meta" title="The model that wrote this answer">{bubble.model}</div>
+        )}
       </div>
     </div>
   )

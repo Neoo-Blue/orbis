@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/flows"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
 	"github.com/Neoo-Blue/orbis/internal/intercept"
+	"github.com/Neoo-Blue/orbis/internal/issues"
 	"github.com/Neoo-Blue/orbis/internal/lounge"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
@@ -71,6 +73,13 @@ type App struct {
 	AI        *ai.Client
 	Assistant *ai.Assistant
 	Analyzer  *ai.Analyzer
+	Briefer   *ai.Briefer
+	Reviewer  *ai.Reviewer
+
+	// Issues is the problem recorder (and GitHub reporter).
+	Issues *issues.Recorder
+	// logRing keeps the last few hundred log lines for diagnostics bundles.
+	logRing *logRing
 
 	// Notifier delivers events off the box (webhook, email).
 	Notifier *notify.Notifier
@@ -125,12 +134,19 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	self.SetEnabled(cfg.Node.LocatePublicIP)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	ring := newLogRing(400)
+	baseLog := logf
+	logf = func(format string, args ...any) {
+		ring.add(fmt.Sprintf(format, args...))
+		baseLog(format, args...)
+	}
 	a := &App{
 		Cfg: cfg, Store: st, Geo: geo, Self: self, log: logf,
 		ctx: ctx, stop: cancel,
 		Bus:       NewBus(1024),
 		policies:  map[string]*store.Policy{},
 		startedAt: time.Now(),
+		logRing:   ring,
 	}
 
 	// Flow tracking.
@@ -260,10 +276,16 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		func(msg string) { logf("capture: %s", msg) })
 
 	// AI.
-	a.AI = ai.NewClient(cfg)
+	a.AI = ai.NewClient(cfg, st, logf)
 	a.Assistant = ai.NewAssistant(cfg, a.AI, a, st, logf)
 	a.Analyzer = ai.NewAnalyzer(cfg, a.AI, st, logf)
+	a.Briefer = ai.NewBriefer(cfg, a.AI, a, st, a.recordBrief, logf)
+	a.Reviewer = ai.NewReviewer(cfg, a.AI, a, st, a.recordBrief, logf)
 	a.Smart.SetJudge(ai.NewJudge(a.AI, logf))
+
+	// Problem recorder. Device names are scrubbed from every report, and
+	// the diagnostics bundle is the same snapshot the status page shows.
+	a.Issues = issues.New(cfg, st, "", a.identifyingNames, a.diagnostics, logf)
 
 	if err := a.reloadPolicies(); err != nil {
 		logf("policies: load failed: %v", err)
@@ -335,6 +357,13 @@ func (a *App) Start() {
 		}
 	}
 
+	// The blocklist index builds in the background while the resolver
+	// starts. On a large list set (1.5M+ entries on a Raspberry Pi) the
+	// build takes 15-30 seconds; holding the listener for that long would be
+	// a DNS outage for every device on each restart, which is worse than
+	// the alternative of answering a few lookups unfiltered. The window is
+	// logged so it is visible, and the index is rebuilt from the store, not
+	// the network, so it is as short as the disk allows.
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.Lists.Run(a.ctx) }()
 
@@ -411,6 +440,13 @@ func (a *App) Start() {
 		a.wg.Add(1)
 		go func() { defer a.wg.Done(); a.Analyzer.Run(a.ctx) }()
 	}
+	// The model router and the brief writer always run: both read the
+	// configuration on every tick, so turning the assistant on from the UI
+	// takes effect without a restart.
+	a.wg.Add(3)
+	go func() { defer a.wg.Done(); a.AI.Router().Run(a.ctx) }()
+	go func() { defer a.wg.Done(); a.Briefer.Run(a.ctx) }()
+	go func() { defer a.wg.Done(); a.Reviewer.Run(a.ctx) }()
 
 	// Installing a GeoIP database should fix the history too, not just new
 	// traffic, so reconcile stored rows once at startup.
@@ -532,6 +568,7 @@ func (a *App) maintenanceLoop() {
 			if err := a.Store.Prune(a.ctx, cfg.Store.FlowRetentionDays, cfg.Store.EventRetentionDays); err != nil {
 				a.log("store: prune failed: %v", err)
 			}
+			_ = a.Store.PruneAIUsage(45)
 		}
 	}
 }
@@ -620,6 +657,122 @@ func (a *App) raise(severity, category, title, detail string) {
 	a.Bus.Publish(Event{Type: "event.new", Data: map[string]any{
 		"severity": severity, "category": category, "title": title, "detail": detail,
 	}})
+	// Warnings and worse are also problems worth recording, scrubbed, so
+	// they can be reported and fixed rather than scrolling past in Events.
+	if a.Issues != nil && a.Cfg.Snapshot().Issues.AutoCapture &&
+		store.SeverityRank(severity) >= store.SeverityRank(store.SevWarning) &&
+		!strings.HasPrefix(category, "anomaly:") && category != "alert" {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			_, _ = a.Issues.Record(ctx, issues.Input{
+				Severity: severity, Category: category, Title: title, Detail: detail, Source: "auto",
+			})
+		}()
+	}
+}
+
+// identifyingNames lists the strings that would identify this network in a
+// report: device labels and hostnames, and the node's own name.
+func (a *App) identifyingNames() []string {
+	var out []string
+	if a.Registry != nil {
+		for _, c := range a.Registry.All() {
+			if c.Label != "" {
+				out = append(out, c.Label)
+			}
+			if c.Hostname != "" {
+				out = append(out, c.Hostname)
+			}
+		}
+	}
+	if n := a.Cfg.Snapshot().Node.Name; n != "" {
+		out = append(out, n)
+	}
+	return out
+}
+
+// diagnostics is the snapshot attached to problem reports. It describes the
+// node, not the network: versions, mode, which subsystems are up, counts, and
+// the recent log lines. The recorder scrubs it again before it is stored.
+func (a *App) diagnostics() map[string]any {
+	cfg := a.Cfg.Snapshot()
+	out := map[string]any{
+		"version":  orDefaultStr(a.build, "dev"),
+		"platform": runtime.GOOS + "/" + runtime.GOARCH,
+		"go":       runtime.Version(),
+		"mode":     string(cfg.Mode),
+		"uptime_s": int(a.Uptime().Seconds()),
+		"subsystems": map[string]any{
+			"dns": cfg.DNS.Enabled, "dns_encrypted": cfg.DNS.Encrypted.Enabled, "adblock": cfg.AdBlock.Enabled,
+			"smart_capture": cfg.AdBlock.SmartCapture.Enabled, "filter_proxy": cfg.MITM.Enabled,
+			"firewall": cfg.Firewall.Enabled, "dhcp": cfg.DHCP.Enabled, "vpn_server": cfg.VPN.Server.Enabled,
+			"tailscale": cfg.Tailscale.Enabled, "intercept": cfg.Network.Intercept.Enabled,
+			"lounge": cfg.YouTube.Lounge.Enabled, "ai": cfg.AI.Enabled, "ai_provider": cfg.AI.Provider,
+		},
+		"blocklists": len(cfg.AdBlock.Lists),
+	}
+	if raw, err := os.ReadFile("/proc/version"); err == nil {
+		out["kernel"] = strings.TrimSpace(string(raw))
+	}
+	if a.Matcher != nil {
+		out["index_entries"] = a.Matcher.Count()
+	}
+	if a.Registry != nil {
+		out["devices"] = len(a.Registry.All())
+	}
+	if a.Tracker != nil {
+		ts := a.Tracker.Stats()
+		out["flows_active"] = ts.Active
+		out["flows_total"] = ts.Total
+	}
+	if a.Capture != nil {
+		cs := a.Capture.Stats()
+		out["capture"] = map[string]any{"interfaces": cs.Interfaces, "kernel_drops": cs.KernelDrops, "parse_errors": cs.ParseErrors}
+	}
+	if a.DNS != nil {
+		out["dns_running"] = a.DNS.Running()
+	}
+	if a.logRing != nil {
+		out["recent_log"] = a.logRing.tail(40)
+	}
+	return out
+}
+
+// logRing keeps recent log lines in memory for diagnostics bundles.
+type logRing struct {
+	mu    sync.Mutex
+	lines []string
+	max   int
+}
+
+func newLogRing(max int) *logRing { return &logRing{max: max} }
+
+func (r *logRing) add(line string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines = append(r.lines, time.Now().Format("15:04:05")+" "+line)
+	if len(r.lines) > r.max {
+		r.lines = r.lines[len(r.lines)-r.max:]
+	}
+}
+
+func (r *logRing) tail(n int) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if n > len(r.lines) {
+		n = len(r.lines)
+	}
+	out := make([]string, n)
+	copy(out, r.lines[len(r.lines)-n:])
+	return out
+}
+
+func orDefaultStr(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 // ---- hooks ----

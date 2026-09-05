@@ -132,6 +132,31 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		m.gauge("orbis_clients_online", "Devices seen in the last 5 minutes.", float64(online))
 	}
 
+	// Assistant: how much of the free day is spent, and per-model counts.
+	if app.AI != nil && app.AI.Router() != nil {
+		st := app.AI.Router().Status(cfg.AI)
+		if v, ok := toFloat(st["free_today"]); ok {
+			m.gauge("orbis_ai_free_requests_today", "Free-tier model requests made today (UTC).", v)
+		}
+		if v, ok := toFloat(st["free_budget"]); ok {
+			m.gauge("orbis_ai_free_budget", "Free-tier requests the router will spend per day.", v)
+		}
+		if v, ok := toFloat(st["requests_today"]); ok {
+			m.gauge("orbis_ai_requests_today", "Model requests made today (UTC), all models.", v)
+		}
+		if rows, ok := st["usage"].([]map[string]any); ok {
+			for _, row := range rows {
+				id, _ := row["model"].(string)
+				if req, ok := toFloat(row["requests"]); ok {
+					m.gauge("orbis_ai_model_requests_today", "", req, "model", id)
+				}
+				if fail, ok := toFloat(row["failures"]); ok {
+					m.gauge("orbis_ai_model_failures_today", "", fail, "model", id)
+				}
+			}
+		}
+	}
+
 	// Filter proxy.
 	if app.MITM != nil {
 		st := app.MITM.Stats()

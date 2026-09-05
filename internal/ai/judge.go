@@ -65,7 +65,17 @@ func (j *Judge) JudgeDomains(ctx context.Context, batch []adblock.DomainEvidence
 
 	// The fast model is deliberate: this is a high-volume, well-specified
 	// classification with tight output constraints, not open reasoning.
-	resp, err := j.client.Complete(ctx, judgePrompt, []Message{{Role: RoleUser, Content: msg}}, nil, true)
+	resp, err := j.client.CompleteJSON(ctx, judgePrompt, []Message{{Role: RoleUser, Content: msg}}, true,
+		func(text string) error {
+			v, err := parseVerdicts(text)
+			if err != nil {
+				return err
+			}
+			if len(v) == 0 {
+				return fmt.Errorf("empty verdict list")
+			}
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}

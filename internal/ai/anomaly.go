@@ -459,8 +459,12 @@ func (a *Analyzer) triage(ctx context.Context, findings []Finding) {
 		})
 	}
 	body, _ := jsonOf(payload, nil)
-	resp, err := a.client.Complete(ctx, triagePrompt,
-		[]Message{{Role: RoleUser, Content: body}}, nil, true)
+	resp, err := a.client.CompleteJSON(ctx, triagePrompt,
+		[]Message{{Role: RoleUser, Content: body}}, true,
+		func(text string) error {
+			var probe []map[string]any
+			return parseJSONArray(text, &probe)
+		})
 	if err != nil {
 		a.log("anomaly: triage failed (%v); recording findings unfiltered", err)
 		for _, f := range findings {

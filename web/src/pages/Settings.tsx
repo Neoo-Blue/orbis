@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import {
-  Banner, Card, CopyButton, Empty, Field, Icons, Loading, Segmented, Switch, useToast,
+  Banner, Bar, Card, CopyButton, Dot, Empty, Field, Icons, Loading, Segmented, Spinner, Switch, useToast,
 } from '../ui'
-import { bytes, duration } from '../format'
-import type { AppConfig, SystemStatus } from '../types'
+import { ago, bytes, compact, duration, num } from '../format'
+import type { AIBrief, AppConfig, SystemStatus } from '../types'
 
 type Section =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
-  | 'dhcp' | 'vpn' | 'tailscale' | 'assistant' | 'capture' | 'storage' | 'security' | 'about'
+  | 'dhcp' | 'vpn' | 'tailscale' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
 
 const SECTIONS: Array<{ id: Section; label: string; group: string; blurb: string }> = [
   { id: 'general', label: 'Node & mode', group: 'System', blurb: 'Name, timezone, and whether Orbis is inline' },
@@ -28,6 +28,7 @@ const SECTIONS: Array<{ id: Section; label: string; group: string; blurb: string
   { id: 'tailscale', label: 'Tailscale', group: 'Network', blurb: 'Exit node, subnet routes, tailnet options' },
 
   { id: 'assistant', label: 'Assistant', group: 'Intelligence', blurb: 'Provider, model, write access, anomaly detection' },
+  { id: 'problems', label: 'Problem reports', group: 'Intelligence', blurb: 'Record what goes wrong, scrub it, file it on GitHub' },
   { id: 'about', label: 'About & diagnostics', group: 'Intelligence', blurb: 'Versions, health, raw configuration' },
 ]
 
@@ -106,6 +107,7 @@ export function SettingsPage({ status, onAuthChange }: {
         {section === 'vpn' && <VPNSection {...props} />}
         {section === 'tailscale' && <TailscaleSection {...props} />}
         {section === 'assistant' && <AssistantSection {...props} />}
+        {section === 'problems' && <ProblemsSection {...props} />}
         {section === 'about' && <AboutSection {...props} />}
       </div>
     </div>
@@ -1298,6 +1300,7 @@ function TailscaleSection({ config, save, refresh, toast }: SectionProps) {
 function AssistantSection({ config, save, toast }: SectionProps) {
   const [apiKey, setApiKey] = useState('')
   const provider = config.ai.provider || 'anthropic'
+  const isOpenRouter = provider === 'openrouter' || /openrouter/i.test(config.ai.base_url || '')
 
   return (
     <>
@@ -1306,7 +1309,10 @@ function AssistantSection({ config, save, toast }: SectionProps) {
           <SwitchRow label="Enable the assistant" checked={config.ai.enabled}
             onChange={(v) => save({ 'ai.enabled': v })} />
 
-          <Field label="Provider">
+          <Field label="Provider"
+            hint={isOpenRouter
+              ? 'OpenRouter serves a rotating set of free models to any account that has been credited once. Orbis probes them, ranks them and prefers them; your pinned model below is the fallback.'
+              : undefined}>
             <select className="select" value={provider} onChange={(e) => save({ 'ai.provider': e.target.value })}>
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI</option>
@@ -1336,16 +1342,57 @@ function AssistantSection({ config, save, toast }: SectionProps) {
             onSave={(v) => save({ 'ai.base_url': v })} />
 
           <div className="grid c2">
-            <TextSetting label="Model" value={config.ai.model} mono
-              hint="Used for chat and reasoning."
+            <TextSetting label={isOpenRouter ? 'Pinned model (fallback)' : 'Model'} value={config.ai.model} mono
+              hint={isOpenRouter
+                ? 'Tried after every free candidate. A paid id here keeps chat working on a bad free-tier day; a :free id keeps the whole thing free.'
+                : 'Used for chat and reasoning.'}
               onSave={(v) => save({ 'ai.model': v })} />
-            <TextSetting label="Fast model" value={config.ai.fast_model} mono
+            <TextSetting label={isOpenRouter ? 'Pinned fast model (fallback)' : 'Fast model'} value={config.ai.fast_model} mono
               hint="High-volume classification: ad-domain scoring and anomaly triage. A smaller model is the right choice here."
               onSave={(v) => save({ 'ai.fast_model': v })} />
           </div>
 
           <NumberSetting label="Max response tokens" value={config.ai.max_tokens} min={256} max={64000}
             onSave={(v) => save({ 'ai.max_tokens': v })} />
+        </div>
+      </Card>
+
+      {isOpenRouter && <FreeModelsCard config={config} save={save} toast={toast} />}
+
+      <Card title="Network brief">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            On a schedule, the assistant reads the window's traffic, blocks, new devices, events and
+            node health and writes a short note: what happened, anything worth a look, and whether the
+            node itself is healthy. Briefs land in Events and on the Assistant page.
+          </div>
+          <SwitchRow label="Write briefs on a schedule" checked={config.ai.brief.enabled}
+            onChange={(v) => save({ 'ai.brief.enabled': v })} />
+          <NumberSetting label="Every" value={config.ai.brief.interval_hours} min={1} max={168} suffix="h"
+            onSave={(v) => save({ 'ai.brief.interval_hours': v })} />
+          <SwitchRow label="Also send each brief to notification sinks" checked={config.ai.brief.notify}
+            hint="Webhook and email, same as alerts. Off means briefs stay on the node."
+            onChange={(v) => save({ 'ai.brief.notify': v })} />
+          <BriefNow toast={toast} />
+        </div>
+      </Card>
+
+      <Card title="Blocklist specialist">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            On a schedule, the assistant reviews what was blocked (for how many devices, by which list)
+            and what smart capture wants blocked, then suggests names to allow, names to block, and
+            things worth a look. You accept or dismiss each one on the Assistant page; decisions are
+            remembered so a dismissed idea does not come back. Accepting applies the change immediately.
+          </div>
+          <SwitchRow label="Run reviews on a schedule" checked={config.ai.review.enabled}
+            onChange={(v) => save({ 'ai.review.enabled': v })} />
+          <div className="grid c2">
+            <NumberSetting label="Every" value={config.ai.review.interval_hours} min={1} max={336} suffix="h"
+              onSave={(v) => save({ 'ai.review.interval_hours': v })} />
+            <NumberSetting label="Max new suggestions per review" value={config.ai.review.max_suggestions} min={1} max={30}
+              onSave={(v) => save({ 'ai.review.max_suggestions': v })} />
+          </div>
         </div>
       </Card>
 
@@ -1385,6 +1432,284 @@ function AssistantSection({ config, save, toast }: SectionProps) {
             onChange={(v) => save({ 'ai.anomaly.use_ai': v })} />
           <NumberSetting label="Sweep interval" value={config.ai.anomaly.interval_minutes} min={1} max={1440} suffix="min"
             onSave={(v) => save({ 'ai.anomaly.interval_minutes': v })} />
+        </div>
+      </Card>
+    </>
+  )
+}
+
+function Verdict({ v }: { v: boolean | null | undefined }) {
+  if (v === null || v === undefined) return <span className="verdict none">not probed</span>
+  return v
+    ? <span className="verdict ok"><Icons.check size={11} /> pass</span>
+    : <span className="verdict bad"><Icons.alert size={11} /> fail</span>
+}
+
+function Chain({ ids }: { ids: string[] }) {
+  if (!ids.length) return <span className="hint">nothing configured</span>
+  return (
+    <div className="model-chain">
+      {ids.map((id, i) => (
+        <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {i > 0 && <span className="arrow">→</span>}
+          <span className={`chip${i === 0 ? ' first' : ''}`} title={i === 0 ? 'Tried first' : `Fallback ${i}`}>{id}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * FreeModelsCard is the router's control surface: what the probe found, the
+ * chains a request walks right now, today's spend against the free cap, and
+ * the pins. Everything is per-row and immediate; there is no separate editor.
+ */
+function FreeModelsCard({ config, save, toast }: Pick<SectionProps, 'config' | 'save' | 'toast'>) {
+  const { data, refresh } = usePoll(() => api.ai.models(), 15000)
+  const [chainKind, setChainKind] = useState<'chat' | 'fast'>('chat')
+  const [busy, setBusy] = useState(false)
+
+  const pinnedChain = chainKind === 'chat' ? config.ai.model_chain : config.ai.fast_model_chain
+  const chainKey = chainKind === 'chat' ? 'ai.model_chain' : 'ai.fast_model_chain'
+  const inChain = (id: string) => (pinnedChain ?? []).includes(id)
+  const toggleChain = (id: string) => {
+    const next = inChain(id) ? (pinnedChain ?? []).filter((x) => x !== id) : [...(pinnedChain ?? []), id]
+    save({ [chainKey]: next })
+  }
+
+  const probe = async () => {
+    setBusy(true)
+    try {
+      await api.ai.probe()
+      toast('Probing free models; this takes a minute or two', 'info')
+      setTimeout(refresh, 4000)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not start the probe', 'err')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const models = (data?.models ?? []).filter((m) => m.free || m.id === config.ai.model || m.id === config.ai.fast_model)
+  const budgetUsed = data?.free_today ?? 0
+  const budget = data?.free_budget ?? config.ai.free_daily_budget
+
+  return (
+    <Card title="Free models"
+      actions={
+        <button className="btn sm" disabled={busy || Boolean(data?.probing) || !config.ai.enabled} onClick={probe}>
+          {data?.probing ? <><Spinner /> probing…</> : 'Probe now'}
+        </button>
+      }>
+      <div style={{ display: 'grid', gap: 14 }}>
+        <SwitchRow label="Prefer free models" checked={config.ai.prefer_free}
+          hint="Walk the free chain first and fall back to the pinned model only when every free candidate is busy. Off means the pinned models are used directly."
+          onChange={(v) => save({ 'ai.prefer_free': v })} />
+        <SwitchRow label="Discover and probe automatically" checked={config.ai.auto_discover}
+          hint="Fetch the catalogue on a timer and test every free model that can call tools with a small fixed request: a tool round-trip for chat, a two-domain classification for the fast lane. Rankings follow what works today; nothing is hard-coded."
+          onChange={(v) => save({ 'ai.auto_discover': v })} />
+        <div className="grid c2">
+          <NumberSetting label="Probe every" value={config.ai.probe_interval_hours} min={1} max={168} suffix="h"
+            onSave={(v) => save({ 'ai.probe_interval_hours': v })} />
+          <NumberSetting label="Free requests per day" value={config.ai.free_daily_budget} min={50} max={1000}
+            hint="OpenRouter allows 1,000 free-tier requests a day per account. Past this number the router stops offering free candidates."
+            onSave={(v) => save({ 'ai.free_daily_budget': v })} />
+        </div>
+
+        <Field label="Today" hint={`Resets at midnight UTC (${data?.day ?? '…'}). Every attempt counts, including ones a busy model refused.`}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ flex: 1 }}><Bar value={budgetUsed} max={budget} tone={budgetUsed / Math.max(1, budget) > 0.85 ? 'warn' : undefined} /></div>
+            <span className="mono" style={{ fontSize: 12 }}>{num(budgetUsed)} / {num(budget)} free</span>
+            {data && data.requests_today > data.free_today && (
+              <span className="hint">+{num(data.requests_today - data.free_today)} paid</span>
+            )}
+          </div>
+        </Field>
+
+        <Field label="Chat chain right now" hint="The order a chat turn walks. Models cooling down after a failure are skipped; the pinned model is always last.">
+          <Chain ids={data?.chat_chain ?? []} />
+        </Field>
+        <Field label="Classification chain right now">
+          <Chain ids={data?.fast_chain ?? []} />
+        </Field>
+
+        {data?.probe_error && <Banner tone="warn">Last probe failed: {data.probe_error}</Banner>}
+
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+            <div className="hint" style={{ flex: 1 }}>
+              {data?.last_probe ? `Last probe ${ago(data.last_probe)}.` : 'Not probed yet.'}{' '}
+              Pin rows to build your own order; with none pinned the probe ranking is used.
+            </div>
+            <Segmented value={chainKind} onChange={setChainKind}
+              options={[{ value: 'chat', label: 'Pin for chat' }, { value: 'fast', label: 'Pin for classification' }]} />
+            {(pinnedChain ?? []).length > 0 && (
+              <button className="btn sm" onClick={() => save({ [chainKey]: [] })}>Clear pins</button>
+            )}
+          </div>
+          {models.length === 0 ? (
+            <Empty title="No models known yet">Enable the assistant, save an OpenRouter key and press Probe now.</Empty>
+          ) : (
+            <div className="table-wrap">
+              <table className="t">
+                <thead>
+                  <tr>
+                    <th>Model</th><th>Context</th><th>Chat</th><th>JSON</th><th>Latency</th><th>Today</th><th>State</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {models.map((m) => {
+                    const cooling = m.cooldown_until && new Date(m.cooldown_until).getTime() > Date.now()
+                    const pinnedPos = (pinnedChain ?? []).indexOf(m.id)
+                    return (
+                      <tr key={m.id}>
+                        <td>
+                          <div className="mono" style={{ fontSize: 12 }}>{m.id}</div>
+                          <div className="hint" style={{ fontSize: 11 }}>
+                            {m.name}{m.reasoning ? ' · reasoning' : ''}{m.structured ? ' · structured' : ''}
+                            {m.id === config.ai.model ? ' · pinned fallback' : ''}
+                            {m.id === config.ai.fast_model ? ' · pinned fast fallback' : ''}
+                          </div>
+                        </td>
+                        <td className="mono">{m.context ? compact(m.context) : '—'}</td>
+                        <td>{m.tools ? <Verdict v={m.tool_ok} /> : <span className="verdict none">no tools</span>}</td>
+                        <td><Verdict v={m.json_ok} /></td>
+                        <td className="mono">{m.latency_ms ? `${(m.latency_ms / 1000).toFixed(1)}s` : '—'}</td>
+                        <td className="mono">
+                          {m.requests_today ? `${m.requests_today}${m.failures_today ? ` (${m.failures_today} failed)` : ''}` : '—'}
+                        </td>
+                        <td style={{ maxWidth: 260 }}>
+                          {cooling ? (
+                            <span className="verdict bad"><Dot state="warn" /> cooling {ago(m.cooldown_until!).replace(' ago', '')}</span>
+                          ) : m.chat_rank > 0 || m.fast_rank > 0 ? (
+                            <span className="hint">{m.chat_rank > 0 ? `chat #${m.chat_rank}` : ''}{m.chat_rank > 0 && m.fast_rank > 0 ? ' · ' : ''}{m.fast_rank > 0 ? `fast #${m.fast_rank}` : ''}</span>
+                          ) : (
+                            <span className="hint">unranked</span>
+                          )}
+                          {m.last_error && (
+                            <div className="hint truncate" title={m.last_error} style={{ fontSize: 11, maxWidth: 260 }}>{m.last_error}</div>
+                          )}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+                          <button className={`btn sm${pinnedPos >= 0 ? ' primary' : ''}`} onClick={() => toggleChain(m.id)}
+                            title={pinnedPos >= 0 ? 'Remove from the pinned chain' : `Add to the pinned ${chainKind} chain`}>
+                            {pinnedPos >= 0 ? `#${pinnedPos + 1} pinned` : 'Pin'}
+                          </button>
+                          {' '}
+                          <button className="btn sm" title="Use as the fallback model"
+                            onClick={() => save(chainKind === 'chat' ? { 'ai.model': m.id } : { 'ai.fast_model': m.id })}>
+                            Fallback
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function BriefNow({ toast }: { toast: SectionProps['toast'] }) {
+  const [busy, setBusy] = useState(false)
+  const [brief, setBrief] = useState<AIBrief | null>(null)
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <div>
+        <button className="btn sm" disabled={busy} onClick={async () => {
+          setBusy(true)
+          try {
+            setBrief(await api.ai.runBrief())
+          } catch (e) {
+            toast(e instanceof Error ? e.message : 'Could not write a brief', 'err')
+          } finally {
+            setBusy(false)
+          }
+        }}>{busy ? <><Spinner /> writing…</> : 'Write a brief now'}</button>
+      </div>
+      {brief && (
+        <div className="brief">
+          <div className="brief-head">
+            <Dot state={brief.severity === 'warning' ? 'err' : brief.severity === 'notice' ? 'warn' : 'on'} />
+            <strong>{brief.headline}</strong>
+          </div>
+          <pre className="brief-body" style={{ whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit' }}>{brief.body}</pre>
+          <div className="brief-foot"><span className="mono">{brief.model}</span><span>last {brief.hours}h</span></div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ProblemsSection({ config, save, toast }: SectionProps) {
+  const [token, setToken] = useState('')
+  const gh = config.issues.github
+  return (
+    <>
+      <Card title="Recording">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            Orbis writes down what goes wrong on this node: subsystems that fail to start, blocklists that
+            stop parsing, an assistant that cannot reach any model, and anything you report yourself. Every
+            record is scrubbed before it is stored: addresses, MAC addresses, device names, hostnames outside
+            the project's own infrastructure, keys and email addresses become placeholders. Nothing leaves the
+            node unless GitHub reporting below is switched on.
+          </div>
+          <SwitchRow label="Record problems" checked={config.issues.enabled}
+            onChange={(v) => save({ 'issues.enabled': v })} />
+          <SwitchRow label="Capture warnings and failures automatically" checked={config.issues.auto_capture}
+            hint="Warning and critical events raised by the daemon become problem records without a click."
+            onChange={(v) => save({ 'issues.auto_capture': v })} />
+          <TextSetting label="Also scrub these words" value={(config.issues.redact_extra ?? []).join(', ')}
+            hint="Comma-separated. Family names, your ISP, anything else that should never appear in a report."
+            onSave={(v) => save({ 'issues.redact_extra': v.split(',').map((x) => x.trim()).filter(Boolean) })} />
+        </div>
+      </Card>
+
+      <Card title="Report to GitHub">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            Filed issues land on the project's board so the bug gets fixed for everyone running Orbis. Each report
+            carries a fingerprint, so the same problem from many nodes becomes one issue with a count, and you can
+            preview the exact text before anything is sent. Use your own fine-grained token (Issues: write on the
+            repository) or the project relay, which files on your behalf without a token.
+          </div>
+          <SwitchRow label="Enable GitHub reporting" checked={gh.enabled}
+            onChange={(v) => save({ 'issues.github.enabled': v })} />
+          <TextSetting label="Repository" value={gh.repo} mono onSave={(v) => save({ 'issues.github.repo': v })} />
+          <Field label="Personal access token"
+            hint="Fine-grained, scoped to the repository, Issues: read and write. Stored in the config file with 0600 permissions and never returned by the API.">
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input className="input mono" type="password" value={token}
+                placeholder={gh.token ? '•••••••• (set)' : 'github_pat_…'}
+                onChange={(e) => setToken(e.target.value)} />
+              <button className="btn" disabled={!token} onClick={async () => {
+                if (await save({ 'issues.github.token': token })) { setToken(''); toast('Token saved', 'ok') }
+              }}>Save</button>
+              {gh.token && <button className="btn" onClick={() => save({ 'issues.github.token': '' })}>Clear</button>}
+            </div>
+          </Field>
+          <TextSetting label="Relay URL" value={gh.relay_url} mono
+            placeholder="https://…/report"
+            hint="Used when no token is set. The relay holds the project's token and files the same scrubbed payload."
+            onSave={(v) => save({ 'issues.github.relay_url': v })} />
+          <SwitchRow label="File automatic captures without asking" checked={gh.auto_report}
+            hint="Warnings and failures the daemon noticed are filed on their own, within the daily cap. Your own reports are always sent only when you click."
+            onChange={(v) => save({ 'issues.github.auto_report': v })} />
+          <div className="grid c2">
+            <NumberSetting label="Automatic reports per day" value={gh.max_per_day} min={1} max={50}
+              onSave={(v) => save({ 'issues.github.max_per_day': v })} />
+          </div>
+          <SwitchRow label="Attach the node snapshot" checked={gh.include_diagnostics}
+            hint="Version, platform, kernel, which subsystems are on, counts, and the last 40 log lines (scrubbed). Makes most reports fixable without a follow-up."
+            onChange={(v) => save({ 'issues.github.include_diagnostics': v })} />
+          {gh.enabled && !gh.token && !gh.relay_url && (
+            <Banner tone="warn">Reporting is on but has nowhere to send: add a token or a relay URL.</Banner>
+          )}
         </div>
       </Card>
     </>

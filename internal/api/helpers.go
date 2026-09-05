@@ -115,6 +115,11 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 		return setStr(&c.Node.Timezone, raw)
 	case "node.locate_public_ip":
 		return setBool(&c.Node.LocatePublicIP, raw)
+	case "node.ui_mode":
+		if v, ok := raw.(string); ok && (v == "simple" || v == "advanced") {
+			c.Node.UIMode = v
+			return true
+		}
 	case "node.latitude":
 		return setFloat(&c.Node.Latitude, raw)
 	case "node.longitude":

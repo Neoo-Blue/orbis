@@ -144,6 +144,10 @@ type NodeConfig struct {
 	// OnboardedMode is "simple" or "advanced", remembered so re-running the
 	// wizard starts where the operator left off.
 	OnboardedMode string `yaml:"onboarded_mode" json:"onboarded_mode"`
+	// UIMode is the default interface for new browsers: "simple" shows the
+	// plain-language surface (protection, devices, usage, assistant),
+	// "advanced" shows every page and setting. Each browser can override it.
+	UIMode string `yaml:"ui_mode" json:"ui_mode"`
 	DataDir       string `yaml:"data_dir" json:"data_dir"`
 	Timezone      string `yaml:"timezone" json:"timezone"`
 	// Latitude/Longitude pin this node on the globe. When both are zero the

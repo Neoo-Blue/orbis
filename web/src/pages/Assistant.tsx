@@ -27,7 +27,7 @@ const SUGGESTIONS = [
   'How do I install the certificate on an iPhone?',
 ]
 
-export function AssistantPage() {
+export function AssistantPage({ initialQuestion, onConsumed }: { initialQuestion?: string; onConsumed?: () => void } = {}) {
   const [conversation, setConversation] = useState<string>(() => uuid())
   const [bubbles, setBubbles] = useState<Bubble[]>([])
   const [input, setInput] = useState('')
@@ -113,6 +113,17 @@ export function AssistantPage() {
   }, [])
 
   useEffect(scrollToBottom, [bubbles, scrollToBottom])
+
+  // A question handed over from another page (the simple home's ask box) is
+  // sent once, as soon as we know the assistant is configured.
+  const fired = useRef(false)
+  useEffect(() => {
+    if (!initialQuestion || fired.current || !configured) return
+    fired.current = true
+    onConsumed?.()
+    void send(initialQuestion)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuestion, configured])
 
   const loadConversation = async (id: string) => {
     try {

@@ -34,7 +34,7 @@ func TestJSONShapeMatchesYAML(t *testing.T) {
 	}
 
 	nested := map[string][]string{
-		"node":      {"name", "timezone", "latitude", "longitude", "locate_public_ip"},
+		"node":      {"name", "timezone", "latitude", "longitude", "locate_public_ip", "ui_mode"},
 		"dns":       {"enabled", "upstreams", "strategy", "cache_size", "sinkhole_ipv4", "local_domain", "block_ede", "log_queries"},
 		"adblock":   {"enabled", "lists", "allowlist", "denylist", "sni_blocking", "cname_uncloak", "block_dns_bypass", "smart_capture"},
 		"mitm":      {"enabled", "intercept_hosts", "bypass_hosts", "only_clients", "filters", "listen_http", "listen_tls", "ca_dir"},

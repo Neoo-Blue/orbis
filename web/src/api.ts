@@ -1,5 +1,5 @@
 import type {
-  AdCandidate, AIBrief, AIModelsStatus, AINote, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery,
+  AdCandidate, AIBrief, AIModelsStatus, AINote, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery, Health, ServiceBundle,
   Issue, IssuesResponse, Recommendation, ServiceDetail, ServiceDevice, ServicePoint, ServicesResponse, ServiceTotal,
   EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule,
   Summary, SysctlStatus, SystemStatus, TailscaleStatus, WGPeer,
@@ -313,6 +313,14 @@ export const api = {
     notes: () => get<{ notes: AINote[] }>('/ai/notes'),
     addNote: (note: string) => post<{ note: AINote }>('/ai/notes', { note }),
     deleteNote: (id: string) => del<{ ok: boolean }>(`/ai/notes/${id}`),
+  },
+
+  simple: {
+    health: () => get<Health>('/health'),
+    bundles: () => get<{ services: ServiceBundle[] }>('/dns/services'),
+    pause: (id: string, minutes: number) => post<{ ok: boolean; until?: string }>(`/clients/${id}/pause`, { minutes }),
+    resume: (id: string) => post<{ ok: boolean }>(`/clients/${id}/resume`),
+    pauses: () => get<{ pauses: Record<string, string> }>('/pauses'),
   },
 
   services: {

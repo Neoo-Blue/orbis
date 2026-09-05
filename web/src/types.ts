@@ -224,10 +224,29 @@ export interface Policy {
   safe_search: boolean
   block_doh: boolean
   unfiltered?: boolean
+  blocked_services?: string[]
   schedule?: string
   created_at: string
   updated_at: string
 }
+
+// ---- simple interface ----
+
+export interface Health {
+  level: 'ok' | 'attention' | 'problem'
+  headline: string
+  points: Array<{ level: 'ok' | 'attention' | 'problem'; text: string }>
+  devices_online: number
+  devices_total: number
+  devices_paused: number
+  blocked_today: number
+  protection_on: boolean
+  youtube_tv: boolean
+  mode: string
+  brief?: { headline: string; body: string; ts: string; severity: string }
+}
+
+export interface ServiceBundle { id: string; name: string; domains: number }
 
 export interface Summary {
   flows: number
@@ -528,6 +547,7 @@ export interface AppConfig {
   node: {
     name: string; data_dir: string; timezone: string
     latitude: number; longitude: number; locate_public_ip: boolean
+    ui_mode?: string; onboarded_mode?: string
   }
   api: { listen: string; web_root: string; allow_cors: boolean }
   store: { path: string; flow_retention_days: number; event_retention_days: number }

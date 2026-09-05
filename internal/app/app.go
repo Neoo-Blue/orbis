@@ -566,6 +566,7 @@ func (a *App) maintenanceLoop() {
 		case <-stats.C:
 			a.recordStats()
 			a.flushUsage()
+			a.liftExpiredPauses(time.Now())
 			for _, f := range a.Alerts.Evaluate(time.Now()) {
 				a.raise(f.Severity, "alert", f.Title, f.Detail)
 			}

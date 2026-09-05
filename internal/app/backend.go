@@ -538,6 +538,135 @@ func (a *App) ServiceUsage(since time.Time, clientID, service string) (map[strin
 	return out, nil
 }
 
+// ---- timed pauses ----
+
+// PauseClient blocks a device and schedules the block to lift. minutes <= 0
+// blocks with no end, like the plain block.
+func (a *App) PauseClient(clientID string, minutes int, actor string) (time.Time, error) {
+	if err := a.SetClientBlocked(clientID, true); err != nil {
+		return time.Time{}, err
+	}
+	var until time.Time
+	if minutes > 0 {
+		until = time.Now().Add(time.Duration(minutes) * time.Minute)
+	}
+	if err := a.Store.SetPause(clientID, until); err != nil {
+		return time.Time{}, err
+	}
+	a.Store.Audit(actor, "client.pause", clientID, "", fmt.Sprint(minutes), "ok")
+	return until, nil
+}
+
+// ResumeClient lifts a block and forgets any timer.
+func (a *App) ResumeClient(clientID, actor string) error {
+	if err := a.SetClientBlocked(clientID, false); err != nil {
+		return err
+	}
+	_ = a.Store.SetPause(clientID, time.Time{})
+	a.Store.Audit(actor, "client.resume", clientID, "", "", "ok")
+	return nil
+}
+
+// liftExpiredPauses runs from the maintenance loop.
+func (a *App) liftExpiredPauses(now time.Time) {
+	ids, err := a.Store.ExpiredPauses(now)
+	if err != nil {
+		return
+	}
+	for _, id := range ids {
+		if err := a.ResumeClient(id, "timer"); err != nil {
+			a.log("pause: could not lift block on %s: %v", id, err)
+			continue
+		}
+		a.log("pause: internet restored for %s (timer)", id)
+	}
+}
+
+// Health is the one-glance answer for the simple interface: is everything
+// fine, does something want a look, or is something broken. It is computed
+// from the same facts the status page shows, put into sentences.
+func (a *App) Health() map[string]any {
+	cfg := a.Cfg.Snapshot()
+	level := "ok"
+	var points []map[string]any
+	worse := func(l string) {
+		rank := map[string]int{"ok": 0, "attention": 1, "problem": 2}
+		if rank[l] > rank[level] {
+			level = l
+		}
+	}
+	add := func(l, text string) {
+		points = append(points, map[string]any{"level": l, "text": text})
+		worse(l)
+	}
+
+	if cfg.DNS.Enabled && a.DNS != nil && !a.DNS.Running() {
+		add("problem", "The DNS filter is not running, so devices may have no internet or no protection.")
+	}
+	if a.Matcher != nil && a.Matcher.Count() == 0 && cfg.AdBlock.Enabled {
+		add("attention", "Blocklists are still loading; ads are not being blocked yet.")
+	}
+	if cfg.MITM.Enabled && a.MITM != nil {
+		if st := a.MITM.Stats(); st["running"] == false {
+			add("problem", "The filter proxy is off, so in-stream filtering is not happening.")
+		}
+	}
+	if !cfg.AdBlock.Enabled {
+		add("attention", "Ad and tracker blocking is switched off.")
+	}
+	if events, err := a.Store.Events(time.Now().Add(-24*time.Hour), store.SevWarning, true, 20); err == nil && len(events) > 0 {
+		n := len(events)
+		word := "warnings"
+		if n == 1 {
+			word = "warning"
+		}
+		lvl := "attention"
+		for _, e := range events {
+			if e.Severity == store.SevCritical {
+				lvl = "problem"
+			}
+		}
+		add(lvl, fmt.Sprintf("%d %s in the last day have not been looked at.", n, word))
+	}
+	clients := a.Registry.All()
+	online, blocked := 0, 0
+	for _, c := range clients {
+		if c.Online {
+			online++
+		}
+		if c.Blocked {
+			blocked++
+		}
+	}
+	if blocked > 0 {
+		add("ok", fmt.Sprintf("%d device(s) are paused.", blocked))
+	}
+	summary, _ := a.Store.Summary(time.Now().Add(-24 * time.Hour))
+	var blockedToday int64
+	if v, ok := summary["dns_blocked"].(int64); ok {
+		blockedToday = v
+	}
+	headline := "Everything is fine."
+	switch level {
+	case "attention":
+		headline = "Something is worth a look."
+	case "problem":
+		headline = "Something needs fixing."
+	}
+	out := map[string]any{
+		"level": level, "headline": headline, "points": points,
+		"devices_online": online, "devices_total": len(clients), "devices_paused": blocked,
+		"blocked_today": blockedToday, "protection_on": cfg.AdBlock.Enabled,
+		"youtube_tv": cfg.YouTube.Lounge.Enabled, "mode": string(cfg.Mode),
+	}
+	if briefs, err := a.Store.AIBriefs(1); err == nil && len(briefs) > 0 {
+		out["brief"] = map[string]any{
+			"headline": briefs[0].Headline, "body": briefs[0].Body, "ts": briefs[0].TS, "severity": briefs[0].Severity,
+		}
+	}
+	return out
+}
+
 // ---- memory and the specialist ----
 
 func (a *App) Notes(limit int) ([]store.Note, error) { return a.Store.Notes(limit) }

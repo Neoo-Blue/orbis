@@ -139,6 +139,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountAI(r)
 	s.mountIssues(r)
 	s.mountServices(r)
+	s.mountSimple(r)
 
 	r.Route("/chat", func(r chi.Router) {
 		r.Get("/conversations", s.handleConversations)

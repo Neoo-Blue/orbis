@@ -209,6 +209,19 @@ proxy can see it.
 
 **The one thing to know about the mobile app.** It will not be filtered from the network. Cast it.
 
+## Two interfaces: simple and advanced
+
+The top bar switches between them, and Settings sets the default. **Simple** is
+seven screens in plain words for a household: Home (is everything fine, ask a
+question), Devices (pause internet with a timer, pick a profile, rename),
+Protection (every filter as a sentence and a switch, fix or block a site, pair a
+TV), Usage (what is using the internet), Ask, Alerts (what happened, in
+sentences) and Settings. It collapses to a bottom tab bar on a phone.
+**Advanced** is every page and setting. Both write the same configuration, so
+nothing done in one is invisible in the other. **Profiles** (Kids, Homework,
+Guests, Unfiltered, or your own) are per-device filtering policies with
+switched-off apps, safe search, schedules and allow/deny lists, shared by both.
+
 ## The assistant, free models, and the periodic checks
 
 The built-in assistant talks to Anthropic, OpenAI, OpenRouter or a local Ollama. On

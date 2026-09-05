@@ -379,6 +379,11 @@ var migrations = []string{
 		model       TEXT NOT NULL DEFAULT '',
 		UNIQUE (kind, domain)
 	)`,
+	// Timed internet pauses per device: the block is lifted when until passes.
+	`CREATE TABLE IF NOT EXISTS client_pauses (
+		client_id TEXT PRIMARY KEY,
+		until     INTEGER NOT NULL
+	)`,
 	// Pinned-app bypasses learned by the filter proxy, kept across restarts.
 	`CREATE TABLE IF NOT EXISTS pin_bypasses (
 		client TEXT NOT NULL,

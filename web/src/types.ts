@@ -264,6 +264,7 @@ export interface SysctlStatus {
 export interface SystemStatus {
   mode: Mode
   node: string
+  version?: string
   uptime_sec: number
   capture: Record<string, number | boolean>
   dns: Record<string, unknown>

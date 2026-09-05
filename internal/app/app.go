@@ -659,9 +659,11 @@ func (a *App) raise(severity, category, title, detail string) {
 	}})
 	// Warnings and worse are also problems worth recording, scrubbed, so
 	// they can be reported and fixed rather than scrolling past in Events.
+	// Detector findings, alert rules and operator to-dos (a Tailscale login
+	// waiting, a missing binary) are not defects and stay out.
 	if a.Issues != nil && a.Cfg.Snapshot().Issues.AutoCapture &&
 		store.SeverityRank(severity) >= store.SeverityRank(store.SevWarning) &&
-		!strings.HasPrefix(category, "anomaly:") && category != "alert" {
+		!strings.HasPrefix(category, "anomaly:") && category != "alert" && !operatorActionable(title, detail) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
@@ -670,6 +672,23 @@ func (a *App) raise(severity, category, title, detail string) {
 			})
 		}()
 	}
+}
+
+// operatorActionable recognises warnings that ask the operator to do
+// something rather than describe software misbehaving. Recording them as
+// problems, or worse filing them upstream, would only add noise.
+func operatorActionable(title, detail string) bool {
+	hay := strings.ToLower(title + " " + detail)
+	for _, marker := range []string{
+		"needs to be authenticated", "did not come up", "not installed", "log in at",
+		"no api key", "is disabled", "set an api key", "not configured", "permission denied",
+		"address already in use", "on the host, for a container",
+	} {
+		if strings.Contains(hay, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // identifyingNames lists the strings that would identify this network in a

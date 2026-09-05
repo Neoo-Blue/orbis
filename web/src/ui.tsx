@@ -47,19 +47,23 @@ export const Icons = {
 
 /* ---------- toasts ---------- */
 
-interface Toast { id: number; message: string; tone: 'ok' | 'err' | 'info' }
-const ToastCtx = createContext<(message: string, tone?: Toast['tone']) => void>(() => {})
+export interface ToastAction { label: string; onClick: () => void | Promise<void> }
+interface Toast { id: number; message: string; tone: 'ok' | 'err' | 'info'; action?: ToastAction }
+type ToastFn = (message: string, tone?: Toast['tone'], action?: ToastAction) => void
+const ToastCtx = createContext<ToastFn>(() => {})
 export const useToast = () => useContext(ToastCtx)
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
   const nextId = useRef(1)
 
-  const push = useCallback((message: string, tone: Toast['tone'] = 'info') => {
+  const push = useCallback<ToastFn>((message, tone = 'info', action) => {
     const id = nextId.current++
-    setToasts((t) => [...t, { id, message, tone }])
-    // Errors linger: they usually carry a detail worth reading twice.
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === 'err' ? 8000 : 4000)
+    setToasts((t) => [...t, { id, message, tone, action }])
+    // Errors linger: they usually carry a detail worth reading twice. A
+    // toast with an undo stays long enough to be used.
+    const ms = tone === 'err' ? 8000 : action ? 7000 : 4000
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), ms)
   }, [])
 
   return (
@@ -67,7 +71,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="toast-stack" role="status" aria-live="polite">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.tone}`}>{t.message}</div>
+          <div key={t.id} className={`toast ${t.tone}`}>
+            <span>{t.message}</span>
+            {t.action && (
+              <button className="btn sm" style={{ marginLeft: 10 }} onClick={() => {
+                setToasts((all) => all.filter((x) => x.id !== t.id))
+                void t.action!.onClick()
+              }}>{t.action.label}</button>
+            )}
+          </div>
         ))}
       </div>
     </ToastCtx.Provider>
@@ -236,8 +248,9 @@ export function Bar({ value, max, tone }: { value: number; max: number; tone?: s
   return <div className="bar"><i className={tone} style={{ width: `${w}%` }} /></div>
 }
 
-export function Dot({ state }: { state: 'on' | 'off' | 'warn' | 'err' }) {
-  return <span className={`dot ${state}`} />
+export function Dot({ state, label }: { state: 'on' | 'off' | 'warn' | 'err'; label?: string }) {
+  const meaning = label ?? { on: 'OK', off: 'Off', warn: 'Attention', err: 'Problem' }[state]
+  return <span className={`dot ${state}`} role="img" aria-label={meaning} title={meaning} />
 }
 
 /** Confirm is a lightweight destructive-action guard. Blocking on a real

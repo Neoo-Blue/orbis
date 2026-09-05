@@ -20,7 +20,19 @@ export function DNSRecordsCard() {
 
   const save = async () => {
     try {
-      await api.dnsRecords.save(draft)
+      const rec = { ...draft, name: draft.name.trim().toLowerCase(), value: draft.value.trim() }
+      let port = ''
+      if (rec.type === 'A' || rec.type === 'AAAA') {
+        // People paste what they type in the browser. Keep the address,
+        // remember the port so the success message says where it goes.
+        rec.value = rec.value.replace(/^https?:\/\//i, '').replace(/\/.*$/, '')
+        const m = rec.type === 'A' ? rec.value.match(/^([0-9.]+):(\d{1,5})$/) : rec.value.match(/^\[(.+)\]:(\d{1,5})$/)
+        if (m) { rec.value = m[1]; port = m[2] }
+      }
+      await api.dnsRecords.save(rec)
+      toast(port
+        ? `Added. ${rec.name} now points at ${rec.value}; open http://${rec.name}:${port} (the port goes in the address bar, not the record).`
+        : `Added ${rec.name} → ${rec.value}`, 'ok')
       setDraft({ name: '', type: draft.type, value: '' })
       refresh()
       toast('Record saved', 'ok')
@@ -88,6 +100,11 @@ export function DNSRecordsCard() {
             placeholder={draft.type === 'A' ? '192.168.50.100' : draft.type === 'AAAA' ? 'fd00::100' : draft.type === 'TXT' ? 'v=spf1 …' : 'host.name'}
             value={draft.value}
             onChange={(e) => setDraft({ ...draft, value: e.target.value })} />
+          {(draft.type === 'A' || draft.type === 'AAAA') && /:\d{1,5}$|^https?:\/\//i.test(draft.value.trim()) && (
+            <span className="hint" style={{ color: 'var(--amber)' }}>
+              Just the address here. A DNS record cannot carry a port; Orbis will keep the address and tell you the URL to use.
+            </span>
+          )}
         </label>
         {needsNumeric && (
           <label className="field" style={{ flex: '0 0 80px' }}>

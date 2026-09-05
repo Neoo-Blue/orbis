@@ -26,7 +26,7 @@
     --line-soft: #121a28;
     --text: #dbe4f0;
     --text-dim: #8a99ae;
-    --text-faint: #5b697d;
+    --text-faint: #6f7d93; /* 4.7:1 on --bg-1, the darkest surface text sits on */
 
     --accent: #4ee8c0;
     --accent-dim: #2ba98a;
@@ -641,3 +641,6 @@ tr:hover td, .row:hover { background: color-mix(in srgb, var(--accent) 4%, trans
   .device-card { grid-template-columns: 40px 1fr; }
   .device-card .actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
+
+/* Toasts can carry one action (undo). */
+.toast { display: flex; align-items: center; gap: 6px; }

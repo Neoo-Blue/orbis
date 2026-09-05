@@ -27,6 +27,14 @@ export function SimpleSettings({ config, status, save, uiMode, setUIMode, onNavi
           <BigSwitch icon="💬" title="Assistant on" checked={config.ai.enabled}
             desc={config.ai.enabled ? `Answering with ${models?.chat_chain?.[0] ?? 'the configured model'}${models?.openrouter ? `, ${models.free_today} of ${models.free_budget} free requests used today` : ''}.` : 'Needs a provider and key under Advanced → Settings → Assistant.'}
             onChange={(v) => save({ 'ai.enabled': v })} />
+          <BigSwitch icon="🛠️" title="Let the assistant make changes for me" checked={config.ai.allow_write}
+            desc={config.ai.allow_write
+              ? 'On. When you ask it to block a site, pause a device or fix something, it does it and tells you what it did. Everything it changes is listed under Alerts and in the audit log.'
+              : 'Off. The assistant explains what it would change and where to click, but does not touch anything. Turn on to let "pause the tablet" or "unblock that site" just happen.'}
+            onChange={(v) => {
+              if (v && !confirm('The assistant will be able to pause devices, block or allow sites and change rules when you ask it to. Every change is logged. Turn on?')) return
+              save({ 'ai.allow_write': v })
+            }} />
           <BigSwitch icon="📝" title="Write a network check every few hours" checked={config.ai.brief.enabled}
             desc="A short note on what happened and whether anything needs you. Shows on the home page and under Alerts."
             onChange={(v) => save({ 'ai.brief.enabled': v })} />

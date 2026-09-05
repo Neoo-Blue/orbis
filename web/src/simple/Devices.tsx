@@ -29,11 +29,11 @@ export function SimpleDevices({ onNavigate }: { onNavigate: (r: string) => void 
 
   const policyName = (id?: string) => policies?.policies.find((p) => p.id === id)?.name ?? 'Normal'
 
-  const act = async (c: Client, fn: () => Promise<unknown>, ok: string) => {
+  const act = async (c: Client, fn: () => Promise<unknown>, ok: string, undo?: () => Promise<unknown>) => {
     setBusy(c.id)
     try {
       await fn()
-      toast(ok, 'ok')
+      toast(ok, 'ok', undo ? { label: 'Undo', onClick: async () => { try { await undo(); refresh(); refreshPauses() } catch { /* state refreshes anyway */ } } } : undefined)
       refresh(); refreshPauses()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'That did not work', 'err')
@@ -69,7 +69,7 @@ export function SimpleDevices({ onNavigate }: { onNavigate: (r: string) => void 
               {busy === c.id ? <Spinner /> : 'Resume internet'}
             </button>
           ) : (
-            <PauseMenu disabled={busy === c.id} onPick={(min) => act(c, () => api.simple.pause(c.id, min), min ? `${clientName(c)} paused for ${min >= 60 ? `${min / 60} hour${min > 60 ? 's' : ''}` : `${min} minutes`}` : `${clientName(c)} paused until you resume it`)} />
+            <PauseMenu disabled={busy === c.id} onPick={(min) => act(c, () => api.simple.pause(c.id, min), min ? `${clientName(c)} paused for ${min >= 60 ? `${min / 60} hour${min > 60 ? 's' : ''}` : `${min} minutes`}` : `${clientName(c)} paused until you resume it`, () => api.simple.resume(c.id))} />
           )}
           <button className="btn sm" onClick={() => setEditing(c)}>Edit</button>
         </div>

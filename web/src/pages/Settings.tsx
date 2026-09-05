@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import {
-  Banner, Bar, Card, CopyButton, Dot, Empty, Field, Icons, Loading, Segmented, Spinner, Switch, useToast,
+  Banner, Bar, Card, CopyButton, Dot, Empty, Field, Icons, Loading, Segmented, Spinner, Switch, useToast, Search,
 } from '../ui'
 import { ago, bytes, compact, duration, num } from '../format'
 import type { AIBrief, AppConfig, SystemStatus } from '../types'
+import { searchSettings } from '../settingsIndex'
 
 type Section =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
@@ -36,7 +37,21 @@ export function SettingsPage({ status, onAuthChange }: {
   status: SystemStatus | null
   onAuthChange: () => void
 }) {
-  const [section, setSection] = useState<Section>('general')
+  // The section can be named in the hash (#/settings/dns) so the command
+  // palette and the simple pages can land on the right one.
+  const sectionFromHash = (): Section | null => {
+    const part = location.hash.replace(/^#\/?/, '').split('/')[1]
+    return (SECTIONS.find((x) => x.id === part)?.id as Section | undefined) ?? null
+  }
+  const [section, setSectionState] = useState<Section>(() => sectionFromHash() ?? 'general')
+  const setSection = (id: Section) => { setSectionState(id); location.hash = `#/settings/${id}` }
+  useEffect(() => {
+    const onHash = () => { const s = sectionFromHash(); if (s) setSectionState(s) }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  const [query, setQuery] = useState('')
+  const matches = searchSettings(query)
   const { data: config, refresh } = usePoll(() => api.config.get(), 0)
   const { data: ifaces } = usePoll(() => api.config.interfaces(), 0)
   const toast = useToast()
@@ -72,6 +87,21 @@ export function SettingsPage({ status, onAuthChange }: {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '218px minmax(0, 1fr)', gap: 18, alignItems: 'start' }}>
       <nav style={{ position: 'sticky', top: 0, display: 'grid', gap: 2 }}>
+        <div style={{ padding: '0 0 8px' }}>
+          <Search value={query} onChange={setQuery} placeholder="Find a setting…" />
+        </div>
+        {query.trim() && (
+          <div style={{ display: 'grid', gap: 2, marginBottom: 8 }}>
+            {matches.length === 0 && <div className="hint" style={{ padding: '4px 9px' }}>Nothing matches. Try another word, or ask the assistant.</div>}
+            {matches.slice(0, 12).map((m) => (
+              <button key={`${m.section}:${m.label}`} className="nav-item" style={{ width: '100%', display: 'grid', gap: 1 }}
+                onClick={() => { setSection(m.section as Section); setQuery('') }}>
+                <span style={{ display: 'block', fontSize: 12.5 }}>{m.label}</span>
+                <span className="hint" style={{ display: 'block', fontSize: 11 }}>{SECTIONS.find((x) => x.id === m.section)?.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {grouped.map((g) => (
           <div key={g.group}>
             <div className="nav-group" style={{ display: 'block', paddingLeft: 9 }}>{g.group}</div>

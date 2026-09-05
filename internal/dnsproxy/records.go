@@ -196,11 +196,11 @@ func ValidateRecord(r LocalRecord) string {
 	switch strings.ToUpper(strings.TrimSpace(r.Type)) {
 	case "A":
 		if a, err := netip.ParseAddr(r.Value); err != nil || !a.Is4() {
-			return "A record needs an IPv4 address"
+			return "an A record holds one IPv4 address such as 192.168.50.100; a port (\":8080\") belongs in the URL, not the record"
 		}
 	case "AAAA":
 		if a, err := netip.ParseAddr(r.Value); err != nil || !a.Is6() || a.Is4In6() {
-			return "AAAA record needs an IPv6 address"
+			return "an AAAA record holds one IPv6 address such as fd00::100; a port belongs in the URL, not the record"
 		}
 	case "CNAME", "NS", "PTR", "TXT":
 		// A hostname or free text; nothing to reject beyond emptiness.

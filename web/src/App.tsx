@@ -36,6 +36,7 @@ import { Login } from './pages/Login'
 import { Onboarding } from './pages/Onboarding'
 import { ErrorBoundary } from './ErrorBoundary'
 import { CommandPalette } from './CommandPalette'
+import { GlossaryButton } from './Glossary'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
@@ -257,7 +258,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
                 : r.id === 'adblock' && candidates > 0 ? <span className="nav-badge live">{candidates}</span>
                 : null
               return (
-                <button key={r.id} className="nav-item" onClick={() => navigate(r.id)}
+                <button key={r.id} className="nav-item" onClick={() => navigate(r.id)} title={r.label}
                   aria-current={shown === r.id ? 'page' : undefined}>
                   <Icon />
                   <span>{r.label}</span>
@@ -281,6 +282,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           <div className="spacer" />
           <Segmented value={ui} onChange={(v) => setUIPref(v)}
             options={[{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Advanced' }]} />
+          <GlossaryButton />
           {mode === 'observe' && (
             <span className="tag info" title="Nothing is routed through this node yet">
               observe mode

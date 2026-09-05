@@ -186,6 +186,11 @@ func (s *Server) handleOnboardingApply(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Mode != "" {
 			c.Node.OnboardedMode = req.Mode
+			// The wizard's choice is also the interface default, so a
+			// household that picked "simple" lands on the simple screens.
+			if req.Mode == "simple" || req.Mode == "advanced" {
+				c.Node.UIMode = req.Mode
+			}
 		}
 		if req.Finish {
 			c.Node.Onboarded = true

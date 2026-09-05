@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api'
+import { SETTINGS_INDEX } from './settingsIndex'
 import { Icons } from './ui'
 
 /**
@@ -65,6 +66,11 @@ export function CommandPalette({ pages, onNavigate }: {
     for (const d of devices) {
       list.push({ id: `dev:${d.id}`, title: d.label, subtitle: d.ip, group: 'Devices',
         icon: 'devices', run: () => { location.hash = `#/clients`; onNavigate('clients') } })
+    }
+    // Every setting the index knows, by its on-screen label.
+    for (const e of SETTINGS_INDEX) {
+      list.push({ id: `set:${e.section}:${e.label}`, title: e.label, subtitle: `Settings › ${e.section}`, group: 'Settings',
+        icon: 'gear', run: () => { location.hash = `#/settings/${e.section}`; onNavigate('settings') } })
     }
     // A few high-value actions.
     list.push(

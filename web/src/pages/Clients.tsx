@@ -292,9 +292,15 @@ function ClientSettings({ client, onChanged }: { client: Client; onChanged: () =
   }
 
   const toggleBlock = async () => {
+    const wasBlocked = client.blocked
     try {
-      await api.clients.update(client.id, { blocked: !client.blocked })
-      toast(client.blocked ? 'Device restored' : 'Device blocked', 'ok')
+      await api.clients.update(client.id, { blocked: !wasBlocked })
+      toast(wasBlocked ? 'Device restored' : 'Device blocked', 'ok', {
+        label: 'Undo',
+        onClick: async () => {
+          try { await api.clients.update(client.id, { blocked: wasBlocked }); onChanged() } catch { /* the drawer shows the real state */ }
+        },
+      })
       onChanged()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not change access', 'err')

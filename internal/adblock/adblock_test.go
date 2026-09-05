@@ -62,6 +62,34 @@ server=/forwarded.example/1.2.3.4
 	}
 }
 
+func TestParseListDNSRewriteIsABlock(t *testing.T) {
+	input := `||popup.example^$dnsrewrite=ad-block.dns.adguard.com
+||nullroute.example^$dnsrewrite=0.0.0.0
+||important.example^$dnsrewrite=blocked.example,important
+||thirdparty.example^$third-party,dnsrewrite=blocked.example
+`
+	exact, wild, err := ParseList(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("ParseList: %v", err)
+	}
+	has := func(list []string, d string) bool {
+		for _, x := range list {
+			if x == d {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{"popup.example", "nullroute.example", "important.example"} {
+		if !has(wild, want) {
+			t.Errorf("a $dnsrewrite rule should be treated as a block: %q missing", want)
+		}
+	}
+	if has(exact, "thirdparty.example") || has(wild, "thirdparty.example") {
+		t.Error("a $dnsrewrite rule combined with an unhandled modifier should still be skipped")
+	}
+}
+
 func TestMatcherHierarchy(t *testing.T) {
 	m := New()
 	b := NewBuilder()
@@ -151,7 +179,7 @@ func TestHeuristicSeparatesAdsFromServices(t *testing.T) {
 	}
 	cdn := DomainEvidence{
 		Domain: "d3abc123xyz.cloudfront.net", Observations: 90, DistinctClients: 5,
-		ReferringSites: []string{"shop.example", "news.example", "blog.example"},
+		ReferringSites:  []string{"shop.example", "news.example", "blog.example"},
 		ThirdPartyRatio: 1.0, AvgResponseBytes: 180_000, SubdomainDepth: 2, LabelEntropy: 3.9,
 	}
 
@@ -192,11 +220,11 @@ func TestHeuristicNeverFlagsInfrastructure(t *testing.T) {
 
 func TestRegistrableHandlesMultiLabelSuffixes(t *testing.T) {
 	cases := map[string]string{
-		"ads.example.co.uk":     "example.co.uk",
-		"a.b.example.com":       "example.com",
-		"example.com":           "example.com",
+		"ads.example.co.uk":       "example.co.uk",
+		"a.b.example.com":         "example.com",
+		"example.com":             "example.com",
 		"deep.sub.example.com.au": "example.com.au",
-		"single":                "single",
+		"single":                  "single",
 	}
 	for in, want := range cases {
 		if got := registrable(in); got != want {

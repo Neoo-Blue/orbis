@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { api, setUnauthorizedHandler } from './api'
 import { usePoll, useLive, type LiveEvent } from './hooks'
 import { Icons, ToastProvider, Banner, Spinner } from './ui'
@@ -156,6 +156,19 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
 
   const mode = status?.mode ?? 'observe'
   const alerts = summary?.open_alerts ?? 0
+
+  // The daemon's build changes underneath a long-lived tab after a deploy;
+  // the JavaScript and CSS this tab loaded do not. Remember the first version
+  // seen and offer a reload when it moves, rather than letting stale styles
+  // and API shapes masquerade as bugs.
+  const loadedVersion = useRef<string | null>(null)
+  const [updated, setUpdated] = useState<string | null>(null)
+  useEffect(() => {
+    const v = status?.version
+    if (!v) return
+    if (loadedVersion.current === null) loadedVersion.current = v
+    else if (v !== loadedVersion.current) setUpdated(v)
+  }, [status?.version])
   const candidates = summary?.ad_candidates ?? 0
 
   const grouped = useMemo(() => {
@@ -233,6 +246,15 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
         </header>
 
         <div className={`page${route === 'globe' || route === 'assistant' ? ' flush' : ''}`}>
+          {updated && (
+            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
+              <Banner tone="info" action={
+                <button className="btn sm primary" onClick={() => location.reload()}>Reload</button>
+              }>
+                Orbis was updated to {updated} while this page was open. Reload to pick up the new interface.
+              </Banner>
+            </div>
+          )}
           {setupRequired && route !== 'settings' && (
             <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
               <Banner tone="warn" action={

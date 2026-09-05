@@ -153,6 +153,7 @@ func (a *App) SystemStatus() map[string]any {
 	status := map[string]any{
 		"mode":       string(cfg.Mode),
 		"node":       cfg.Node.Name,
+		"version":    orDefaultStr(a.build, "dev"),
 		"uptime_sec": int(a.Uptime().Seconds()),
 		"capture":    a.captureStatus(),
 		"dns":        a.DNS.Stats(),

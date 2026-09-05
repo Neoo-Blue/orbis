@@ -88,6 +88,16 @@ func (a *App) SaveShortcut(sc config.DNSShortcut, actor string) (config.DNSShort
 		return sc, err
 	}
 	err := a.Cfg.Update(func(c *config.Config) {
+		// Drop address records for the same name: the shortcut answers it now.
+		kept := c.DNS.Records[:0]
+		for _, r := range c.DNS.Records {
+			t := strings.ToUpper(r.Type)
+			if (t == "A" || t == "AAAA") && strings.EqualFold(strings.TrimSuffix(r.Name, "."), sc.Name) {
+				continue
+			}
+			kept = append(kept, r)
+		}
+		c.DNS.Records = kept
 		for i := range c.DNS.Shortcuts {
 			if strings.EqualFold(c.DNS.Shortcuts[i].Name, sc.Name) {
 				c.DNS.Shortcuts[i] = sc

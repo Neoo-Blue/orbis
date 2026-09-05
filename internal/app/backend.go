@@ -1015,8 +1015,19 @@ func portOfAddr(addr string) int {
 // at startup and after any change through the API.
 func (a *App) ReloadRecords() {
 	cfg := a.Cfg.Snapshot()
+	// A shortcut owns its name: a plain address record for the same name
+	// would give the browser two answers and let it pick the wrong one.
+	shortcutNames := map[string]bool{}
+	for _, sc := range cfg.DNS.Shortcuts {
+		shortcutNames[strings.ToLower(sc.Name)] = true
+	}
 	recs := make([]dnsproxy.LocalRecord, 0, len(cfg.DNS.Records))
 	for _, r := range cfg.DNS.Records {
+		t := strings.ToUpper(r.Type)
+		if (t == "A" || t == "AAAA") && shortcutNames[strings.ToLower(strings.TrimSuffix(r.Name, "."))] {
+			a.log("dns: record %s %s ignored; a shortcut of the same name takes precedence", r.Type, r.Name)
+			continue
+		}
 		recs = append(recs, dnsproxy.LocalRecord{
 			Name: r.Name, Type: r.Type, Value: r.Value, TTL: r.TTL,
 			Priority: r.Priority, Weight: r.Weight, Port: r.Port,

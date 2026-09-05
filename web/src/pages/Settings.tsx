@@ -208,15 +208,22 @@ function GeneralSection({ config, status, save, refresh, toast }: SectionProps) 
           <Segmented
             value={config.mode}
             onChange={async (v) => {
-              if (v === 'inline' && !config.firewall.wan_interface) {
-                toast('Set a WAN interface under Firewall before switching to inline mode', 'err')
-                return
+              if (v === 'inline') {
+                const missing: string[] = []
+                if (!config.firewall.enabled) missing.push('enable the firewall')
+                if (!config.firewall.wan_interface) missing.push('set a WAN interface')
+                if (config.firewall.default_forward === 'drop' && (config.firewall.zones ?? []).length === 0) missing.push('define at least one zone')
+                if (missing.length) {
+                  toast(`Inline mode needs you to ${missing.join(', ')} first (Settings → Firewall). Without them the node would revert to observe at its next start.`, 'err')
+                  return
+                }
+                if (!confirm(
+                  'Inline mode installs an nftables ruleset and starts enforcing policy on traffic ' +
+                  'that passes through this node. Every device that routes through it depends on it. Continue?')) return
               }
-              if (v === 'inline' && !confirm(
-                'Inline mode installs an nftables ruleset and starts enforcing policy on traffic ' +
-                'that passes through this node. Continue?')) return
-              await save({ mode: v })
-              toast(v === 'inline' ? 'Now in inline mode' : 'Back to observe mode', 'ok')
+              if (await save({ mode: v })) {
+                toast(v === 'inline' ? 'Now in inline mode' : 'Back to observe mode', 'ok')
+              }
             }}
             options={[{ value: 'observe', label: 'Observe' }, { value: 'inline', label: 'Inline' }]}
           />

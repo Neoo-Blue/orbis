@@ -323,10 +323,52 @@ func (s *Store) PruneServiceStats(keepDays int) error {
 	return err
 }
 
-// FlowsForBackfill streams flows since a time in pages, for the one-time
-// rollup of history. Kept simple: bounded by limit, ordered by start.
+// FlowsForBackfill reads the columns the usage rollup needs for every flow
+// since a time, without the API's row cap or a sort. The general Flows query
+// clamps its limit for the UI's sake; a one-time rollup of history needs the
+// lot, and only five columns of it.
 func (s *Store) FlowsForBackfill(since time.Time, limit int) ([]Flow, error) {
-	return s.Flows(FlowQuery{Since: &since, Limit: limit, OrderBy: "started_at"})
+	rows, err := s.db.Query(`SELECT id, COALESCE(client_id,''), COALESCE(hostname,''), COALESCE(sni,''),
+		COALESCE(app,''), COALESCE(dst_ip,''), bytes_in, bytes_out, started_at
+		FROM flows WHERE started_at >= ? LIMIT ?`, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Flow, 0, 4096)
+	for rows.Next() {
+		var f Flow
+		var started int64
+		if err := rows.Scan(&f.ID, &f.ClientID, &f.Hostname, &f.SNI, &f.App, &f.DstIP, &f.BytesIn, &f.BytesOut, &started); err != nil {
+			return nil, err
+		}
+		f.StartedAt = time.Unix(started, 0)
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// QueriesForBackfill is the same idea for the query log.
+func (s *Store) QueriesForBackfill(since time.Time, limit int) ([]DNSQuery, error) {
+	rows, err := s.db.Query(`SELECT COALESCE(client_ip,''), name, blocked, ts
+		FROM dns_queries WHERE ts >= ? LIMIT ?`, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]DNSQuery, 0, 4096)
+	for rows.Next() {
+		var q DNSQuery
+		var ts int64
+		var blocked int
+		if err := rows.Scan(&q.ClientIP, &q.Name, &blocked, &ts); err != nil {
+			return nil, err
+		}
+		q.Blocked = blocked != 0
+		q.TS = time.Unix(ts, 0)
+		out = append(out, q)
+	}
+	return out, rows.Err()
 }
 
 func joinPlaceholders(n int) string {

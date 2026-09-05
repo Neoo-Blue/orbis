@@ -1220,6 +1220,15 @@ func (c *Config) Update(fn func(*Config)) error {
 		c.unlock()
 		return err
 	}
+	// Inline mode has prerequisites (firewall on, a WAN interface, a zone).
+	// Refusing here, with the reason, beats accepting the change and having
+	// the daemon silently fall back to observe at its next start, which
+	// looks to the operator like the setting will not stick.
+	if msg := c.reconcileMode(); msg != "" {
+		_ = yaml.Unmarshal(before, c)
+		c.unlock()
+		return fmt.Errorf("inline mode not applied: %s", msg)
+	}
 	c.unlock()
 	return c.Save()
 }

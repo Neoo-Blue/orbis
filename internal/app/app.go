@@ -631,7 +631,7 @@ func (a *App) backfillUsage() {
 		a.log("usage: backfill flows: %v", err)
 		return
 	}
-	queries, err := a.Store.DNSLog(since, "", false, "", 150000)
+	queries, err := a.Store.QueriesForBackfill(since, 150000)
 	if err != nil {
 		a.log("usage: backfill lookups: %v", err)
 		return

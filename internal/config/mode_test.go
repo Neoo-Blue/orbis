@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"sync"
+	"testing"
+)
 
 func TestInlineWithoutFirewallIsCorrectedToObserve(t *testing.T) {
 	// A node in this state forwards without translating: replies come back
@@ -102,5 +106,40 @@ func TestAcceptDefaultForwardWithNoZonesIsAllowed(t *testing.T) {
 	c.Firewall.Zones = nil
 	if note := c.reconcileMode(); note != "" || c.Mode != ModeInline {
 		t.Fatalf("accept policy is not a black hole, got %q / %q", c.Mode, note)
+	}
+}
+
+func TestUpdateRefusesInlineWithoutFirewall(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/orbis.yaml"
+	c := Default()
+	c.path = path
+	c.mu = &sync.RWMutex{}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	live, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = live.Update(func(c *Config) { c.Mode = ModeInline })
+	if err == nil || !strings.Contains(err.Error(), "firewall is disabled") {
+		t.Fatalf("expected a refusal naming the firewall, got %v", err)
+	}
+	if live.Snapshot().Mode != ModeObserve {
+		t.Fatal("mode must roll back to observe")
+	}
+	// With the prerequisites met it goes through.
+	err = live.Update(func(c *Config) {
+		c.Mode = ModeInline
+		c.Firewall.Enabled = true
+		c.Firewall.WANInterface = "eth0"
+		c.Firewall.Zones = []Zone{{Name: "lan", Subnets: []string{"192.168.50.0/24"}, Trust: "lan"}}
+	})
+	if err != nil {
+		t.Fatalf("inline with prerequisites should apply: %v", err)
+	}
+	if live.Snapshot().Mode != ModeInline {
+		t.Fatal("mode should now be inline")
 	}
 }

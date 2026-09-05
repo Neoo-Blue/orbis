@@ -293,6 +293,32 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
+// dnsrewriteBlocksAll reports whether an AdBlock rule's option modifiers
+// amount to nothing more than a DNS rewrite: every modifier is either
+// $dnsrewrite=... or $important. Filter lists use $dnsrewrite to point ads
+// and trackers at a block page or a null address instead of NXDOMAIN, but a
+// DNS-only blocker has no way to serve that rewritten answer, so the closest
+// honest behaviour is to block the name outright. Any other modifier (for
+// example $third-party or $domain=) changes when the rule applies in ways
+// this parser cannot evaluate, so those rules are still skipped.
+func dnsrewriteBlocksAll(modifiers string) bool {
+	hasDNSRewrite := false
+	for _, mod := range strings.Split(modifiers, ",") {
+		mod = strings.TrimSpace(mod)
+		switch {
+		case mod == "":
+			continue
+		case mod == "important":
+			continue
+		case strings.HasPrefix(mod, "dnsrewrite"):
+			hasDNSRewrite = true
+		default:
+			return false
+		}
+	}
+	return hasDNSRewrite
+}
+
 // ParseList understands the formats real blocklists ship in:
 //
 //	hosts:      0.0.0.0 ads.example.com
@@ -325,11 +351,21 @@ func ParseList(r io.Reader) (exact []string, wildcard []string, err error) {
 
 		switch {
 		case strings.HasPrefix(line, "||"):
-			// AdBlock network rule. Only host-anchored rules with no path or
-			// option modifiers translate cleanly to DNS.
+			// AdBlock network rule. Only host-anchored rules with no path
+			// translate cleanly to DNS. A rule with option modifiers is kept
+			// only when every modifier is a $dnsrewrite (or $important
+			// alongside one): those rules redirect the request to a block
+			// page or a null address, which is semantically a block at the
+			// DNS layer even though the rewrite target itself is discarded.
 			body := line[2:]
-			if i := strings.IndexAny(body, "/$"); i >= 0 {
+			if i := strings.Index(body, "/"); i >= 0 {
 				continue
+			}
+			if i := strings.Index(body, "$"); i >= 0 {
+				if !dnsrewriteBlocksAll(body[i+1:]) {
+					continue
+				}
+				body = body[:i]
 			}
 			body = strings.TrimSuffix(body, "^")
 			if strings.ContainsAny(body, "*^|") {

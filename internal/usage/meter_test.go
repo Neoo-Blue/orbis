@@ -100,3 +100,34 @@ func TestNoteDNSAndBackfill(t *testing.T) {
 		t.Fatalf("backfill merged rows = %+v", back)
 	}
 }
+
+func TestNamelessFlowWaitsForItsName(t *testing.T) {
+	m := NewMeter()
+	base := time.Date(2026, 9, 5, 20, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return base }
+	f := store.Flow{ID: "f1", ClientID: "tv", DstIP: "142.251.1.1", BytesIn: 900}
+	m.Sample([]store.Flow{f})
+	if rows := m.Drain(); len(rows) != 0 {
+		t.Fatalf("a nameless flow must not be counted yet: %+v", rows)
+	}
+	// The name arrives a minute later; everything so far lands on it.
+	f.Hostname = "rr1.googlevideo.com"
+	f.BytesIn = 4000
+	m.now = func() time.Time { return base.Add(time.Minute) }
+	m.Sample([]store.Flow{f})
+	rows := m.Drain()
+	if len(rows) != 1 || rows[0].Service != "YouTube" || rows[0].BytesIn != 4000 || rows[0].Conns != 1 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	// A flow that never gets a name is counted after the grace period.
+	g := store.Flow{ID: "g1", ClientID: "tv", DstIP: "203.0.113.9", BytesIn: 50}
+	m.now = func() time.Time { return base.Add(2 * time.Minute) }
+	m.Sample([]store.Flow{g})
+	m.now = func() time.Time { return base.Add(6 * time.Minute) }
+	g.BytesIn = 80
+	m.Sample([]store.Flow{g})
+	rows = m.Drain()
+	if len(rows) != 1 || rows[0].Service != "Unresolved" || rows[0].BytesIn != 80 {
+		t.Fatalf("unresolved rows = %+v", rows)
+	}
+}

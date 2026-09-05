@@ -37,6 +37,15 @@ func TestServiceForFallsBackToRegistrableDomain(t *testing.T) {
 	if s := ServiceFor(""); s.Name != "Unresolved" {
 		t.Errorf("empty = %+v", s)
 	}
+	if s := ServiceFor("192.168.50.75"); s.Name != "Local network" {
+		t.Errorf("private address = %+v", s)
+	}
+	if s := ServiceFor("142.251.218.70"); s.Name != "Unresolved" {
+		t.Errorf("public address = %+v", s)
+	}
+	if s := ServiceFor("one.one.one.one"); s.Name != "Cloudflare" {
+		t.Errorf("1.1.1.1 name = %+v", s)
+	}
 	if got := RegistrableDomain("a.b.example.co.uk"); got != "example.co.uk" {
 		t.Errorf("registrable = %q", got)
 	}

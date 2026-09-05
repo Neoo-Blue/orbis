@@ -1,6 +1,9 @@
 package dpi
 
-import "strings"
+import (
+	"net/netip"
+	"strings"
+)
 
 // The service catalogue: hostnames grouped into the applications and
 // services a person recognises, each with a category. It drives the app label
@@ -220,7 +223,7 @@ var appMatchers = []appMatcher{
 	{name: "AWS", category: CatCloud, suffixes: []string{"amazonaws.com", "awsstatic.com", "cloudfront.net", "amazontrust.com", "awsdns.com"}},
 	{name: "Azure", category: CatCloud, suffixes: []string{"azure.com", "azure.net", "azurewebsites.net", "trafficmanager.net", "azurefd.net", "blob.core.windows.net", "azure-devices.net"}},
 	{name: "Google Cloud", category: CatCloud, suffixes: []string{"googlecloud.com", "run.app", "appspot.com", "firebaseio.com", "firebaseapp.com", "cloudfunctions.net"}},
-	{name: "Cloudflare", category: CatCDN, suffixes: []string{"cloudflare.com", "cloudflare-dns.com", "cloudflareinsights.com", "cloudflarestream.com", "cloudflare.net", "workers.dev", "pages.dev", "cloudflareaccess.com", "cfargotunnel.com"}},
+	{name: "Cloudflare", category: CatCDN, suffixes: []string{"cloudflare.com", "cloudflare-dns.com", "one.one.one.one", "cloudflareinsights.com", "cloudflarestream.com", "cloudflare.net", "workers.dev", "pages.dev", "cloudflareaccess.com", "cfargotunnel.com"}},
 	{name: "Akamai", category: CatCDN, suffixes: []string{"akamai.net", "akamaized.net", "akamaihd.net", "akamaiedge.net", "akadns.net", "akamaitechnologies.com", "edgekey.net", "edgesuite.net"}},
 	{name: "Fastly", category: CatCDN, suffixes: []string{"fastly.net", "fastlylb.net", "fastly-edge.com"}},
 	{name: "jsDelivr/unpkg", category: CatCDN, suffixes: []string{"jsdelivr.net", "unpkg.com", "cdnjs.com"}},
@@ -309,6 +312,13 @@ func ServiceFor(host string) Service {
 	}
 	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	if h == "" {
+		return Service{Name: "Unresolved", Category: CatOther}
+	}
+	// A bare address is not a domain; "192.168.50.75" must not become "50.75".
+	if addr, err := netip.ParseAddr(strings.Trim(h, "[]")); err == nil {
+		if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsMulticast() {
+			return Service{Name: "Local network", Category: CatOther}
+		}
 		return Service{Name: "Unresolved", Category: CatOther}
 	}
 	return Service{Name: RegistrableDomain(h), Category: CatOther}

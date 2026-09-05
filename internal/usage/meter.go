@@ -48,7 +48,16 @@ type flowMark struct {
 	bytesIn  int64
 	bytesOut int64
 	lastSeen time.Time
+	// pendingSince is set while a flow has no name yet. The tracker usually
+	// learns the hostname a moment after the first packets (from the DNS
+	// answer or the ClientHello); counting before that would put a stream's
+	// opening bytes under "Unresolved" and the rest under the right name.
+	pendingSince time.Time
 }
+
+// pendingGrace is how long a nameless flow waits for a name before it is
+// counted as unresolved anyway.
+const pendingGrace = 3 * time.Minute
 
 // Meter accumulates counters between drains.
 type Meter struct {
@@ -107,8 +116,21 @@ func (m *Meter) Sample(flows []store.Flow) {
 		f := &flows[i]
 		present[f.ID] = true
 		mark, known := m.seen[f.ID]
+		if f.Hostname == "" && f.SNI == "" {
+			// No name yet: wait a little, unless we have waited long enough.
+			if !known {
+				m.seen[f.ID] = flowMark{lastSeen: now, pendingSince: now}
+				continue
+			}
+			if !mark.pendingSince.IsZero() && now.Sub(mark.pendingSince) < pendingGrace {
+				mark.lastSeen = now
+				m.seen[f.ID] = mark
+				continue
+			}
+		}
+		wasPending := known && !mark.pendingSince.IsZero()
 		dIn, dOut := f.BytesIn, f.BytesOut
-		if known {
+		if known && !wasPending {
 			dIn -= mark.bytesIn
 			dOut -= mark.bytesOut
 			if dIn < 0 {
@@ -119,13 +141,13 @@ func (m *Meter) Sample(flows []store.Flow) {
 			}
 		}
 		m.seen[f.ID] = flowMark{bytesIn: f.BytesIn, bytesOut: f.BytesOut, lastSeen: now}
-		if !known || dIn > 0 || dOut > 0 {
+		if !known || wasPending || dIn > 0 || dOut > 0 {
 			clientID := f.ClientID
 			if clientID == "" {
 				clientID = "unknown"
 			}
 			c := m.get(bucket, clientID, serviceForFlow(f))
-			if !known {
+			if !known || wasPending {
 				c.conns++
 			}
 			c.bytesIn += dIn

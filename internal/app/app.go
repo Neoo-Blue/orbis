@@ -622,13 +622,16 @@ func (a *App) backfillUsage() {
 		return
 	case <-time.After(90 * time.Second):
 	}
-	since := time.Now().Add(-7 * 24 * time.Hour)
-	flows, err := a.Store.FlowsForBackfill(since, 400000)
+	// Three days, bounded: the point is a page that is not empty on day one,
+	// not a perfect history. 400k flows held in memory at once pushed a
+	// Raspberry Pi past 1.4 GB.
+	since := time.Now().Add(-3 * 24 * time.Hour)
+	flows, err := a.Store.FlowsForBackfill(since, 150000)
 	if err != nil {
 		a.log("usage: backfill flows: %v", err)
 		return
 	}
-	queries, err := a.Store.DNSLog(since, "", false, "", 300000)
+	queries, err := a.Store.DNSLog(since, "", false, "", 150000)
 	if err != nil {
 		a.log("usage: backfill lookups: %v", err)
 		return
@@ -660,7 +663,7 @@ func (a *App) backfillUsage() {
 			return
 		}
 	}
-	a.log("usage: backfilled %d rollup rows from %d flows and %d lookups (7 days)", len(stats), len(flows), len(queries))
+	a.log("usage: backfilled %d rollup rows from %d flows and %d lookups (3 days)", len(stats), len(flows), len(queries))
 }
 
 // SyncTunnelRules installs, updates or removes the tunnel gateway ruleset to

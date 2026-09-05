@@ -222,6 +222,14 @@ func (b *Briefer) gather(since time.Time, hours int) map[string]any {
 	if rows, err := b.backend.TopBlocked(since, 8); err == nil {
 		out["top_blocked"] = rows
 	}
+	if u, err := b.backend.ServiceUsage(since, "", ""); err == nil {
+		if svcs, ok := u["services"].([]map[string]any); ok {
+			if len(svcs) > 10 {
+				svcs = svcs[:10]
+			}
+			out["top_services"] = svcs
+		}
+	}
 	if rows, err := b.backend.CountryTotals(since); err == nil {
 		if len(rows) > 8 {
 			rows = rows[:8]

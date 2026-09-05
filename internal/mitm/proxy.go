@@ -157,6 +157,13 @@ type Stats struct {
 	BytesOut       atomic.Int64
 }
 
+// SetPinStore restores persisted pinned-app bypasses and saves new ones.
+func (p *Proxy) SetPinStore(st PinStore) {
+	if n := p.pins.SetStore(st, time.Now()); n > 0 {
+		p.log("mitm: restored %d pinned-app bypass(es)", n)
+	}
+}
+
 func New(cfg *config.Config, ca *CA, log func(string, ...any)) *Proxy {
 	if log == nil {
 		log = func(string, ...any) {}
@@ -358,6 +365,10 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 	}
 
 	// Replay the bytes we consumed so the TLS server sees a complete stream.
+	// The handshake gets a short deadline of its own: a client that has
+	// already spoken must answer our certificate quickly or it is treated as
+	// having refused it (see handshakeRejected).
+	_ = client.SetReadDeadline(time.Now().Add(pinHandshakeTimeout))
 	replayed := &replayConn{Conn: client, buf: peeked}
 	tlsConn := tls.Server(replayed, &tls.Config{
 		Certificates: []tls.Certificate{*leaf},
@@ -368,7 +379,7 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		p.stats.Errors.Add(1)
-		if rejectedCertificate(err) {
+		if handshakeRejected(err) {
 			if name, tripped := p.pins.fail(clientIP, host, time.Now()); tripped {
 				p.stats.PinBypasses.Add(1)
 				p.log("mitm: %s rejects the certificate for %s (%v); splicing %s for %s. "+

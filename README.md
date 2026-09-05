@@ -227,6 +227,19 @@ smart capture's evidence) and things to investigate. You accept or dismiss each 
 decisions are remembered so a dismissed idea does not come back. `remember` lets you
 keep facts about your network that every prompt then sees.
 
+## Services: who uses what
+
+The **Services** page groups traffic into the applications a person recognises
+(Netflix, YouTube, TikTok, Windows Update, a smart TV's telemetry) from a catalogue of
+a few hundred hostnames with categories; unknown names fall back to their registrable
+domain so nothing hides in "other". Counters are hourly rollups per device and per
+service: connections, bytes down and up, DNS lookups and blocked lookups. Bytes are
+accounted as deltas from the live flow table, so a long stream lands in the hours it
+happened. Bytes exist only for devices whose traffic passes through the node
+(intercepted, or the node inline as gateway); every other device shows lookups and is
+marked DNS-only rather than shown as zero. The assistant answers "how much Netflix did
+the TV watch this week" from the same rollups.
+
 ## Problem reports
 
 What goes wrong on a node is recorded on the **Problems** page: subsystem start

@@ -114,55 +114,15 @@ func RefererHost(ref string) string {
 }
 
 // ClassifyApp maps an observed hostname to a friendly application name so
-// the UI can group "37 connections to googlevideo" as "YouTube".
+// the UI can group "37 connections to googlevideo" as "YouTube". Empty when
+// the name is not in the catalogue; see Classify for the category and the
+// registrable-domain fallback.
 func ClassifyApp(host string) string {
-	h := strings.ToLower(host)
-	for _, m := range appMatchers {
-		for _, suffix := range m.suffixes {
-			if h == suffix || strings.HasSuffix(h, "."+suffix) {
-				return m.name
-			}
-		}
-		for _, frag := range m.contains {
-			if strings.Contains(h, frag) {
-				return m.name
-			}
-		}
+	if svc, ok := Classify(host); ok {
+		return svc.Name
 	}
 	return ""
 }
 
-type appMatcher struct {
-	name     string
-	suffixes []string
-	contains []string
-}
-
 // The list is intentionally short and high-signal; anything unmatched shows
 // its raw hostname, which is more honest than a bad guess.
-var appMatchers = []appMatcher{
-	{name: "YouTube", suffixes: []string{"youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "youtube-nocookie.com", "youtubei.googleapis.com"}},
-	{name: "Netflix", suffixes: []string{"netflix.com", "nflxvideo.net", "nflximg.net", "nflxso.net"}},
-	{name: "Spotify", suffixes: []string{"spotify.com", "scdn.co", "spotifycdn.com"}},
-	{name: "Google", suffixes: []string{"google.com", "gstatic.com", "googleapis.com", "googleusercontent.com", "ggpht.com"}},
-	{name: "Apple", suffixes: []string{"apple.com", "icloud.com", "mzstatic.com", "cdn-apple.com", "apple-dns.net"}},
-	{name: "Microsoft", suffixes: []string{"microsoft.com", "windows.net", "office.com", "office365.com", "live.com", "msftncsi.com", "msedge.net"}},
-	{name: "Meta", suffixes: []string{"facebook.com", "fbcdn.net", "instagram.com", "whatsapp.net", "cdninstagram.com", "fb.com"}},
-	{name: "Amazon", suffixes: []string{"amazon.com", "amazonaws.com", "media-amazon.com", "ssl-images-amazon.com", "aiv-cdn.net"}},
-	{name: "TikTok", suffixes: []string{"tiktok.com", "tiktokcdn.com", "byteoversea.com", "musical.ly", "ibytedtos.com"}},
-	{name: "Discord", suffixes: []string{"discord.com", "discordapp.com", "discord.gg", "discordapp.net"}},
-	{name: "Steam", suffixes: []string{"steampowered.com", "steamcommunity.com", "steamstatic.com", "steamcontent.com"}},
-	{name: "Twitch", suffixes: []string{"twitch.tv", "ttvnw.net", "jtvnw.net"}},
-	{name: "Reddit", suffixes: []string{"reddit.com", "redd.it", "redditmedia.com", "redditstatic.com"}},
-	{name: "X/Twitter", suffixes: []string{"twitter.com", "x.com", "twimg.com", "t.co"}},
-	{name: "Cloudflare", suffixes: []string{"cloudflare.com", "cloudflare-dns.com", "cdnjs.cloudflare.com"}},
-	{name: "GitHub", suffixes: []string{"github.com", "githubusercontent.com", "githubassets.com"}},
-	{name: "Zoom", suffixes: []string{"zoom.us", "zoom.com"}},
-	{name: "Plex", suffixes: []string{"plex.tv", "plex.direct"}},
-	{name: "Sonos", suffixes: []string{"sonos.com", "sonos.radio"}},
-	{name: "Ring", suffixes: []string{"ring.com", "a2z.com"}},
-	{name: "Nest", suffixes: []string{"nest.com", "dropcam.com"}},
-	{name: "Roku", suffixes: []string{"roku.com", "rokutime.com", "roku.co"}},
-	{name: "Ad/Tracking", contains: []string{"doubleclick", "googlesyndication", "googleadservices", "adsystem", "scorecardresearch", "adnxs", "criteo", "taboola", "outbrain", "moatads", "adsafeprotected", "rubiconproject", "pubmatic", "openx", "amazon-adsystem"}},
-	{name: "Telemetry", contains: []string{"telemetry", "analytics", "crashlytics", "sentry.io", "bugsnag", "mixpanel", "segment.io", "amplitude", "appsflyer", "branch.io"}},
-}

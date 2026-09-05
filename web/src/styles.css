@@ -259,7 +259,11 @@
   table.t tbody tr.clickable { cursor: pointer; }
   table.t tbody tr.selected { background: var(--accent-glow); }
   table.t td.num, table.t th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 1px; }
+  /* Ellipsis for overflowing labels. Flex and grid children need min-width: 0 to
+     be allowed to shrink; table cells need a max-width so the table layout does
+     not widen the column to fit the content instead of truncating it. */
+  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  td.truncate, th.truncate { max-width: 1px; }
 
   .empty { padding: 44px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
   .empty strong { display: block; color: var(--text-dim); font-weight: 520; margin-bottom: 5px; }
@@ -409,6 +413,21 @@
   .issue-sev { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
   .issue-sev.critical { background: var(--red); } .issue-sev.warning { background: var(--amber, #e8b04e); }
   .issue-sev.notice { background: var(--blue); } .issue-sev.info { background: var(--text-faint); }
+  .cat { display: inline-block; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: var(--bg-3); color: var(--text-dim); }
+  .cat.video { color: #ff8fa3; background: rgba(255,143,163,.12); } .cat.music { color: #c39bff; background: rgba(195,155,255,.12); }
+  .cat.social { color: #63b3ff; background: rgba(99,179,255,.12); } .cat.messaging { color: #5ce39a; background: rgba(92,227,154,.12); }
+  .cat.gaming { color: #ffc266; background: rgba(255,194,102,.12); } .cat.work, .cat.dev, .cat.storage { color: #8fd3ff; background: rgba(143,211,255,.12); }
+  .cat.ads { color: var(--red); background: rgba(255,107,122,.12); } .cat.telemetry { color: #e8b04e; background: rgba(232,176,78,.12); }
+  .cat.cdn, .cat.cloud, .cat.platform, .cat.updates { color: var(--text-dim); }
+  .stack { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-3); }
+  .stack i { display: block; height: 100%; }
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .vis { font-size: 10.5px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line-soft); color: var(--text-faint); white-space: nowrap; }
+  .vis.bytes { color: var(--green); border-color: rgba(92,227,154,.3); }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 56px; }
+  .bars i { flex: 1; background: var(--accent); opacity: .85; border-radius: 2px 2px 0 0; min-height: 1px; }
+  .bars i.lookups { background: var(--blue); }
   .preview-body { white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; background: var(--bg-2); border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; max-height: 420px; overflow: auto; }
 
   /* ---------- misc ---------- */

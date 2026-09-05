@@ -42,6 +42,10 @@ type Backend interface {
 	Leases() ([]store.Lease, error)
 	AuditLog(limit int) ([]store.AuditEntry, error)
 
+	// ServiceUsage is the per-service, per-device rollup (bytes, connections,
+	// lookups, blocked) over a window.
+	ServiceUsage(since time.Time, clientID, service string) (map[string]any, error)
+
 	// Memory: operator notes and the specialist's standing suggestions.
 	Notes(limit int) ([]store.Note, error)
 	SaveNote(note, source string) (*store.Note, error)
@@ -240,6 +244,20 @@ func Tools(allowWrite bool) []ToolDef {
 			Schema: objSchema(map[string]any{
 				"limit":  numProp("Max entries (default 50, max 300)"),
 				"search": strProp("Filter by action, target or actor substring"),
+			}, nil),
+		},
+		{
+			Name: "service_usage",
+			Description: "Per-app and per-service usage: bytes down/up, connections, DNS lookups and " +
+				"blocked lookups, grouped by service (Netflix, YouTube, TikTok, Windows Update, a " +
+				"registrable domain for unknown names). Pass client_id for one device's breakdown, " +
+				"service for one service's breakdown by device (with hourly points and the hosts " +
+				"behind it), or neither for the whole network. Bytes exist only for devices whose " +
+				"traffic passes through this node; the others show lookups.",
+			Schema: objSchema(map[string]any{
+				"hours":     numProp("Time window in hours (default 24, max 720)"),
+				"client_id": strProp("Restrict to one device"),
+				"service":   strProp("One service name exactly as shown, e.g. \"YouTube\""),
 			}, nil),
 		},
 		{
@@ -641,6 +659,9 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 			entries = filtered
 		}
 		return jsonOf(map[string]any{"count": len(entries), "entries": entries}, nil)
+
+	case "service_usage":
+		return jsonOf(b.ServiceUsage(hoursAgo(args, "hours", 24, 720), strArg(args, "client_id"), strArg(args, "service")))
 
 	case "list_recommendations":
 		recs, err := b.Recommendations(strArg(args, "status"), intArg(args, "limit", 30, 200))

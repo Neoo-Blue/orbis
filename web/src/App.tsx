@@ -23,6 +23,7 @@ import { NetworkPage } from './pages/Network'
 import { VPNPage } from './pages/VPN'
 import { AssistantPage } from './pages/Assistant'
 import { ProblemsPage } from './pages/Problems'
+import { ServicesPage } from './pages/Services'
 import { EventsPage } from './pages/Events'
 import { SettingsPage } from './pages/Settings'
 import { Login } from './pages/Login'
@@ -32,12 +33,13 @@ import { CommandPalette } from './CommandPalette'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services'
 
 const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
   { id: 'globe', label: 'Globe', icon: 'globe' },
   { id: 'flows', label: 'Connections', icon: 'activity' },
+  { id: 'services', label: 'Services', icon: 'tv' },
   { id: 'analytics', label: 'Analytics', icon: 'spark' },
   { id: 'clients', label: 'Devices', icon: 'devices' },
   { id: 'topology', label: 'Topology', icon: 'grid' },
@@ -261,6 +263,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {route === 'vpn' && <VPNPage />}
           {route === 'assistant' && <AssistantPage />}
           {route === 'problems' && <ProblemsPage />}
+          {route === 'services' && <ServicesPage onNavigate={(r) => setRoute(r)} />}
           {route === 'events' && <EventsPage />}
           {route === 'alerts' && <AlertsPage />}
           {route === 'reports' && <ReportsPage />}

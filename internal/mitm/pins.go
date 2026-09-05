@@ -3,6 +3,7 @@ package mitm
 import (
 	"errors"
 	"io"
+	"net"
 	"net/netip"
 	"strings"
 	"sync"
@@ -26,9 +27,18 @@ const (
 	pinWindow      = 5 * time.Minute
 	pinHostFails   = 2
 	pinDomainFails = 5
-	pinBypassFor   = time.Hour
-	pinMaxEntries  = 4096
-	pinPruneEvery  = 200
+	// A bypass lasts a day and survives restarts (see SetStore). An hour
+	// meant the pinned YouTube app on a phone broke for a few seconds every
+	// hour while the tracker relearned what it already knew.
+	pinBypassFor  = 24 * time.Hour
+	pinMaxEntries = 4096
+	pinPruneEvery = 200
+	// pinHandshakeTimeout is how long a client that has already sent its
+	// ClientHello gets to finish the handshake. A browser finishes in well
+	// under a second on a LAN; a pinned app that goes silent after seeing
+	// our certificate is recognised in this many seconds instead of hanging
+	// for twenty and being written off as a network hiccup.
+	pinHandshakeTimeout = 6 * time.Second
 )
 
 // pinTracker keeps rejection counts and active bypasses per (client, name).
@@ -36,6 +46,42 @@ type pinTracker struct {
 	mu      sync.Mutex
 	entries map[pinKey]*pinEntry
 	ops     int
+	// save persists a bypass when one trips, so a restart does not make a
+	// pinned app fail again before the tracker relearns it. Optional.
+	save func(client, name string, until time.Time)
+}
+
+// PinStore is what the tracker needs to remember bypasses across restarts.
+type PinStore interface {
+	PinBypasses() ([]Bypass, error)
+	SavePinBypass(client, name string, until time.Time) error
+}
+
+// SetStore loads persisted bypasses and arranges for new ones to be saved.
+func (t *pinTracker) SetStore(st PinStore, now time.Time) int {
+	if st == nil {
+		return 0
+	}
+	saved, err := st.PinBypasses()
+	if err != nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.entries == nil {
+		t.entries = map[pinKey]*pinEntry{}
+	}
+	n := 0
+	for _, b := range saved {
+		addr, err := netip.ParseAddr(b.Client)
+		if err != nil || !now.Before(b.Until) {
+			continue
+		}
+		t.entries[pinKey{addr, strings.ToLower(b.Name)}] = &pinEntry{fails: b.Fails, first: now, until: b.Until}
+		n++
+	}
+	t.save = func(client, name string, until time.Time) { _ = st.SavePinBypass(client, name, until) }
+	return n
 }
 
 type pinKey struct {
@@ -93,10 +139,29 @@ func (t *pinTracker) fail(client netip.Addr, host string, now time.Time) (string
 		e.fails++
 		if e.fails >= limits[i] && now.After(e.until) {
 			e.until = now.Add(pinBypassFor)
+			if t.save != nil {
+				t.save(k.client.String(), k.name, e.until)
+			}
 			return k.name, true
 		}
 	}
 	return "", false
+}
+
+// handshakeRejected is rejectedCertificate plus the silent case: a client
+// that sent a ClientHello, received our certificate and then said nothing
+// until the handshake deadline. Browsers and libraries that accept the
+// certificate finish in milliseconds; only a client that decided not to
+// continue leaves the handshake hanging.
+func handshakeRejected(err error) bool {
+	if rejectedCertificate(err) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "i/o timeout")
 }
 
 // pinKeys returns the exact-host key and, when the host has a parent

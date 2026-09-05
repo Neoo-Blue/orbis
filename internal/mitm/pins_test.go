@@ -132,3 +132,48 @@ func TestSpliceFallbackOnlyForUnreachableIPv6WithAName(t *testing.T) {
 		t.Fatal("a refusal is not fixed by a different address")
 	}
 }
+
+func TestHandshakeTimeoutCountsAsRejection(t *testing.T) {
+	if !handshakeRejected(&net.OpError{Op: "read", Err: timeoutErr{}}) {
+		t.Fatal("a handshake timeout after the ClientHello must count as a rejection")
+	}
+	if handshakeRejected(errors.New("tls: first record does not look like a TLS handshake")) {
+		t.Fatal("a malformed hello is not a rejection")
+	}
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+type memPinStore struct{ rows []Bypass }
+
+func (m *memPinStore) PinBypasses() ([]Bypass, error) { return m.rows, nil }
+func (m *memPinStore) SavePinBypass(client, name string, until time.Time) error {
+	m.rows = append(m.rows, Bypass{Client: client, Name: name, Until: until})
+	return nil
+}
+
+func TestBypassPersistsThroughStore(t *testing.T) {
+	st := &memPinStore{}
+	var tr pinTracker
+	tr.SetStore(st, time.Now())
+	c := netip.MustParseAddr("192.168.50.24")
+	now := time.Now()
+	tr.fail(c, "youtubei.googleapis.com", now)
+	if _, tripped := tr.fail(c, "youtubei.googleapis.com", now.Add(time.Second)); !tripped {
+		t.Fatal("second rejection should trip the bypass")
+	}
+	if len(st.rows) == 0 {
+		t.Fatal("tripped bypass was not saved")
+	}
+	var fresh pinTracker
+	if n := fresh.SetStore(st, now.Add(2*time.Second)); n == 0 {
+		t.Fatal("saved bypass was not restored")
+	}
+	if !fresh.bypassed(c, "youtubei.googleapis.com", now.Add(3*time.Second)) {
+		t.Fatal("restored tracker should bypass the host")
+	}
+}

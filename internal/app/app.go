@@ -34,6 +34,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/Neoo-Blue/orbis/internal/topology"
+	"github.com/Neoo-Blue/orbis/internal/usage"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
 	"github.com/google/uuid"
 	"github.com/miekg/dns"
@@ -78,6 +79,9 @@ type App struct {
 
 	// Issues is the problem recorder (and GitHub reporter).
 	Issues *issues.Recorder
+	// Usage rolls the live flow table and the query log into per-device,
+	// per-service counters.
+	Usage *usage.Meter
 	// logRing keeps the last few hundred log lines for diagnostics bundles.
 	logRing *logRing
 
@@ -224,6 +228,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	} else {
 		a.CA = ca
 		a.MITM = mitm.New(cfg, ca, logf)
+		a.MITM.SetPinStore(pinStore{st})
 		a.MITM.OnRequest = func(clientIP netip.Addr, host, path, referer string, respBytes int64) {
 			a.Smart.ObserveRequest(host, adblock.ClientKeyFor(clientIP),
 				dpi.RefererHost(referer), path, respBytes, "")
@@ -286,6 +291,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	// Problem recorder. Device names are scrubbed from every report, and
 	// the diagnostics bundle is the same snapshot the status page shows.
 	a.Issues = issues.New(cfg, st, "", a.identifyingNames, a.diagnostics, logf)
+
+	// Per-service usage accounting.
+	a.Usage = usage.NewMeter()
 
 	if err := a.reloadPolicies(); err != nil {
 		logf("policies: load failed: %v", err)
@@ -543,6 +551,13 @@ func (a *App) maintenanceLoop() {
 	defer counters.Stop()
 	defer prune.Stop()
 
+	// History that predates the rollups gets folded in once, in the
+	// background, so the Services page has a week of numbers on day one.
+	if a.Store.ServiceStatsEmpty() {
+		a.wg.Add(1)
+		go func() { defer a.wg.Done(); a.backfillUsage() }()
+	}
+
 	for {
 		select {
 		case <-a.ctx.Done():
@@ -550,6 +565,7 @@ func (a *App) maintenanceLoop() {
 
 		case <-stats.C:
 			a.recordStats()
+			a.flushUsage()
 			for _, f := range a.Alerts.Evaluate(time.Now()) {
 				a.raise(f.Severity, "alert", f.Title, f.Detail)
 			}
@@ -569,8 +585,82 @@ func (a *App) maintenanceLoop() {
 				a.log("store: prune failed: %v", err)
 			}
 			_ = a.Store.PruneAIUsage(45)
+			_ = a.Store.PruneServiceStats(90)
 		}
 	}
+}
+
+// flushUsage samples the live flow table and lands the minute's deltas.
+func (a *App) flushUsage() {
+	if a.Usage == nil || a.Tracker == nil {
+		return
+	}
+	a.Usage.Sample(a.Tracker.Active(0))
+	rows := a.Usage.Drain()
+	if len(rows) == 0 {
+		return
+	}
+	stats := make([]store.ServiceStat, 0, len(rows))
+	for _, r := range rows {
+		stats = append(stats, store.ServiceStat{
+			Bucket: r.Bucket, ClientID: r.ClientID, Service: r.Service, Category: r.Category,
+			Conns: r.Conns, BytesIn: r.BytesIn, BytesOut: r.BytesOut, Lookups: r.Lookups, Blocked: r.Blocked,
+		})
+	}
+	if err := a.Store.AddServiceStats(stats); err != nil {
+		a.log("usage: flush failed: %v", err)
+	}
+}
+
+// backfillUsage folds the last week of flows and lookups into rollups. A
+// flow's whole volume lands in the hour it started, which is an approximation
+// the live accounting does not make; it is only ever run on a node that has
+// no rollups at all.
+func (a *App) backfillUsage() {
+	select {
+	case <-a.ctx.Done():
+		return
+	case <-time.After(90 * time.Second):
+	}
+	since := time.Now().Add(-7 * 24 * time.Hour)
+	flows, err := a.Store.FlowsForBackfill(since, 400000)
+	if err != nil {
+		a.log("usage: backfill flows: %v", err)
+		return
+	}
+	queries, err := a.Store.DNSLog(since, "", false, "", 300000)
+	if err != nil {
+		a.log("usage: backfill lookups: %v", err)
+		return
+	}
+	clientOf := func(ip string) string {
+		if addr, err := netip.ParseAddr(ip); err == nil {
+			if c := a.Registry.ByIP(addr); c != nil {
+				return c.ID
+			}
+		}
+		return "ip:" + ip
+	}
+	rows := usage.Backfill(flows, queries, clientOf)
+	stats := make([]store.ServiceStat, 0, len(rows))
+	for _, r := range rows {
+		stats = append(stats, store.ServiceStat{
+			Bucket: r.Bucket, ClientID: r.ClientID, Service: r.Service, Category: r.Category,
+			Conns: r.Conns, BytesIn: r.BytesIn, BytesOut: r.BytesOut, Lookups: r.Lookups, Blocked: r.Blocked,
+		})
+	}
+	// In slices, so one huge transaction does not hold the writer for long.
+	for i := 0; i < len(stats); i += 2000 {
+		end := i + 2000
+		if end > len(stats) {
+			end = len(stats)
+		}
+		if err := a.Store.AddServiceStats(stats[i:end]); err != nil {
+			a.log("usage: backfill write: %v", err)
+			return
+		}
+	}
+	a.log("usage: backfilled %d rollup rows from %d flows and %d lookups (7 days)", len(stats), len(flows), len(queries))
 }
 
 // SyncTunnelRules installs, updates or removes the tunnel gateway ruleset to
@@ -797,6 +887,13 @@ func orDefaultStr(v, def string) string {
 // ---- hooks ----
 
 func (a *App) onDNSQuery(clientIP netip.Addr, name string, blocked bool) {
+	if a.Usage != nil {
+		clientID, _ := a.clientForAddr(clientIP)
+		if clientID == "" {
+			clientID = "ip:" + clientIP.String()
+		}
+		a.Usage.NoteDNS(clientID, name, blocked)
+	}
 	if blocked {
 		return
 	}
@@ -937,4 +1034,23 @@ func (a *App) reversePTR(name, domain string) []dns.RR {
 		}}
 	}
 	return nil
+}
+
+// pinStore adapts the store to the proxy's persistence interface.
+type pinStore struct{ st *store.Store }
+
+func (p pinStore) SavePinBypass(client, name string, until time.Time) error {
+	return p.st.SavePinBypass(client, name, until)
+}
+
+func (p pinStore) PinBypasses() ([]mitm.Bypass, error) {
+	rows, err := p.st.PinBypasses()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]mitm.Bypass, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, mitm.Bypass{Client: r.Client, Name: r.Name, Until: r.Until, Fails: r.Fails})
+	}
+	return out, nil
 }

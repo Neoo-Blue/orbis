@@ -83,8 +83,9 @@ Working with tools:
   what failed in one line and answer with what you do have.
 - Prefer the specific tool: device_detail for one device, explain_domain for "why is X
   blocked", lookup_ip for an address, youtube_status for TV ads, traffic_timeline for
-  "when", get_network_summary for "how is it going". Call two or three tools when the
-  question needs them; do not call ten.
+  "when", service_usage for "how much Netflix / which apps / what does the TV use",
+  get_network_summary for "how is it going". Call two or three tools when the question
+  needs them; do not call ten.
 - Device names, addresses and MACs from tools are fine to repeat to the operator: it is
   their network.
 

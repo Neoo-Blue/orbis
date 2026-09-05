@@ -13,6 +13,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
+	"github.com/Neoo-Blue/orbis/internal/dpi"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
 	"github.com/Neoo-Blue/orbis/internal/intercept"
@@ -460,6 +461,80 @@ func (a *App) SetBuild(v string) {
 	if a.Issues != nil {
 		a.Issues.SetVersion(v)
 	}
+}
+
+// ServiceUsage answers "how much of what, by whom" from the rollups. With a
+// service it breaks down by device; with a device it breaks down by service;
+// with neither it is the network-wide table. Devices whose bytes this node
+// cannot see are marked so the numbers are not misread.
+func (a *App) ServiceUsage(since time.Time, clientID, service string) (map[string]any, error) {
+	until := time.Now()
+	out := map[string]any{
+		"since": since.Format(time.RFC3339), "until": until.Format(time.RFC3339),
+		"note": "bytes are only counted for devices whose traffic passes through this node (intercepted, or inline mode); " +
+			"other devices show DNS lookups only",
+	}
+	names := map[string]string{}
+	for _, c := range a.Registry.All() {
+		n := c.Label
+		if n == "" {
+			n = c.Hostname
+		}
+		if n == "" {
+			n = c.IP
+		}
+		names[c.ID] = n
+	}
+	label := func(id string) string {
+		if n, ok := names[id]; ok {
+			return n
+		}
+		return id
+	}
+	switch {
+	case service != "":
+		devices, err := a.Store.ServiceDevices(since, until, service)
+		if err != nil {
+			return nil, err
+		}
+		rows := make([]map[string]any, 0, len(devices))
+		for _, d := range devices {
+			rows = append(rows, map[string]any{
+				"client_id": d.ClientID, "device": label(d.ClientID), "connections": d.Conns,
+				"bytes_in": d.BytesIn, "bytes_out": d.BytesOut, "lookups": d.Lookups, "blocked": d.Blocked,
+				"bytes_visible": d.BytesIn+d.BytesOut > 0,
+			})
+		}
+		series, _ := a.Store.ServiceSeries(since, until, clientID, service)
+		out["service"] = service
+		out["devices"] = rows
+		out["hourly"] = series
+		hosts, _ := a.Store.ServiceHosts(since, clientID, dpi.ClassifyApp, service, 15)
+		out["top_hosts"] = hosts
+	default:
+		totals, err := a.Store.ServiceTotals(since, until, clientID, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(totals) > 40 {
+			totals = totals[:40]
+		}
+		rows := make([]map[string]any, 0, len(totals))
+		for _, t := range totals {
+			rows = append(rows, map[string]any{
+				"service": t.Service, "category": t.Category, "devices": t.Devices, "connections": t.Conns,
+				"bytes_in": t.BytesIn, "bytes_out": t.BytesOut, "lookups": t.Lookups, "blocked": t.Blocked,
+			})
+		}
+		out["services"] = rows
+		if clientID != "" {
+			out["client_id"] = clientID
+			out["device"] = label(clientID)
+			series, _ := a.Store.ServiceSeries(since, until, clientID, "")
+			out["hourly"] = series
+		}
+	}
+	return out, nil
 }
 
 // ---- memory and the specialist ----

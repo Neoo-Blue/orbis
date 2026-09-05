@@ -379,6 +379,29 @@ var migrations = []string{
 		model       TEXT NOT NULL DEFAULT '',
 		UNIQUE (kind, domain)
 	)`,
+	// Pinned-app bypasses learned by the filter proxy, kept across restarts.
+	`CREATE TABLE IF NOT EXISTS pin_bypasses (
+		client TEXT NOT NULL,
+		name   TEXT NOT NULL,
+		until  INTEGER NOT NULL,
+		fails  INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (client, name)
+	)`,
+	// Hourly per-device, per-service rollups behind the Services page.
+	`CREATE TABLE IF NOT EXISTS service_stats (
+		bucket     INTEGER NOT NULL,
+		client_id  TEXT NOT NULL,
+		service    TEXT NOT NULL,
+		category   TEXT NOT NULL DEFAULT '',
+		conns      INTEGER NOT NULL DEFAULT 0,
+		bytes_in   INTEGER NOT NULL DEFAULT 0,
+		bytes_out  INTEGER NOT NULL DEFAULT 0,
+		lookups    INTEGER NOT NULL DEFAULT 0,
+		blocked    INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (bucket, client_id, service)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_service_stats_service ON service_stats(service, bucket)`,
+	`CREATE INDEX IF NOT EXISTS idx_service_stats_client ON service_stats(client_id, bucket)`,
 	// Free-text facts the operator (or the assistant, when asked) wants
 	// remembered about this network. Fed to every prompt.
 	`CREATE TABLE IF NOT EXISTS ai_notes (

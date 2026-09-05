@@ -418,6 +418,67 @@ export interface IssuesResponse {
   github: { enabled: boolean; repo: string; ready: boolean; via: 'token' | 'relay'; auto_report: boolean; max_per_day: number }
 }
 
+// ---- services ----
+
+export interface ServiceTotal {
+  service: string
+  category: string
+  client_id?: string
+  devices: number
+  conns: number
+  bytes_in: number
+  bytes_out: number
+  lookups: number
+  blocked: number
+  spark?: number[]
+}
+
+export interface ServiceDevice {
+  client_id: string
+  name: string
+  ip?: string
+  mac?: string
+  vendor?: string
+  type?: string
+  online?: boolean
+  services: number | ServiceTotal[]
+  conns: number
+  bytes_in: number
+  bytes_out: number
+  lookups: number
+  blocked: number
+  bytes_visible: boolean
+  intercepted?: boolean
+}
+
+export interface ServicePoint {
+  t: number
+  bytes_in: number
+  bytes_out: number
+  conns: number
+  lookups: number
+  blocked: number
+}
+
+export interface ServicesResponse {
+  since: string
+  until: string
+  client_id: string
+  services: ServiceTotal[]
+  devices: ServiceDevice[]
+  mode: string
+  catalogue: number
+}
+
+export interface ServiceDetail {
+  service: string
+  since: string
+  until: string
+  devices: Array<{ client_id: string; name: string; ip?: string; conns: number; bytes_in: number; bytes_out: number; lookups: number; blocked: number; bytes_visible: boolean }>
+  series: ServicePoint[]
+  hosts: Array<{ host: string; conns: number; bytes_in: number; bytes_out: number }>
+}
+
 export interface AIBrief {
   id: string
   ts: string

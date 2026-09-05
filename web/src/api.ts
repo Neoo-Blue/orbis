@@ -1,6 +1,6 @@
 import type {
   AdCandidate, AIBrief, AIModelsStatus, AINote, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery,
-  Issue, IssuesResponse, Recommendation,
+  Issue, IssuesResponse, Recommendation, ServiceDetail, ServiceDevice, ServicePoint, ServicesResponse, ServiceTotal,
   EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule,
   Summary, SysctlStatus, SystemStatus, TailscaleStatus, WGPeer,
   YouTubeStatus, DiscoveredScreen, LoungeDevice,
@@ -313,6 +313,16 @@ export const api = {
     notes: () => get<{ notes: AINote[] }>('/ai/notes'),
     addNote: (note: string) => post<{ note: AINote }>('/ai/notes', { note }),
     deleteNote: (id: string) => del<{ ok: boolean }>(`/ai/notes/${id}`),
+  },
+
+  services: {
+    list: (hours = 24, client_id = '') => get<ServicesResponse>(`/services${qs({ hours, client_id })}`),
+    detail: (service: string, hours = 24, client_id = '') =>
+      get<ServiceDetail>(`/services/detail${qs({ service, hours, client_id })}`),
+    devices: (hours = 24) => get<{ since: string; until: string; devices: ServiceDevice[] }>(`/services/devices${qs({ hours })}`),
+    device: (client_id: string, hours = 24) =>
+      get<{ client_id: string; device?: Record<string, unknown>; services: ServiceTotal[]; series: ServicePoint[] }>(`/services/devices${qs({ hours, client_id })}`),
+    catalogue: () => get<{ services: Array<{ name: string; category: string }> }>('/services/catalogue'),
   },
 
   issues: {

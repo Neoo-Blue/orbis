@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/google/uuid"
 )
@@ -45,6 +46,11 @@ type Backend interface {
 	// ServiceUsage is the per-service, per-device rollup (bytes, connections,
 	// lookups, blocked) over a window.
 	ServiceUsage(since time.Time, clientID, service string) (map[string]any, error)
+
+	// Shortcuts: names for things on a port, served by the node itself.
+	Shortcuts() []config.DNSShortcut
+	SaveShortcut(sc config.DNSShortcut, actor string) (config.DNSShortcut, error)
+	DeleteShortcut(name, actor string) error
 
 	// Memory: operator notes and the specialist's standing suggestions.
 	Notes(limit int) ([]store.Note, error)
@@ -261,6 +267,12 @@ func Tools(allowWrite bool) []ToolDef {
 			}, nil),
 		},
 		{
+			Name: "list_shortcuts",
+			Description: "Names Orbis serves for things on the network that live on a port, e.g. " +
+				"deep.seek -> http://192.168.50.223:8080. Typing the name in a browser lands on the target.",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
 			Name: "list_recommendations",
 			Description: "The blocklist specialist's standing suggestions: domains that look " +
 				"wrongly blocked (allow), new ad or tracking hosts worth blocking (block), and " +
@@ -296,6 +308,26 @@ func Tools(allowWrite bool) []ToolDef {
 		},
 
 		// ---- mutating ----
+		{
+			Name: "add_shortcut",
+			Description: "Give something on the network a name that includes its port: " +
+				"add_shortcut(name=\"deep.seek\", target=\"192.168.50.223:8080\") makes http://deep.seek " +
+				"open that service. DNS cannot carry a port, so Orbis answers the name itself and redirects " +
+				"(default) or relays (mode=proxy, the address bar keeps the name).",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"name":   strProp("The name to type, e.g. deep.seek or nas.lan"),
+				"target": strProp("Where it goes: host:port or a URL"),
+				"mode":   enumProp("redirect (default) or proxy", []string{"redirect", "proxy"}),
+				"note":   strProp("Optional note"),
+			}, []string{"name", "target"}),
+		},
+		{
+			Name:        "remove_shortcut",
+			Description: "Remove a shortcut by name.",
+			Mutating:    true,
+			Schema:      objSchema(map[string]any{"name": strProp("The shortcut name")}, []string{"name"}),
+		},
 		{
 			Name: "decide_recommendation",
 			Description: "Accept or dismiss one of the specialist's suggestions. Accepting an " +
@@ -458,6 +490,7 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"set_client_blocked": true, "label_client": true, "decide_ad_candidate": true,
 		"flush_dns_cache": true, "refresh_blocklists": true,
 		"decide_recommendation": true, "report_problem": true,
+		"add_shortcut": true, "remove_shortcut": true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -662,6 +695,25 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 
 	case "service_usage":
 		return jsonOf(b.ServiceUsage(hoursAgo(args, "hours", 24, 720), strArg(args, "client_id"), strArg(args, "service")))
+
+	case "list_shortcuts":
+		return jsonOf(map[string]any{"shortcuts": b.Shortcuts()}, nil)
+
+	case "add_shortcut":
+		sc, err := b.SaveShortcut(config.DNSShortcut{
+			Name: strArg(args, "name"), Target: strArg(args, "target"), Mode: strArg(args, "mode"), Note: strArg(args, "note"),
+		}, actor)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Shortcut saved: http://%s now %s to %s.", sc.Name,
+			map[bool]string{true: "relays", false: "redirects"}[sc.Mode == "proxy"], sc.Target), nil
+
+	case "remove_shortcut":
+		if err := b.DeleteShortcut(strArg(args, "name"), actor); err != nil {
+			return "", err
+		}
+		return "Shortcut removed.", nil
 
 	case "list_recommendations":
 		recs, err := b.Recommendations(strArg(args, "status"), intArg(args, "limit", 30, 200))

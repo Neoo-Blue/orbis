@@ -4,6 +4,7 @@ import { usePoll } from '../hooks'
 import { Banner, Field, Loading, Spinner, useToast } from '../ui'
 import type { AppConfig } from '../types'
 import { BigSwitch, Section } from './common'
+import { ShortcutsCard } from '../Shortcuts'
 
 /**
  * Protection: every filtering feature as a sentence and a switch. The
@@ -106,6 +107,10 @@ export function SimpleProtection({ config, save, onNavigate }: {
             <button className="btn" onClick={() => onNavigate('dnstools')}>Check why a site is blocked</button>
           </div>
         </div>
+      </Section>
+
+      <Section title="Give something at home a name" hint="Type deep.seek instead of 192.168.50.223:8080.">
+        <ShortcutsCard compact />
       </Section>
 
       <Section title="Family profiles" hint="Kids, Homework, Guests, Unfiltered. Assign them per device.">

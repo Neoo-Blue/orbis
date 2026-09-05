@@ -248,6 +248,8 @@ export interface Health {
 
 export interface ServiceBundle { id: string; name: string; domains: number }
 
+export interface DNSShortcut { name: string; target: string; mode: 'redirect' | 'proxy'; note?: string }
+
 export interface Summary {
   flows: number
   flows_blocked: number

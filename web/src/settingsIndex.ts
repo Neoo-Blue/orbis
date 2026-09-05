@@ -21,6 +21,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: 'dns', label: 'Sinkhole addresses', keywords: 'blocked answer 0.0.0.0 nxdomain' },
   { section: 'dns', label: 'Query logging', keywords: 'log queries privacy history' },
   { section: 'dns', label: 'Local domain and records', keywords: 'lan .lan hostnames local records rewrite' },
+  { section: 'dns', label: 'Shortcuts (name to host:port)', keywords: 'shortcut port redirect proxy name point url' },
   { section: 'dns', label: 'Encrypted DNS server (DoT, DoH)', keywords: 'serve dns over tls https 853 8443 certificate' },
   { section: 'dns', label: 'Rebind protection', keywords: 'rebinding private answers security' },
   { section: 'adblock', label: 'Ad blocking on or off', keywords: 'ads trackers enable disable' },

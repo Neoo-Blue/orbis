@@ -26,7 +26,9 @@ type Server struct {
 	app  *app.App
 	cfg  *config.Config
 	http *http.Server
-	log  func(string, ...any)
+	// extra holds helper listeners (the port-80 shortcut server).
+	extra []*http.Server
+	log   func(string, ...any)
 	// webFS is the embedded UI, used when no on-disk web root exists.
 	webFS fs.FS
 }
@@ -77,7 +79,7 @@ func (s *Server) Start() error {
 
 	s.http = &http.Server{
 		Addr:              cfg.API.Listen,
-		Handler:           r,
+		Handler:           s.shortcuts(r),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: the WebSocket and the chat stream are long-lived.
 		IdleTimeout: 120 * time.Second,
@@ -93,10 +95,14 @@ func (s *Server) Start() error {
 		}
 	}()
 	s.log("api: listening on %s", cfg.API.Listen)
+	s.startShortcutListener(cfg.API.Listen)
 	return nil
 }
 
 func (s *Server) Stop() error {
+	for _, e := range s.extra {
+		_ = e.Close()
+	}
 	if s.http == nil {
 		return nil
 	}

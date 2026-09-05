@@ -222,6 +222,15 @@ nothing done in one is invisible in the other. **Profiles** (Kids, Homework,
 Guests, Unfiltered, or your own) are per-device filtering policies with
 switched-off apps, safe search, schedules and allow/deny lists, shared by both.
 
+## Shortcuts: a name for something on a port
+
+DNS can hold an address but never a port, so `nas:5001` can never be a record.
+Orbis closes that gap with **shortcuts**: `deep.seek` → `http://192.168.50.223:8080`.
+The resolver answers the name with the node's own address, and the node then
+redirects the browser to the real host and port (default) or relays the traffic
+so the address bar keeps the name. Works over http for every device that uses
+Orbis for DNS; the assistant can add them too ("make deep.seek open 192.168.50.223:8080").
+
 ## The assistant, free models, and the periodic checks
 
 The built-in assistant talks to Anthropic, OpenAI, OpenRouter or a local Ollama. On

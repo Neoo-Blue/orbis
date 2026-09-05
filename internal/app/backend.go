@@ -1022,6 +1022,16 @@ func (a *App) ReloadRecords() {
 			Priority: r.Priority, Weight: r.Weight, Port: r.Port,
 		})
 	}
+	// Shortcuts resolve to this node; the HTTP side takes it from there.
+	if len(cfg.DNS.Shortcuts) > 0 {
+		if self := nodeLANAddr(); self != "" {
+			for _, sc := range cfg.DNS.Shortcuts {
+				recs = append(recs, dnsproxy.LocalRecord{Name: sc.Name, Type: "A", Value: self, TTL: 60})
+			}
+		} else {
+			a.log("dns: shortcuts configured but this node's LAN address could not be determined")
+		}
+	}
 	rs := dnsproxy.BuildRecordSet(recs)
 	a.recordsMu.Lock()
 	a.records = rs

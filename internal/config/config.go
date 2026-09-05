@@ -263,6 +263,22 @@ type DNSConfig struct {
 	// Records are operator-defined local DNS records, which make Orbis
 	// authoritative for your own names alongside filtering everything else.
 	Records []DNSRecord `yaml:"records" json:"records"`
+	// Shortcuts give a name to something on the network that lives on a
+	// port: "deep.seek" -> http://192.168.50.223:8080. DNS cannot carry a
+	// port, so Orbis answers the name with its own address and then sends
+	// the browser on (redirect) or serves the target under the name (proxy).
+	Shortcuts []DNSShortcut `yaml:"shortcuts" json:"shortcuts"`
+}
+
+// DNSShortcut is one name -> URL mapping served by the node itself.
+type DNSShortcut struct {
+	Name string `yaml:"name" json:"name"`
+	// Target is a URL: http://192.168.50.223:8080 or https://nas.lan:5001.
+	Target string `yaml:"target" json:"target"`
+	// Mode is "redirect" (the address bar shows the real host and port) or
+	// "proxy" (the address bar keeps the name; Orbis relays the traffic).
+	Mode string `yaml:"mode" json:"mode"`
+	Note string `yaml:"note,omitempty" json:"note,omitempty"`
 }
 
 // DNSRecord is one operator-defined answer. Type is A, AAAA, CNAME, TXT, MX,

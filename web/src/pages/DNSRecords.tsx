@@ -3,6 +3,7 @@ import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Card, Empty, Icons, useConfirm, useToast } from '../ui'
 import type { DNSRecord } from '../types'
+import { ShortcutsCard } from '../Shortcuts'
 
 const TYPES = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'SRV', 'NS', 'PTR']
 
@@ -52,6 +53,7 @@ export function DNSRecordsCard() {
   }
 
   return (
+    <>
     <Card title="Local DNS records">
       <div className="hint" style={{ marginBottom: 11 }}>
         Answers Orbis gives authoritatively for your own names. A local record wins over both a
@@ -125,5 +127,7 @@ export function DNSRecordsCard() {
         </button>
       </div>
     </Card>
+    <ShortcutsCard />
+    </>
   )
 }

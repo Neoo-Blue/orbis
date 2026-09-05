@@ -44,6 +44,20 @@ func (a *App) DiagnoseDomain(ctx context.Context, domain, clientID string, resol
 	final := "allow"
 	reason := "Nothing blocks this name."
 
+	// 0. Shortcuts: the name is one of ours and points at something on a port.
+	if sc := a.ShortcutFor(name); sc != nil {
+		steps = append(steps, DiagnoseStep{
+			Stage: "Shortcut", Hit: true, Verdict: "allow",
+			Detail: fmt.Sprintf("Answered with this node's address; requests are then %s to %s.",
+				map[string]string{"proxy": "relayed"}[sc.Mode]+map[bool]string{true: "", false: "redirected"}[sc.Mode == "proxy"], sc.Target),
+			Rule: sc.Name, Source: "shortcut",
+		})
+		return map[string]any{
+			"domain": name, "verdict": "allow", "reason": "This is a shortcut served by Orbis itself.",
+			"steps": steps, "cname_chain": []string{}, "answers": []string{}, "policy": "",
+		}, nil
+	}
+
 	// 1. Operator rewrites.
 	if len(cfg.DNS.Rewrites) > 0 {
 		hit := false

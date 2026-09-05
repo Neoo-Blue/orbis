@@ -1,5 +1,5 @@
 import type {
-  AdCandidate, AIBrief, AIModelsStatus, AINote, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery, Health, ServiceBundle,
+  AdCandidate, AIBrief, AIModelsStatus, AINote, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery, DNSShortcut, Health, ServiceBundle,
   Issue, IssuesResponse, Recommendation, ServiceDetail, ServiceDevice, ServicePoint, ServicesResponse, ServiceTotal,
   EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule,
   Summary, SysctlStatus, SystemStatus, TailscaleStatus, WGPeer,
@@ -313,6 +313,12 @@ export const api = {
     notes: () => get<{ notes: AINote[] }>('/ai/notes'),
     addNote: (note: string) => post<{ note: AINote }>('/ai/notes', { note }),
     deleteNote: (id: string) => del<{ ok: boolean }>(`/ai/notes/${id}`),
+  },
+
+  shortcuts: {
+    list: () => get<{ shortcuts: DNSShortcut[]; node_port: string }>('/dns/shortcuts'),
+    save: (sc: Partial<DNSShortcut>) => post<{ shortcut: DNSShortcut; open: string }>('/dns/shortcuts', sc),
+    remove: (name: string) => post<{ ok: boolean }>('/dns/shortcuts/delete', { name }),
   },
 
   simple: {

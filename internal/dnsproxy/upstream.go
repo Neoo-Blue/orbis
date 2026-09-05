@@ -136,6 +136,8 @@ var knownDoTNames = map[string]string{
 	"2001:4860:4860::8888": "dns.google", "2001:4860:4860::8844": "dns.google",
 	"94.140.14.14": "dns.adguard-dns.com", "94.140.15.15": "dns.adguard-dns.com",
 	"45.90.28.0": "dns.nextdns.io", "76.76.2.0": "dns.controld.com",
+	"185.222.222.222": "dns.sb", "45.11.45.11": "dns.sb",
+	"2a09::": "dns.sb", "2a11::": "dns.sb",
 }
 
 func newDoHClient() *http.Client {

@@ -292,6 +292,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);
 // node that has been running.
 var migrations = []string{
 	`ALTER TABLE policies ADD COLUMN blocked_services TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE policies ADD COLUMN unfiltered INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE dns_queries ADD COLUMN policy TEXT`,
 	`CREATE TABLE IF NOT EXISTS consent_rules (
 		client_id  TEXT NOT NULL,

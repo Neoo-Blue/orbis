@@ -325,8 +325,14 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	// 4. Block policy on the queried name.
-	if cfg.AdBlock.Enabled {
+	// 4. Block policy on the queried name. A client on an unfiltered policy
+	//    skips the subscriptions entirely (its own denylist was applied in
+	//    step 3's spirit by evaluateBlock; here nothing from a list applies).
+	unfiltered := policy != nil && policy.Unfiltered && ScheduleActive(policy.Schedule, start)
+	if unfiltered {
+		logEntry.BlockSource = "policy:" + policy.Name + ":unfiltered"
+	}
+	if cfg.AdBlock.Enabled && !unfiltered {
 		if match, blocked := s.evaluateBlock(name, clientAddr, cfg); blocked {
 			m := s.blockedReply(r, q, cfg, match)
 			logEntry.Blocked = true
@@ -377,7 +383,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 
 	// 7. CNAME uncloaking. A first-party name that CNAMEs into an ad network
 	//    is invisible to step 4; this is where that gets caught.
-	if cfg.AdBlock.Enabled && cfg.AdBlock.CNAMEUncloak {
+	if cfg.AdBlock.Enabled && cfg.AdBlock.CNAMEUncloak && !unfiltered {
 		chain := cnameChain(resp)
 		if len(chain) > 0 {
 			if match := s.matcher.LookupChain(chain); match.Blocked {

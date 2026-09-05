@@ -133,6 +133,12 @@ type Policy struct {
 	// for clients on this policy.
 	BlockedServices []string `json:"blocked_services"`
 	BlockDoH    bool      `json:"block_doh"`
+	// Unfiltered exempts clients on this policy from the blocklists (the
+	// global matcher and CNAME uncloaking). The policy's own denylist,
+	// blocked services and DoH rule still apply: those are the operator's
+	// decisions about this device, not a subscription. This is what AdGuard
+	// Home calls a client with filtering disabled.
+	Unfiltered  bool      `json:"unfiltered"`
 	Schedule    string    `json:"schedule,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

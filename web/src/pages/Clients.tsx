@@ -320,9 +320,15 @@ function ClientSettings({ client, onChanged }: { client: Client; onChanged: () =
         <select className="select" value={policyId} onChange={(e) => setPolicyId(e.target.value)}>
           <option value="">Default (global blocklists)</option>
           {(policies?.policies ?? []).map((p: Policy) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
+            <option key={p.id} value={p.id}>{p.name}{p.unfiltered ? ' (unfiltered)' : ''}</option>
           ))}
         </select>
+        {(policies?.policies ?? []).find((p: Policy) => p.id === policyId)?.unfiltered && (
+          <div className="hint">
+            Unfiltered: blocklists and CNAME uncloaking are skipped for this device. Only the policy's own
+            rules, blocked services and DoH setting apply.
+          </div>
+        )}
       </div>
       <div className="field">
         <label>Notes</label>

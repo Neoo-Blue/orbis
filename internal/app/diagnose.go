@@ -116,7 +116,23 @@ func (a *App) DiagnoseDomain(ctx context.Context, domain, clientID string, resol
 		}
 	}
 
-	// 3. The global matcher: local rules and subscriptions.
+	// 3. The global matcher: local rules and subscriptions. An unfiltered
+	//    policy skips them for this device, and the trace says so instead of
+	//    reporting a block that never happens.
+	if policy != nil && policy.Unfiltered && dnsproxy.ScheduleActive(policy.Schedule, time.Now()) {
+		steps = append(steps, DiagnoseStep{
+			Stage: "Unfiltered policy", Hit: true, Verdict: "allow",
+			Detail: fmt.Sprintf("Policy %q exempts this device from every blocklist; only its own rules apply.", policy.Name),
+			Source: "policy:" + policy.Name,
+		})
+		if final != "block" {
+			final, reason = "allow", "This device is on an unfiltered policy; blocklists do not apply to it."
+		}
+		return map[string]any{
+			"domain": name, "verdict": final, "reason": reason, "steps": steps,
+			"cname_chain": []string{}, "answers": []string{}, "policy": policy.Name,
+		}, nil
+	}
 	match := a.Matcher.Lookup(name)
 	switch {
 	case match.Allowed:

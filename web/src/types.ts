@@ -223,6 +223,7 @@ export interface Policy {
   denylist: string[]
   safe_search: boolean
   block_doh: boolean
+  unfiltered?: boolean
   schedule?: string
   created_at: string
   updated_at: string

@@ -113,7 +113,7 @@ func (s *Store) UpdateRuleCounters(counters map[string][2]int64) error {
 func (s *Store) Policies() ([]Policy, error) {
 	rows, err := s.db.Query(`SELECT id, name, COALESCE(description,''), categories, allowlist, denylist,
 		safe_search, block_doh, COALESCE(schedule,''), COALESCE(blocked_services,'[]'),
-		created_at, updated_at FROM policies ORDER BY name`)
+		created_at, updated_at, COALESCE(unfiltered,0) FROM policies ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -122,12 +122,13 @@ func (s *Store) Policies() ([]Policy, error) {
 	for rows.Next() {
 		var p Policy
 		var cats, allow, deny, svcs string
-		var safe, doh int
+		var safe, doh, unfiltered int
 		var created, updated int64
 		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &cats, &allow, &deny, &safe, &doh,
-			&p.Schedule, &svcs, &created, &updated); err != nil {
+			&p.Schedule, &svcs, &created, &updated, &unfiltered); err != nil {
 			return nil, err
 		}
+		p.Unfiltered = unfiltered != 0
 		_ = json.Unmarshal([]byte(cats), &p.Categories)
 		_ = json.Unmarshal([]byte(allow), &p.Allowlist)
 		_ = json.Unmarshal([]byte(deny), &p.Denylist)
@@ -153,15 +154,16 @@ func (s *Store) SavePolicy(p *Policy) error {
 	svcs, _ := json.Marshal(orEmpty(p.BlockedServices))
 	_, err := s.db.Exec(`INSERT INTO policies
 		(id, name, description, categories, allowlist, denylist, safe_search, block_doh, schedule,
-		 blocked_services, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+		 blocked_services, created_at, updated_at, unfiltered)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description,
 			categories=excluded.categories, allowlist=excluded.allowlist, denylist=excluded.denylist,
 			safe_search=excluded.safe_search, block_doh=excluded.block_doh, schedule=excluded.schedule,
-			blocked_services=excluded.blocked_services, updated_at=excluded.updated_at`,
+			blocked_services=excluded.blocked_services, updated_at=excluded.updated_at,
+			unfiltered=excluded.unfiltered`,
 		p.ID, p.Name, p.Description, string(cats), string(allow), string(deny),
 		b2i(p.SafeSearch), b2i(p.BlockDoH), p.Schedule, string(svcs),
-		p.CreatedAt.Unix(), p.UpdatedAt.Unix())
+		p.CreatedAt.Unix(), p.UpdatedAt.Unix(), b2i(p.Unfiltered))
 	return err
 }
 

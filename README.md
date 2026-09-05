@@ -274,6 +274,11 @@ fingerprint so the same bug from many nodes is one issue with a count. Use your 
 fine-grained token, or the project relay (`deploy/issue-relay`), which files on your
 behalf without a token and applies a second pass of redaction.
 
+On the maintainer side, a scheduled cloud agent works the board once a day: it
+reads open issues, reproduces clear defects with a failing test, opens a pull
+request on a `fix/issue-N` branch (never pushing to `main`), and triages the
+rest with a comment. Humans review and merge. Nothing is deployed automatically.
+
 ## Modes and placement
 
 **Observe** (the default) watches whatever traffic reaches it and records what it would have done.

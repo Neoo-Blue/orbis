@@ -23,6 +23,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/app"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/mcp"
+	"github.com/Neoo-Blue/orbis/internal/update"
 )
 
 // version is overwritten at build time with -ldflags "-X main.version=...".
@@ -40,6 +41,7 @@ func main() {
 		showVersion = flag.Bool("version", false, "print version and exit")
 		checkOnly   = flag.Bool("check", false, "validate the configuration and exit")
 		printRules  = flag.Bool("print-ruleset", false, "render the nftables ruleset to stdout and exit")
+		selfUpdate  = flag.Bool("update", false, "install the latest release from GitHub over this binary and exit")
 		mcpMode     = flag.Bool("mcp", false, "run as a Model Context Protocol server on stdin/stdout")
 		mcpWrite    = flag.Bool("mcp-write", false, "allow the MCP server to change configuration (off by default)")
 		verbose     = flag.Bool("v", false, "verbose logging")
@@ -50,6 +52,9 @@ func main() {
 	// is told where the ceiling is: the collector works harder as the heap
 	// nears it instead of the kernel killing the daemon at the wall.
 	applyMemoryLimit()
+	if *selfUpdate {
+		os.Exit(runSelfUpdate())
+	}
 	// Profiling is opt-in and loopback-only: ORBIS_PPROF=127.0.0.1:6060.
 	if addr := os.Getenv("ORBIS_PPROF"); addr != "" {
 		startPprof(addr)
@@ -241,4 +246,43 @@ func startPprof(addr string) {
 			log.Printf("pprof: %v", err)
 		}
 	}()
+}
+
+// runSelfUpdate is the headless path: check, install, restart, report.
+func runSelfUpdate() int {
+	m := update.NewManager(versionString(), "", update.Hooks{}, log.Printf)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	rel, err := m.Check(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check:", err)
+		return 1
+	}
+	if !update.Newer(rel.Version, versionString()) {
+		fmt.Printf("already up to date: %s (latest release %s)\n", versionString(), rel.Version)
+		return 0
+	}
+	fmt.Printf("updating %s -> %s\n", versionString(), rel.Version)
+	if err := m.Apply(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "update:", err)
+		return 1
+	}
+	last := ""
+	for {
+		st := m.Status()
+		state, _ := st["state"].(string)
+		if state != last {
+			fmt.Println(state)
+			last = state
+		}
+		switch state {
+		case "error":
+			fmt.Fprintln(os.Stderr, st["error"])
+			return 1
+		case "restarting", "installed":
+			fmt.Println("done")
+			return 0
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }

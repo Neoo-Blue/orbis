@@ -62,7 +62,8 @@ jobs:
               -ldflags "-s -w -X main.version=${{ steps.ver.outputs.version }}" \
               -o dist/orbisd-linux-$arch ./cmd/orbisd
           done
-          ls -lh dist
+          (cd dist && sha256sum orbisd-linux-amd64 orbisd-linux-arm64 > sha256sums.txt)
+          ls -lh dist && cat dist/sha256sums.txt
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -104,6 +105,7 @@ jobs:
           files: |
             dist/orbisd-linux-amd64
             dist/orbisd-linux-arm64
+            dist/sha256sums.txt
           body: |
             Orbis ${{ steps.ver.outputs.version }}
 

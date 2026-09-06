@@ -1547,3 +1547,36 @@ func (a *App) IntrusionStatus(since time.Time, limit int) (map[string]any, error
 	out["enforcement"] = a.ThreatEnforcement()
 	return out, nil
 }
+
+// UpdateStatus is the updater's view: running version, latest release,
+// whether this node can install it, and progress.
+func (a *App) UpdateStatus() map[string]any {
+	if a.Update == nil {
+		return map[string]any{"current": a.build, "available": false, "can_apply": false}
+	}
+	return a.Update.Status()
+}
+
+// CheckUpdate asks GitHub now.
+func (a *App) CheckUpdate(ctx context.Context) (map[string]any, error) {
+	if a.Update == nil {
+		return nil, fmt.Errorf("updates are not available in this build")
+	}
+	if _, err := a.Update.Check(ctx); err != nil {
+		return nil, err
+	}
+	return a.Update.Status(), nil
+}
+
+// ApplyUpdate installs the latest release and restarts.
+func (a *App) ApplyUpdate(ctx context.Context, actor string) (map[string]any, error) {
+	if a.Update == nil {
+		return nil, fmt.Errorf("updates are not available in this build")
+	}
+	if err := a.Update.Apply(ctx); err != nil {
+		a.Store.Audit(actor, "update.apply", "", "", "", "error: "+err.Error())
+		return nil, err
+	}
+	a.Store.Audit(actor, "update.apply", "", a.build, "latest", "started")
+	return a.Update.Status(), nil
+}

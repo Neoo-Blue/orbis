@@ -4,6 +4,7 @@ import { usePoll, useLive, useLocalStorage, useMediaQuery, type LiveEvent } from
 import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast, Drawer } from './ui'
 import type { AppConfig, SystemStatus, Summary } from './types'
 import { Dashboard } from './pages/Dashboard'
+import { UpdateBanner } from './pages/UpdateCard'
 import { GlobePage } from './pages/GlobePage'
 import { AnalyticsPage } from './pages/Analytics'
 import { AlertsPage } from './pages/Alerts'
@@ -361,6 +362,11 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
               }>
                 Orbis was updated to {updated} while this page was open. Reload to pick up the new interface.
               </Banner>
+            </div>
+          )}
+          {!updated && route !== 'settings' && (
+            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }} className="update-slot">
+              <UpdateBanner onSettings={() => navigate('settings')} />
             </div>
           )}
           {setupRequired && route !== 'settings' && (

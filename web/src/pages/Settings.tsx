@@ -7,6 +7,7 @@ import {
 import { ago, bytes, compact, duration, num } from '../format'
 import type { AIBrief, AppConfig, SystemStatus } from '../types'
 import { searchSettings } from '../settingsIndex'
+import { UpdateCard } from './UpdateCard'
 
 type Section =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
@@ -1918,6 +1919,9 @@ function AboutSection({ config, status }: SectionProps) {
   const [showRaw, setShowRaw] = useState(false)
   return (
     <>
+      <Card title="Updates">
+        <UpdateCard />
+      </Card>
       <Card title="Node">
         <dl className="kv">
           <dt>Name</dt><dd>{config.node.name}</dd>

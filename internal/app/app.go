@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/Neoo-Blue/orbis/internal/threat"
 	"github.com/Neoo-Blue/orbis/internal/topology"
+	"github.com/Neoo-Blue/orbis/internal/update"
 	"github.com/Neoo-Blue/orbis/internal/usage"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
 	"github.com/Neoo-Blue/orbis/internal/wifi"
@@ -98,6 +100,8 @@ type App struct {
 	IDS *ids.Manager
 	// res samples what the node is spending.
 	res *resourceSampler
+	// Update notices new releases and installs them where it can.
+	Update *update.Manager
 	// Usage rolls the live flow table and the query log into per-device,
 	// per-service counters.
 	Usage *usage.Meter
@@ -648,6 +652,9 @@ func (a *App) Start() {
 	a.res = newResourceSampler()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.sampleResources(a.ctx) }()
+	a.Update = update.NewManager(orDefaultStr(a.build, "dev"), filepath.Dir(cfg.Store.Path), update.Hooks{Emit: a.emit}, a.log)
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Update.Run(a.ctx) }()
 
 	if cfg.AdBlock.SmartCapture.Enabled {
 		a.wg.Add(1)

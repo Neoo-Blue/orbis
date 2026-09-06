@@ -80,6 +80,11 @@ type Backend interface {
 	// Intrusion detection.
 	IntrusionStatus(since time.Time, limit int) (map[string]any, error)
 
+	// Updates.
+	UpdateStatus() map[string]any
+	CheckUpdate(ctx context.Context) (map[string]any, error)
+	ApplyUpdate(ctx context.Context, actor string) (map[string]any, error)
+
 	// Country rules.
 	CountryRules() (map[string]any, error)
 	SetCountryRule(code, action, actor string) (map[string]any, error)
@@ -338,6 +343,13 @@ func Tools(allowWrite bool) []ToolDef {
 			Schema: objSchema(map[string]any{}, nil),
 		},
 		{
+			Name: "check_update",
+			Description: "Whether a newer Orbis release exists on GitHub: the running version, the " +
+				"latest release with its notes, how this node was installed (systemd, binary, docker) " +
+				"and whether it can install the update itself. Checks GitHub when asked.",
+			Schema: objSchema(map[string]any{"refresh": boolProp("Ask GitHub now instead of using the last check")}, nil),
+		},
+		{
 			Name: "intrusion_status",
 			Description: "The built-in intrusion detection: which log sources feed it (this node's " +
 				"journal, syslog from other hosts, the Orbis login page, the flow table), the " +
@@ -422,6 +434,14 @@ func Tools(allowWrite bool) []ToolDef {
 			Description: "Remove a port forward this node created, by its id (from list_hosted).",
 			Mutating:    true,
 			Schema:      objSchema(map[string]any{"id": strProp("The forward id")}, []string{"id"}),
+		},
+		{
+			Name: "apply_update",
+			Description: "Install the latest Orbis release on this node and restart it. Only where the " +
+				"node runs the bare binary (systemd or by hand); a container must pull its image. Tell " +
+				"the operator the interface will disconnect for about half a minute.",
+			Mutating: true,
+			Schema:   objSchema(map[string]any{}, nil),
 		},
 		{
 			Name: "set_country_rule",
@@ -635,6 +655,7 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"forward_port": true, "remove_forward": true,
 		"configure_wifi":   true,
 		"set_country_rule": true,
+		"apply_update":     true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -866,6 +887,15 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 			return "", err
 		}
 		return "Forward removed.", nil
+
+	case "check_update":
+		if v, ok := args["refresh"].(bool); ok && v {
+			return jsonOf(b.CheckUpdate(ctx))
+		}
+		return jsonOf(b.UpdateStatus(), nil)
+
+	case "apply_update":
+		return jsonOf(b.ApplyUpdate(ctx, actor))
 
 	case "intrusion_status":
 		return jsonOf(b.IntrusionStatus(hoursAgo(args, "hours", 24, 720), intArg(args, "limit", 50, 500)))

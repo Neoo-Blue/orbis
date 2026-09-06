@@ -170,6 +170,22 @@ sysctl -w net.netfilter.nf_conntrack_acct=1   # per-connection byte counters
 A container has no wireless adapter and no physical ports of its own, so the Wi-Fi and cable
 features apply to bare-metal and VM installs.
 
+### Updating
+
+Orbis checks GitHub for a newer release every six hours and says so on every page and in
+Settings, About & diagnostics. What happens next depends on how it was installed:
+
+- **Binary under systemd** (the installer's way): one click. Orbis downloads the release for its
+  architecture, checks it against the release's `sha256sums.txt`, confirms the new binary runs
+  and reports the expected version, keeps the old one as `orbisd.prev`, and restarts the
+  service. The page reloads when the new version is up, about half a minute later. The same
+  path works headless: `sudo orbisd -update`.
+- **Docker**: the banner tells you to pull. `docker pull ghcr.io/neoo-blue/orbis:stable` and
+  recreate the container.
+- **A binary started by hand**: Orbis replaces the file and asks you to restart the process.
+
+To roll back after a bad update: `sudo cp /usr/local/bin/orbisd.prev /usr/local/bin/orbisd && sudo systemctl restart orbis`.
+
 ## The first hour
 
 1. **Point devices at it.** Set your router's DHCP DNS to the node, or just the devices you want

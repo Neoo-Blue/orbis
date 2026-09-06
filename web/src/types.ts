@@ -283,6 +283,30 @@ export interface SysctlStatus {
   error?: string
 }
 
+export interface UpdateRelease {
+  tag: string
+  version: string
+  name: string
+  notes: string
+  url: string
+  published_at: string
+  assets: { name: string; url: string; size: number }[]
+}
+
+export interface UpdateStatus {
+  current: string
+  method: 'systemd' | 'binary' | 'docker' | 'dev' | 'unknown'
+  can_apply: boolean
+  state: 'idle' | 'checking' | 'downloading' | 'verifying' | 'installing' | 'restarting' | 'installed' | 'error'
+  progress: number
+  error?: string
+  check_error?: string
+  checked_at?: string
+  arch: string
+  available: boolean
+  latest?: UpdateRelease
+}
+
 export interface NodeResources {
   sampled_at: string
   process_cpu_percent: number

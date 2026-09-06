@@ -94,8 +94,9 @@ func TestScenarioFiresAndEscalates(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// Ignored addresses do nothing.
-	cfg.IDS.Ignore = []string{"45.33.33.0/24"}
+	// Ignored addresses do nothing. The change goes through Update so the
+	// cached snapshot notices it (Save fails on a path-less config; fine).
+	_ = cfg.Update(func(c *config.Config) { c.IDS.Ignore = []string{"45.33.33.0/24"} })
 	for i := 0; i < 6; i++ {
 		m.ingest(Line{Text: "sshd[4]: Failed password for root from 45.33.33.9 port 1 ssh2"})
 	}

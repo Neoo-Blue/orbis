@@ -50,7 +50,11 @@ func TestObserveExemptionsAndEvents(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
-	if len(blocked) != 2 || blocked[0] != "f1" || blocked[1] != "f6" {
+	got := map[string]bool{}
+	for _, id := range blocked {
+		got[id] = true
+	}
+	if len(blocked) != 2 || !got["f1"] || !got["f6"] {
 		t.Errorf("blocked = %v, want f1 and f6", blocked)
 	}
 	if len(events) != 1 || events[0].Category != "country" || events[0].Data["country"] != "CN" {

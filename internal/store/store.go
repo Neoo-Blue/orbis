@@ -29,6 +29,8 @@ type Store struct {
 	// busy_timeout instead of simply queueing. Downloads stay parallel —
 	// only the disk-bound commit is serialised.
 	writeMu sync.Mutex
+	// aggregates memoises the page-polled scans; see memo.go.
+	aggregates memo
 
 	// flowBuf batches flow upserts; drained on a ticker or when full.
 	mu      sync.Mutex
@@ -481,6 +483,16 @@ func (s *Store) TopDestinations(since time.Time, clientID string, limit int) ([]
 
 // CountryTotals feeds the globe's choropleth / heat layer.
 func (s *Store) CountryTotals(since time.Time) ([]map[string]any, error) {
+	v, err := s.aggregates.get("countries|"+bucket(since, time.Minute), time.Minute, func() (any, error) {
+		return s.countryTotals(since)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]map[string]any), nil
+}
+
+func (s *Store) countryTotals(since time.Time) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT country, COUNT(*) c, SUM(bytes_in+bytes_out) b,
 		SUM(CASE WHEN verdict='block' THEN 1 ELSE 0 END) blk, AVG(lat), AVG(lon)
 		FROM flows WHERE started_at >= ? AND country != '' GROUP BY country ORDER BY b DESC`, since.Unix())

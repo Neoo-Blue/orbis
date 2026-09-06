@@ -344,7 +344,10 @@ function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string |
             are also loaded into the packet filter. A CDN with servers in many countries may be affected: add its domain as an exception.
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Segmented value={data.mode} onChange={(v) => act('mode', () => api.country.rule('', v === 'allow' ? 'mode_allow' : 'mode_block'), v === 'allow' ? 'Allow mode: everything not listed is blocked' : 'Block mode: what is listed is blocked')}
+            <Segmented value={data.mode} onChange={(v) => {
+              if (v === 'allow' && !window.confirm(`Allow only listed: every country NOT in the list becomes unreachable for every device, including CDNs and update servers. ${data.countries.length === 0 ? 'The list is empty, so nothing changes until you add a country. ' : `Only ${data.countries.join(', ')} will be reachable. `}Continue?`)) return
+              act('mode', () => api.country.rule('', v === 'allow' ? 'mode_allow' : 'mode_block'), v === 'allow' ? 'Allow mode: everything not listed is blocked' : 'Block mode: what is listed is blocked')
+            }}
               options={[{ value: 'block', label: 'Block listed' }, { value: 'allow', label: 'Allow only listed' }]} />
             <span className="hint">{data.enabled ? `${verb} ${data.countries.length} countr${data.countries.length === 1 ? 'y' : 'ies'}.` : 'Off.'}
               {data.packet_sets && data.set_total > 0 ? ` ${num(data.set_total)} address ranges loaded.` : ''}
@@ -353,6 +356,7 @@ function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string |
             </span>
           </div>
           {data.error && <Banner tone="warn">{data.error}</Banner>}
+          {data.mode === 'allow' && data.countries.length === 0 && <Banner tone="info">Allow mode with no countries listed blocks nothing. Add the countries that should stay reachable before relying on it.</Banner>}
           {data.enabled && data.enforcement?.detect_only && (
             <Banner tone="info">Names are refused for every device that uses this resolver. Connections that bypass DNS are recorded, not dropped, because this node is not in the path.</Banner>
           )}

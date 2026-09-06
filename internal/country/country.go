@@ -75,7 +75,10 @@ func (m *Manager) listed(cfg config.CountryConfig, code string) bool {
 // current rules. Unknown countries (private space, unmapped ranges) are
 // never blocked: a rule about places cannot apply to an address with none.
 func (m *Manager) Verdict(cfg config.CountryConfig, code string) bool {
-	if !cfg.Enabled || code == "" {
+	if !cfg.Enabled || code == "" || len(cfg.Countries) == 0 {
+		// An empty list is no rule at all. In allow mode it would otherwise
+		// mean "allow nowhere", which once refused every name on a network
+		// after the last country was removed.
 		return false
 	}
 	if cfg.Mode == "allow" {

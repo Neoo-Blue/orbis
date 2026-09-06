@@ -23,6 +23,9 @@ func TestVerdictModes(t *testing.T) {
 	if m.Verdict(config.CountryConfig{Mode: "block", Countries: []string{"CN"}}, "CN") {
 		t.Error("a disabled rule blocks nothing")
 	}
+	if m.Verdict(config.CountryConfig{Enabled: true, Mode: "allow"}, "US") || m.Verdict(config.CountryConfig{Enabled: true, Mode: "allow", Countries: []string{}}, "DE") {
+		t.Error("allow mode with an empty list must block nothing")
+	}
 }
 
 func TestObserveExemptionsAndEvents(t *testing.T) {

@@ -692,7 +692,7 @@ func (s *Store) Series(metric string, since time.Time) ([]map[string]any, error)
 
 // Summary is the dashboard's single round-trip.
 func (s *Store) Summary(since time.Time) (map[string]any, error) {
-	v, err := s.aggregates.get("summary|"+bucket(since, 10*time.Second), 10*time.Second, func() (any, error) {
+	v, err := s.aggregates.get("summary|"+bucket(since, 30*time.Second), 30*time.Second, func() (any, error) {
 		return s.summary(since)
 	})
 	if err != nil {

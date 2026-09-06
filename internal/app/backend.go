@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1500,6 +1501,11 @@ func (a *App) SetCountryRule(code, action, actor string) (map[string]any, error)
 				}
 			}
 			c.Country.Countries = out
+			if len(out) == 0 {
+				// The last country gone means no rule; leaving it enabled in
+				// allow mode would refuse everything.
+				c.Country.Enabled = false
+			}
 		case "mode_block":
 			c.Country.Mode = "block"
 		case "mode_allow":
@@ -1513,7 +1519,11 @@ func (a *App) SetCountryRule(code, action, actor string) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	a.Store.Audit(actor, "country.rule", code, "", action, "ok")
+	target := code
+	if target == "" {
+		target = "mode"
+	}
+	a.Store.Audit(actor, "country.rule", target, "", action+" -> mode="+a.Cfg.Snapshot().Country.Mode+" enabled="+strconv.FormatBool(a.Cfg.Snapshot().Country.Enabled)+" countries="+strings.Join(a.Cfg.Snapshot().Country.Countries, ","), "ok")
 	a.Country.Reconfigure()
 	go a.ReapplyThreatEnforcement()
 	return a.CountryRules()

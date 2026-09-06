@@ -152,12 +152,16 @@ func renderForwarding(cfg ForwardConfig) string {
 		w("  }")
 	}
 
-	threatOn := (cfg.ThreatOut || cfg.ThreatIn) && len(cfg.Threat4) > 0
+	// The drop rules are rendered whenever a direction is switched on, even
+	// with nothing listed yet: the table is built at startup before the first
+	// feed has loaded, and the set is filled in place afterwards. Rules that
+	// depended on the set being non-empty would never appear until a restart.
+	threatOn := cfg.ThreatOut || cfg.ThreatIn
 	w("  set threat_v4 {")
 	w("    type ipv4_addr")
 	w("    flags interval")
 	w("    auto-merge")
-	if threatOn {
+	if len(cfg.Threat4) > 0 {
 		w("    elements = {")
 		for i := 0; i < len(cfg.Threat4); i += 16 {
 			end := min(i+16, len(cfg.Threat4))

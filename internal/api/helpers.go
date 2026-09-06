@@ -315,6 +315,24 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 		return setInt(&c.AI.Review.IntervalHours, raw)
 	case "ai.review.max_suggestions":
 		return setInt(&c.AI.Review.MaxSuggestions, raw)
+	case "ai.intel.enabled":
+		return setBool(&c.AI.Intel.Enabled, raw)
+	case "ai.intel.interval_hours":
+		return setInt(&c.AI.Intel.IntervalHours, raw)
+	case "ai.intel.active_blocking":
+		return setBool(&c.AI.Intel.ActiveBlocking, raw)
+	case "ai.intel.min_confidence":
+		return setFloat(&c.AI.Intel.MinConfidence, raw)
+	case "ai.intel.max_actions_per_run":
+		return setInt(&c.AI.Intel.MaxActionsPerRun, raw)
+	case "ai.intel.max_ban_hours":
+		return setInt(&c.AI.Intel.MaxBanHours, raw)
+	case "ai.intel.ban_addresses":
+		return setBool(&c.AI.Intel.BanAddresses, raw)
+	case "ai.intel.block_domains":
+		return setBool(&c.AI.Intel.BlockDomains, raw)
+	case "ai.intel.notify":
+		return setBool(&c.AI.Intel.Notify, raw)
 
 	case "issues.enabled":
 		return setBool(&c.Issues.Enabled, raw)

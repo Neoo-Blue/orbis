@@ -3,6 +3,46 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.27.0
+
+### Added
+- **AdGuard Home and Pi-hole list compatibility.** The list parser now understands the whole of
+  what those two accept: AdGuard rules with exceptions (`@@||cdn.example^`), `$important`,
+  `$denyallow`, wildcards inside rules, `/regex/` rules, Pi-hole regex lists with their `;` options,
+  hosts files with several names per line, dnsmasq, unbound `local-zone` and RPZ `CNAME .` lines.
+  Exceptions in a list apply the way AdGuard applies them, an `$important` block beats a list's
+  exception but never your own allow, and every rule DNS cannot honour (cosmetic, URL paths,
+  `$dnstype`, `$client`, rewrites to real addresses) is counted rather than misapplied.
+- **Allowlist and regex subscriptions.** A list can be marked as an allowlist (AdGuard Home's
+  whitelist filters) or as a regex list (Pi-hole's regex.list). Your own rules can be regular
+  expressions too.
+- **Import a whole Pi-hole or AdGuard Home.** Domain tester, Import a list takes a Teleporter
+  backup (v5 JSON or v6 gravity.db), Pi-hole's adlists, domain and regex lists, or
+  `AdGuardHome.yaml` with its filters, allowlist filters and custom rules. Subscriptions become
+  subscriptions, custom rules become your rules, and the preview shows what was skipped and why.
+- **Popular lists.** One click on the Ad blocking page adds AdGuard DNS filter, OISD, HaGeZi
+  (including its threat-intelligence feeds), URLhaus, Phishing Army, EasyPrivacy, Peter Lowe,
+  NoCoin, WindowsSpyBlocker and the smart-TV list.
+- **AI threat intelligence.** With the assistant configured, a scheduled assessment reads the
+  window's attacks, threat-feed hits, anomalies, bans, blocked lookups and busiest destinations and
+  writes a risk level, findings in plain words and the actions it would take. Threats, AI intel
+  shows it; the simple Protection page shows the short form; assistant tools `threat_intel`,
+  `run_threat_intel` and `decide_ai_action` expose it in chat.
+- **AI active blocking.** Off by default. When on, proposed timed bans and domain blocks at or
+  above the confidence you set are applied at once, at most N per check and never longer than the
+  ban limit, audited and announced as events, and each one has an Undo. A guard rail refuses
+  essential services, CDNs, update, certificate and time hosts, local names and anything on the
+  never-act-on list whatever the model says.
+- **Explain this.** Every event on the Events page and the simple Alerts page has a button that
+  asks the assistant what it is, how dangerous it is, and what to do. The assistant tool `explain`
+  does the same for events, intrusion alerts, addresses and hostnames.
+- **Ask the assistant** on the Domain tester: an ad-or-tracking verdict for any hostname with
+  confidence and breakage risk.
+
+### Changed
+- List entries are stored with their kind (exact, wildcard, regex, exception) and importance, so
+  a subscribed AdGuard list behaves as it does in AdGuard Home.
+
 ## v1.26.2
 
 ### Fixed

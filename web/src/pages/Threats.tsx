@@ -5,6 +5,7 @@ import { Banner, Card, Empty, Field, Icons, Loading, Segmented, Stat, Switch, us
 import { ago, countryFlag, num } from '../format'
 import type { CountryStatus, IDSStatus, ThreatDecision, ThreatFeed, ThreatHit } from '../types'
 import { bytes, countryFlag as flag } from '../format'
+import { IntelTab } from './ai/IntelTab'
 
 /**
  * Threats: IP-level threat intelligence. Where the DNS pages work on names,
@@ -14,7 +15,7 @@ import { bytes, countryFlag as flag } from '../format'
  * the most important line on the page: a hit that was only recorded and a
  * hit that was dropped must never look the same.
  */
-type Tab = 'attacks' | 'hits' | 'feeds' | 'bans' | 'countries' | 'crowdsec'
+type Tab = 'attacks' | 'intel' | 'hits' | 'feeds' | 'bans' | 'countries' | 'crowdsec'
 
 const CATEGORIES = ['c2', 'hijacked', 'attackers', 'compromised', 'spam', 'other']
 
@@ -88,6 +89,7 @@ export function ThreatsPage() {
       <div className="toolbar">
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'attacks', label: `Attacks (${idsData?.alerts?.length ?? 0})` },
+          { value: 'intel', label: 'AI intel' },
           { value: 'hits', label: `Hits (${hitsData?.hits.length ?? 0})` },
           { value: 'feeds', label: `Feeds (${feedsData?.feeds.length ?? 0})` },
           { value: 'bans', label: `Bans (${bansData?.decisions.length ?? 0})` },
@@ -109,6 +111,7 @@ export function ThreatsPage() {
       </div>
 
       {tab === 'attacks' && (idsData ? <AttacksTab data={idsData} busy={busy} act={act} /> : <Loading what="intrusion detection" />)}
+      {tab === 'intel' && <IntelTab onToggleActive={async (v) => { await api.config.patch({ 'ai.intel.active_blocking': v }) }} />}
       {tab === 'hits' && <HitsTable hits={hitsData?.hits ?? []} devices={hitsData?.devices ?? {}} hours={hours} />}
       {tab === 'feeds' && <FeedsTab feeds={feedsData?.feeds ?? []} busy={busy} act={act} />}
       {tab === 'bans' && <BansTab bans={bansData?.decisions ?? []} busy={busy} act={act} />}

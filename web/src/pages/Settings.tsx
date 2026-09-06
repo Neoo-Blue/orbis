@@ -1481,6 +1481,46 @@ function AssistantSection({ config, save, toast }: SectionProps) {
             onSave={(v) => save({ 'ai.anomaly.interval_minutes': v })} />
         </div>
       </Card>
+
+      <Card title="Threat intelligence">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            On a schedule, the assistant reads the window's attacks, threat-feed hits, anomalies, bans,
+            blocked lookups and busiest destinations, and writes an assessment: a risk level, findings in
+            plain words, and the actions it would take (timed bans, domain blocks). Actions wait for a
+            click on the Threats page under AI intel, unless active blocking is on.
+          </div>
+          <SwitchRow label="Run assessments on a schedule" checked={config.ai.intel.enabled}
+            onChange={(v) => save({ 'ai.intel.enabled': v })} />
+          <NumberSetting label="Every" value={config.ai.intel.interval_hours} min={1} max={168} suffix="h"
+            onSave={(v) => save({ 'ai.intel.interval_hours': v })} />
+          <SwitchRow label="Also send each assessment to notification sinks" checked={config.ai.intel.notify}
+            onChange={(v) => save({ 'ai.intel.notify': v })} />
+          <SwitchRow label="Active blocking: apply confident actions without a click" checked={config.ai.intel.active_blocking}
+            hint="Bounded by the limits below, audited, announced as an event, and undoable from the Threats page. Essential services, CDNs, local names and anything on the never-act-on list are refused whatever the model says."
+            onChange={(v) => {
+              if (v && !confirm('The assistant will ban addresses and block domains on its own when it is confident. Continue?')) return
+              save({ 'ai.intel.active_blocking': v })
+            }} />
+          {config.ai.intel.active_blocking && (
+            <Banner tone="warn">Active blocking is on. The assistant acts on the live network within the limits below.</Banner>
+          )}
+          <div className="grid c3">
+            <NumberSetting label="Minimum confidence" value={Math.round(config.ai.intel.min_confidence * 100)} min={50} max={100} suffix="%"
+              onSave={(v) => save({ 'ai.intel.min_confidence': v / 100 })} />
+            <NumberSetting label="Max actions per check" value={config.ai.intel.max_actions_per_run} min={1} max={50}
+              onSave={(v) => save({ 'ai.intel.max_actions_per_run': v })} />
+            <NumberSetting label="Longest ban" value={config.ai.intel.max_ban_hours} min={1} max={720} suffix="h"
+              onSave={(v) => save({ 'ai.intel.max_ban_hours': v })} />
+          </div>
+          <div className="grid c2">
+            <SwitchRow label="May ban internet addresses" checked={config.ai.intel.ban_addresses}
+              onChange={(v) => save({ 'ai.intel.ban_addresses': v })} />
+            <SwitchRow label="May block domains" checked={config.ai.intel.block_domains}
+              onChange={(v) => save({ 'ai.intel.block_domains': v })} />
+          </div>
+        </div>
+      </Card>
     </>
   )
 }

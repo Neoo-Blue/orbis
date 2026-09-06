@@ -187,7 +187,7 @@ func (s *Store) DeletePolicy(id string) error {
 
 // ReplaceListDomains swaps a list's contents atomically so a partially
 // downloaded refresh never leaves the resolver with half a list.
-func (s *Store) ReplaceListDomains(list, category string, domains []string, wildcards []string) error {
+func (s *Store) ReplaceListDomains(list, category string, e ListEntries) error {
 	tx, unlock, err := s.beginWrite()
 	if err != nil {
 		return err
@@ -197,23 +197,34 @@ func (s *Store) ReplaceListDomains(list, category string, domains []string, wild
 	if _, err := tx.Exec("DELETE FROM block_domains WHERE source=?", list); err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO block_domains (domain, source, category, wildcard) VALUES (?,?,?,?)")
+	stmt, err := tx.Prepare("INSERT OR IGNORE INTO block_domains (domain, source, category, wildcard, important) VALUES (?,?,?,?,?)")
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
-	for _, d := range domains {
-		if _, err := stmt.Exec(d, list, category, 0); err != nil {
-			return err
+	put := func(items []string, kind int) error {
+		for _, d := range items {
+			imp := 0
+			if e.Important[d] {
+				imp = 1
+			}
+			if _, err := stmt.Exec(d, list, category, kind, imp); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
-	for _, d := range wildcards {
-		if _, err := stmt.Exec(d, list, category, 1); err != nil {
+	for _, g := range []struct {
+		items []string
+		kind  int
+	}{{e.Exact, EntryExact}, {e.Wildcard, EntryWildcard}, {e.Regex, EntryRegex},
+		{e.AllowExact, EntryAllowExact}, {e.AllowWildcard, EntryAllowWildcard}, {e.AllowRegex, EntryAllowRegex}} {
+		if err := put(g.items, g.kind); err != nil {
 			return err
 		}
 	}
 	if _, err := tx.Exec(`UPDATE list_meta SET entries=?, last_updated=?, last_error='' WHERE name=?`,
-		len(domains)+len(wildcards), time.Now().Unix(), list); err != nil {
+		e.Count(), time.Now().Unix(), list); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -278,9 +289,10 @@ func (s *Store) DeleteList(name string) error {
 	return tx.Commit()
 }
 
-// AllBlockDomains streams every enabled list's domains for index rebuilds.
-func (s *Store) AllBlockDomains(fn func(domain, category string, wildcard bool)) error {
-	rows, err := s.db.Query(`SELECT b.domain, COALESCE(b.category,''), b.wildcard
+// AllBlockDomains streams every enabled list's entries for index rebuilds:
+// kind is one of the Entry constants, important marks $important rules.
+func (s *Store) AllBlockDomains(fn func(domain, category string, kind int, important bool)) error {
+	rows, err := s.db.Query(`SELECT b.domain, COALESCE(b.category,''), b.wildcard, COALESCE(b.important,0)
 		FROM block_domains b JOIN list_meta m ON m.name = b.source WHERE m.enabled = 1`)
 	if err != nil {
 		return err
@@ -288,11 +300,11 @@ func (s *Store) AllBlockDomains(fn func(domain, category string, wildcard bool))
 	defer rows.Close()
 	for rows.Next() {
 		var d, c string
-		var w int
-		if err := rows.Scan(&d, &c, &w); err != nil {
+		var k, imp int
+		if err := rows.Scan(&d, &c, &k, &imp); err != nil {
 			return err
 		}
-		fn(d, c, w != 0)
+		fn(d, c, k, imp != 0)
 	}
 	return rows.Err()
 }
@@ -300,7 +312,7 @@ func (s *Store) AllBlockDomains(fn func(domain, category string, wildcard bool))
 // ---------- local rules ----------
 
 func (s *Store) LocalRules() ([]LocalRule, error) {
-	rows, err := s.db.Query(`SELECT domain, action, wildcard, origin, COALESCE(note,''), created_at
+	rows, err := s.db.Query(`SELECT domain, action, wildcard, origin, COALESCE(note,''), created_at, COALESCE(regex,0)
 		FROM local_rules ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -309,12 +321,13 @@ func (s *Store) LocalRules() ([]LocalRule, error) {
 	out := []LocalRule{}
 	for rows.Next() {
 		var r LocalRule
-		var wc int
+		var wc, rx int
 		var created int64
-		if err := rows.Scan(&r.Domain, &r.Action, &wc, &r.Origin, &r.Note, &created); err != nil {
+		if err := rows.Scan(&r.Domain, &r.Action, &wc, &r.Origin, &r.Note, &created, &rx); err != nil {
 			return nil, err
 		}
 		r.Wildcard = wc != 0
+		r.Regex = rx != 0
 		r.CreatedAt = time.Unix(created, 0)
 		out = append(out, r)
 	}
@@ -325,11 +338,11 @@ func (s *Store) SaveLocalRule(r LocalRule) error {
 	if r.CreatedAt.IsZero() {
 		r.CreatedAt = time.Now()
 	}
-	_, err := s.db.Exec(`INSERT INTO local_rules (domain, action, wildcard, origin, note, created_at)
-		VALUES (?,?,?,?,?,?)
+	_, err := s.db.Exec(`INSERT INTO local_rules (domain, action, wildcard, origin, note, created_at, regex)
+		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(domain) DO UPDATE SET action=excluded.action, wildcard=excluded.wildcard,
-			origin=excluded.origin, note=excluded.note`,
-		r.Domain, r.Action, b2i(r.Wildcard), r.Origin, r.Note, r.CreatedAt.Unix())
+			origin=excluded.origin, note=excluded.note, regex=excluded.regex`,
+		r.Domain, r.Action, b2i(r.Wildcard), r.Origin, r.Note, r.CreatedAt.Unix(), b2i(r.Regex))
 	return err
 }
 

@@ -5,6 +5,7 @@ import { Banner, Field, Loading, Spinner, useToast } from '../ui'
 import type { AppConfig } from '../types'
 import { BigSwitch, Section } from './common'
 import { ShortcutsCard } from '../Shortcuts'
+import { IntelTab } from '../pages/ai/IntelTab'
 
 /**
  * Protection: every filtering feature as a sentence and a switch. The
@@ -86,6 +87,20 @@ export function SimpleProtection({ config, save, onNavigate }: {
             onChange={(v) => save({ 'threat.enabled': v })} />
         </div>
       </Section>
+
+      {config.ai.enabled && (
+        <Section title="AI threat check" hint="The assistant reads attacks, hits and anomalies and says what they mean.">
+          <div style={{ display: 'grid', gap: 10 }}>
+            <BigSwitch icon="🤖" title="Let the assistant block threats on its own" checked={config.ai.intel.active_blocking}
+              desc="When it is confident, it bans an attacking address or blocks a malicious host at once. Limited, logged, and undoable below."
+              onChange={async (v) => {
+                if (v && !confirm('The assistant will ban addresses and block hosts on its own when it is confident. Continue?')) return
+                await save({ 'ai.intel.active_blocking': v })
+              }} />
+            <IntelTab compact onToggleActive={async (v) => { await save({ 'ai.intel.active_blocking': v }) }} />
+          </div>
+        </Section>
+      )}
 
       <Section title="YouTube on the TV">
         <div style={{ display: 'grid', gap: 10 }}>

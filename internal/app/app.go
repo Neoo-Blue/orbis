@@ -80,6 +80,8 @@ type App struct {
 	Lounge    *lounge.Manager
 
 	AI        *ai.Client
+	Intel     *ai.Intel
+	Explainer *ai.Explainer
 	Assistant *ai.Assistant
 	Analyzer  *ai.Analyzer
 	Briefer   *ai.Briefer
@@ -550,6 +552,8 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Briefer = ai.NewBriefer(cfg, a.AI, a, st, a.recordBrief, logf)
 	a.Reviewer = ai.NewReviewer(cfg, a.AI, a, st, a.recordBrief, logf)
 	a.Smart.SetJudge(ai.NewJudge(a.AI, logf))
+	a.Intel = ai.NewIntel(cfg, a.AI, a, st, a.recordBrief, logf)
+	a.Explainer = ai.NewExplainer(a.AI, a, st, logf)
 
 	// Problem recorder. Device names are scrubbed from every report, and
 	// the diagnostics bundle is the same snapshot the status page shows.
@@ -752,6 +756,8 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.AI.Router().Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.Briefer.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.Reviewer.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Intel.Run(a.ctx) }()
 
 	// Installing a GeoIP database should fix the history too, not just new
 	// traffic, so reconcile stored rows once at startup.

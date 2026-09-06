@@ -80,6 +80,14 @@ type Backend interface {
 	// Intrusion detection.
 	IntrusionStatus(since time.Time, limit int) (map[string]any, error)
 
+	// Threat intelligence and explanations.
+	UnblockDomain(domain string) error
+	IntelStatus(limit int) map[string]any
+	RunIntel(ctx context.Context, hours int) (map[string]any, error)
+	DecideAIAction(id, decision, actor string) (*store.AIAction, error)
+	Explain(ctx context.Context, kind, key string) (map[string]any, error)
+	JudgeDomain(ctx context.Context, domain string) (map[string]any, error)
+
 	// Updates.
 	UpdateStatus() map[string]any
 	CheckUpdate(ctx context.Context) (map[string]any, error)
@@ -341,6 +349,39 @@ func Tools(allowWrite bool) []ToolDef {
 				"created, and the router's own UPnP mapping table. Use for \"what is running on the " +
 				"NAS\", \"which ports does the server expose\", \"is anything forwarded to the internet\".",
 			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "threat_intel",
+			Description: "The latest AI threat-intelligence assessments: risk level, findings, and the " +
+				"actions proposed or applied (timed bans, domain blocks) with their status. Use it " +
+				"before answering questions about the network's security posture.",
+			Schema: objSchema(map[string]any{"limit": numProp("How many assessments, default 3")}, nil),
+		},
+		{
+			Name: "run_threat_intel",
+			Description: "Run a threat-intelligence assessment over the last hours now. Proposes actions; " +
+				"with active blocking on, the confident ones are applied at once. Takes up to a minute.",
+			Mutating: true,
+			Schema:   objSchema(map[string]any{"hours": numProp("Window in hours, default the configured interval")}, nil),
+		},
+		{
+			Name:        "decide_ai_action",
+			Description: "Apply, dismiss or undo one action proposed by a threat-intelligence assessment.",
+			Mutating:    true,
+			Schema: objSchema(map[string]any{
+				"id":       strProp("The action id from threat_intel"),
+				"decision": enumProp("What to do with it", []string{"apply", "dismiss", "undo"}),
+			}, []string{"id", "decision"}),
+		},
+		{
+			Name: "explain",
+			Description: "Plain-language explanation of one event, intrusion alert, address or hostname: " +
+				"what it is, how dangerous, what to do. kind is event, alert, ip or domain; key is the id, " +
+				"address or name.",
+			Schema: objSchema(map[string]any{
+				"kind": enumProp("What the key names", []string{"event", "alert", "ip", "domain"}),
+				"key":  strProp("The event or alert id, the address, or the hostname"),
+			}, []string{"kind", "key"}),
 		},
 		{
 			Name: "check_update",
@@ -655,7 +696,7 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"forward_port": true, "remove_forward": true,
 		"configure_wifi":   true,
 		"set_country_rule": true,
-		"apply_update":     true,
+		"apply_update":     true, "run_threat_intel": true, "decide_ai_action": true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -887,6 +928,18 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 			return "", err
 		}
 		return "Forward removed.", nil
+
+	case "threat_intel":
+		return jsonOf(b.IntelStatus(intArg(args, "limit", 3, 60)), nil)
+
+	case "run_threat_intel":
+		return jsonOf(b.RunIntel(ctx, intArg(args, "hours", 0, 168)))
+
+	case "decide_ai_action":
+		return jsonOf(b.DecideAIAction(strArg(args, "id"), strArg(args, "decision"), actor))
+
+	case "explain":
+		return jsonOf(b.Explain(ctx, strArg(args, "kind"), strArg(args, "key")))
 
 	case "check_update":
 		if v, ok := args["refresh"].(bool); ok && v {

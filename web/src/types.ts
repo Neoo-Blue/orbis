@@ -134,6 +134,7 @@ export interface LocalRule {
   domain: string
   action: 'block' | 'allow'
   wildcard: boolean
+  regex?: boolean
   origin: string
   note?: string
   created_at: string
@@ -144,6 +145,8 @@ export interface BlockList {
   url: string
   category: string
   enabled: boolean
+  action?: 'block' | 'allow'
+  format?: string
   entries: number
   last_updated?: string
   last_error?: string
@@ -671,6 +674,10 @@ export interface AppConfig {
     probe_interval_hours: number; free_daily_budget: number
     brief: { enabled: boolean; interval_hours: number; notify: boolean }
     review: { enabled: boolean; interval_hours: number; max_suggestions: number }
+    intel: {
+      enabled: boolean; interval_hours: number; active_blocking: boolean; min_confidence: number
+      max_actions_per_run: number; max_ban_hours: number; ban_addresses: boolean; block_domains: boolean; notify: boolean
+    }
   }
   issues: {
     enabled: boolean; auto_capture: boolean; redact_extra: string[]
@@ -1173,11 +1180,17 @@ export interface Diagnosis {
 }
 
 export interface ImportResult {
-  exact: number
-  wildcard: number
+  lists: { name: string; url: string; category: string; enabled: boolean; action?: string }[]
+  block: number
+  allow: number
+  regex: number
   total: number
   sample: string[]
   risky: string[] | null
+  skipped: Record<string, number>
+  detected: string
+  notes?: string[]
+  lists_added: number
   action: string
   dry_run: boolean
   imported: number
@@ -1328,4 +1341,84 @@ export interface BuiltinList {
   category: string
   key: string
   description: string
+}
+
+export interface Preset {
+  id: string
+  name: string
+  url: string
+  category: string
+  format?: string
+  action?: string
+  description: string
+  recommended: boolean
+  installed: boolean
+}
+
+export interface IntelFinding {
+  title: string
+  severity: 'info' | 'notice' | 'warning' | 'critical'
+  detail: string
+  indicators: string[]
+  recommendation: string
+  action: { kind: 'ban_ip' | 'block_domain' | 'none'; value: string; hours: number; confidence: number }
+}
+
+export interface AIIntel {
+  id: string
+  ts: string
+  hours: number
+  model: string
+  risk: 'low' | 'guarded' | 'elevated' | 'high'
+  headline: string
+  summary: string
+  findings: IntelFinding[]
+}
+
+export interface AIAction {
+  id: string
+  intel_id: string
+  ts: string
+  kind: 'ban_ip' | 'block_domain'
+  value: string
+  hours: number
+  reason: string
+  confidence: number
+  status: 'suggested' | 'applied' | 'dismissed' | 'undone' | 'failed' | 'refused'
+  ref?: string
+  decided_at?: string
+  decided_by?: string
+}
+
+export interface IntelStatus {
+  enabled: boolean
+  configured: boolean
+  running: boolean
+  interval_hours: number
+  active_blocking: boolean
+  min_confidence: number
+  max_actions_per_run: number
+  max_ban_hours: number
+  last_error?: string
+  last?: string
+  next?: string
+  assessments: AIIntel[]
+  actions: AIAction[]
+}
+
+export interface Explanation {
+  kind: string
+  key: string
+  title: string
+  danger: 'none' | 'low' | 'medium' | 'high'
+  explanation: string
+  steps: string[]
+  model: string
+  ts: string
+}
+
+export interface DomainJudgement {
+  domain: string
+  verdict: { domain: string; is_ad_or_tracking: boolean; confidence: number; reason: string; breakage_risk: string }
+  protected?: string
 }

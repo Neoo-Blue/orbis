@@ -1,14 +1,9 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
-	"sort"
 	"strings"
-	"time"
 
-	"github.com/Neoo-Blue/orbis/internal/adblock"
-	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -121,117 +116,3 @@ func (s *Server) handleQuickUnblock(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- list import ----
-
-// handleImportList accepts a pasted or uploaded list in any of the formats
-// ParseList understands, so a Pi-hole or AdGuard Home export can be moved over
-// without converting it first.
-func (s *Server) handleImportList(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Text     string `json:"text"`
-		Action   string `json:"action"` // block | allow
-		Note     string `json:"note"`
-		DryRun   bool   `json:"dry_run"`
-		Wildcard bool   `json:"wildcard_all"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if strings.TrimSpace(req.Text) == "" {
-		writeErr(w, http.StatusBadRequest, "nothing to import")
-		return
-	}
-	action := req.Action
-	if action != "allow" {
-		action = "block"
-	}
-
-	exact, wildcard, err := adblock.ParseList(strings.NewReader(req.Text))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "could not parse: "+err.Error())
-		return
-	}
-	if len(exact) == 0 && len(wildcard) == 0 {
-		writeErr(w, http.StatusBadRequest,
-			"parsed successfully but found no usable domains. Cosmetic rules and rules with a URL path are skipped, because DNS cannot honour them.")
-		return
-	}
-
-	// Report what would happen before touching anything: importing a list that
-	// turns out to contain a whole-TLD wildcard takes a network offline, and
-	// the time to notice is before it is applied.
-	sample := make([]string, 0, 12)
-	for _, d := range exact {
-		if len(sample) >= 6 {
-			break
-		}
-		sample = append(sample, d)
-	}
-	for _, d := range wildcard {
-		if len(sample) >= 12 {
-			break
-		}
-		sample = append(sample, "*."+d)
-	}
-	sort.Strings(sample)
-
-	var risky []string
-	for _, d := range wildcard {
-		// A wildcard on a single label is a whole-TLD block. It is almost
-		// always a parse artefact and honouring it is catastrophic.
-		if !strings.Contains(d, ".") {
-			risky = append(risky, "*."+d)
-		}
-	}
-
-	result := map[string]any{
-		"exact":    len(exact),
-		"wildcard": len(wildcard),
-		"total":    len(exact) + len(wildcard),
-		"sample":   sample,
-		"risky":    risky,
-		"action":   action,
-		"dry_run":  req.DryRun,
-		"imported": 0,
-	}
-	if req.DryRun {
-		writeOK(w, result)
-		return
-	}
-	if len(risky) > 0 {
-		writeErr(w, http.StatusBadRequest, fmt.Sprintf(
-			"refusing to import: %v would block an entire top-level domain and take the network offline. Remove those lines and try again.", risky))
-		return
-	}
-
-	note := req.Note
-	if note == "" {
-		note = "imported"
-	}
-	now := time.Now()
-	n := 0
-	for _, d := range exact {
-		if err := s.app.Store.SaveLocalRule(store.LocalRule{
-			Domain: d, Action: action, Wildcard: req.Wildcard,
-			Origin: "import", Note: note, CreatedAt: now,
-		}); err == nil {
-			n++
-		}
-	}
-	for _, d := range wildcard {
-		if err := s.app.Store.SaveLocalRule(store.LocalRule{
-			Domain: d, Action: action, Wildcard: true,
-			Origin: "import", Note: note, CreatedAt: now,
-		}); err == nil {
-			n++
-		}
-	}
-	if err := s.app.Lists.Rebuild(); err != nil {
-		writeErr(w, http.StatusInternalServerError, "imported but reindex failed: "+err.Error())
-		return
-	}
-	result["imported"] = n
-	s.app.Store.Audit(r.RemoteAddr, "adblock.import", note, "",
-		fmt.Sprintf("%d rule(s) as %s", n, action), "ok")
-	writeOK(w, result)
-}

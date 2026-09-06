@@ -12,7 +12,7 @@ import type {
   ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
   HostedResponse, StorageDevice, PortForward, RouterInfo,
   LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus, IDSStatus,
- UpdateStatus } from './types'
+ UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -153,6 +153,8 @@ export const api = {
     decide: (domain: string, decision: 'block' | 'allow' | 'dismiss') =>
       post<{ ok: boolean }>(`/adblock/candidates/${encodeURIComponent(domain)}`, { decision }),
     scan: () => post<{ started: boolean }>('/adblock/scan'),
+    presets: () => get<{ presets: Preset[] }>('/adblock/presets'),
+    addPreset: (id: string) => post<{ ok: boolean }>(`/adblock/presets/${id}`, {}),
     check: (domain: string) =>
       get<{
         domain: string; blocked: boolean; allowed: boolean; source?: string
@@ -316,6 +318,13 @@ export const api = {
     notes: () => get<{ notes: AINote[] }>('/ai/notes'),
     addNote: (note: string) => post<{ note: AINote }>('/ai/notes', { note }),
     deleteNote: (id: string) => del<{ ok: boolean }>(`/ai/notes/${id}`),
+    intel: (limit = 5) => get<IntelStatus>(`/ai/intel${qs({ limit })}`),
+    runIntel: (hours?: number) => post<{ assessment: AIIntel; actions: AIAction[] }>('/ai/intel/run', hours ? { hours } : {}),
+    decideAction: (id: string, decision: 'apply' | 'dismiss' | 'undo') =>
+      post<{ action: AIAction }>(`/ai/actions/${id}`, { decision }),
+    explain: (kind: 'event' | 'alert' | 'ip' | 'domain', key: string) =>
+      post<{ explanation: Explanation }>('/ai/explain', { kind, key }),
+    judge: (domain: string) => post<DomainJudgement>('/ai/judge', { domain }),
   },
 
   shortcuts: {
@@ -491,8 +500,8 @@ export const api = {
     block: (domain: string, wildcard = false, note?: string) =>
       post<{ ok: boolean }>('/dnstools/block', { domain, wildcard, note }),
     unblock: (domain: string) => post<{ ok: boolean }>('/dnstools/unblock', { domain }),
-    importList: (text: string, opts: { action?: 'block' | 'allow'; dry_run?: boolean; note?: string } = {}) =>
-      post<ImportResult>('/dnstools/import', { text, ...opts }),
+    importList: (source: { text?: string; file?: string; filename?: string }, opts: { action?: 'block' | 'allow'; dry_run?: boolean; note?: string } = {}) =>
+      post<ImportResult>('/dnstools/import', { ...source, ...opts }),
   },
 
   onboarding: {

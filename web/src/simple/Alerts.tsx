@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ExplainButton } from '../pages/ai/Explain'
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Dot, Empty, Loading, Segmented, useToast } from '../ui'
@@ -23,7 +24,8 @@ export function SimpleAlerts({ onNavigate }: { onNavigate: (r: string) => void }
         {e.detail && <div className="detail">{e.detail.length > 400 ? `${e.detail.slice(0, 400)}…` : e.detail}</div>}
         <div className="when" style={{ marginTop: 4 }}>{plainCategory(e.category)} · {ago(e.ts)}</div>
       </div>
-      <div>
+      <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
+        <ExplainButton kind="event" id={e.id} label="What is this?" />
         {!e.acknowledged && (e.severity === 'warning' || e.severity === 'critical') && (
           <button className="btn sm" onClick={async () => { try { await api.events.ack(e.id); refresh() } catch (err) { toast(err instanceof Error ? err.message : 'Could not mark it', 'err') } }}>Seen it</button>
         )}

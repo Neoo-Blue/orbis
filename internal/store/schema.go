@@ -291,6 +291,35 @@ CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);
 // the table, so a field added there alone would silently never appear on a
 // node that has been running.
 var migrations = []string{
+	`ALTER TABLE block_domains ADD COLUMN important INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE local_rules ADD COLUMN regex INTEGER NOT NULL DEFAULT 0`,
+	// AI threat-intelligence assessments and the actions they proposed or took.
+	`CREATE TABLE IF NOT EXISTS ai_intel (
+		id        TEXT PRIMARY KEY,
+		ts        INTEGER NOT NULL,
+		hours     INTEGER NOT NULL,
+		model     TEXT NOT NULL DEFAULT '',
+		risk      TEXT NOT NULL DEFAULT 'low',
+		headline  TEXT NOT NULL,
+		summary   TEXT NOT NULL DEFAULT '',
+		findings  TEXT NOT NULL DEFAULT '[]'
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ai_intel_ts ON ai_intel(ts)`,
+	`CREATE TABLE IF NOT EXISTS ai_actions (
+		id          TEXT PRIMARY KEY,
+		intel_id    TEXT NOT NULL DEFAULT '',
+		ts          INTEGER NOT NULL,
+		kind        TEXT NOT NULL,
+		value       TEXT NOT NULL,
+		hours       INTEGER NOT NULL DEFAULT 0,
+		reason      TEXT NOT NULL DEFAULT '',
+		confidence  REAL NOT NULL DEFAULT 0,
+		status      TEXT NOT NULL DEFAULT 'suggested',
+		ref         TEXT NOT NULL DEFAULT '',
+		decided_at  INTEGER NOT NULL DEFAULT 0,
+		decided_by  TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ai_actions_ts ON ai_actions(ts)`,
 	`ALTER TABLE policies ADD COLUMN blocked_services TEXT NOT NULL DEFAULT '[]'`,
 	`ALTER TABLE policies ADD COLUMN unfiltered INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE dns_queries ADD COLUMN policy TEXT`,

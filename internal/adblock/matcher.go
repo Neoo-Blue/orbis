@@ -18,6 +18,9 @@ type Match struct {
 	Category string
 	// Rule is the specific pattern that matched, e.g. "*.doubleclick.net".
 	Rule string
+	// Important marks an AdGuard $important block, which beats exceptions
+	// from lists (never the operator's own).
+	Important bool `json:"important,omitempty"`
 }
 
 // Matcher is a lock-light domain matcher. Lookups happen on the DNS hot path
@@ -41,34 +44,52 @@ type index struct {
 	// wildcard holds suffix entries: an entry for "doubleclick.net" matches
 	// that name and every subdomain of it.
 	wildcard map[string]entry
-	// allowExact / allowWildcard always win over a block.
-	allowExact    map[string]struct{}
-	allowWildcard map[string]struct{}
+	// allowExact / allowWildcard win over a block, except that an exception
+	// that came from a list yields to a block marked important, which is
+	// AdGuard's rule and what its lists are written against.
+	allowExact    map[string]allowEntry
+	allowWildcard map[string]allowEntry
+	allowRegexes  []allowRegex
 	// regexes are the escape hatch for patterns a suffix cannot express.
 	regexes []regexEntry
 	count   int
 }
 
 type entry struct {
-	source   string
-	category string
+	source    string
+	category  string
+	important bool
 }
 
 type regexEntry struct {
-	re       *compiledRegex
-	source   string
-	category string
+	re        *compiledRegex
+	source    string
+	category  string
+	important bool
+}
+
+// allowEntry records whether the exception is the operator's own (local)
+// or came from a subscribed list.
+type allowEntry struct{ local bool }
+
+type allowRegex struct {
+	re    *compiledRegex
+	local bool
 }
 
 func New() *Matcher {
 	m := &Matcher{}
-	m.idx.Store(&index{
+	m.idx.Store(newIndex())
+	return m
+}
+
+func newIndex() *index {
+	return &index{
 		exact:         map[string]entry{},
 		wildcard:      map[string]entry{},
-		allowExact:    map[string]struct{}{},
-		allowWildcard: map[string]struct{}{},
-	})
-	return m
+		allowExact:    map[string]allowEntry{},
+		allowWildcard: map[string]allowEntry{},
+	}
 }
 
 // Builder accumulates entries for a new index.
@@ -77,46 +98,78 @@ type Builder struct {
 }
 
 func NewBuilder() *Builder {
-	return &Builder{idx: &index{
-		exact:         make(map[string]entry, 1<<17),
-		wildcard:      make(map[string]entry, 1<<14),
-		allowExact:    map[string]struct{}{},
-		allowWildcard: map[string]struct{}{},
-	}}
+	return &Builder{idx: newIndex()}
 }
 
 func (b *Builder) AddBlock(domain, source, category string, wildcard bool) {
+	b.AddBlockImportant(domain, source, category, wildcard, false)
+}
+
+// AddBlockImportant adds a block that also beats exceptions from lists.
+func (b *Builder) AddBlockImportant(domain, source, category string, wildcard, important bool) {
 	d := normalize(domain)
 	if d == "" {
 		return
 	}
-	e := entry{source: source, category: category}
+	e := entry{source: source, category: category, important: important}
 	if wildcard {
+		if old, ok := b.idx.wildcard[d]; ok && old.important {
+			e.important = true
+		}
 		b.idx.wildcard[d] = e
 	} else {
+		if old, ok := b.idx.exact[d]; ok && old.important {
+			e.important = true
+		}
 		b.idx.exact[d] = e
 	}
 	b.idx.count++
 }
 
+// AddAllow adds the operator's own exception, which beats everything.
 func (b *Builder) AddAllow(domain string, wildcard bool) {
+	b.AddAllowFrom(domain, wildcard, true)
+}
+
+// AddAllowFrom adds an exception; local false means it came from a list and
+// yields to blocks marked important.
+func (b *Builder) AddAllowFrom(domain string, wildcard, local bool) {
 	d := normalize(domain)
 	if d == "" {
 		return
 	}
 	if wildcard {
-		b.idx.allowWildcard[d] = struct{}{}
+		if old, ok := b.idx.allowWildcard[d]; !ok || !old.local {
+			b.idx.allowWildcard[d] = allowEntry{local: local}
+		}
 	} else {
-		b.idx.allowExact[d] = struct{}{}
+		if old, ok := b.idx.allowExact[d]; !ok || !old.local {
+			b.idx.allowExact[d] = allowEntry{local: local}
+		}
 	}
 }
 
 func (b *Builder) AddRegex(pattern, source, category string) error {
+	return b.AddRegexImportant(pattern, source, category, false)
+}
+
+func (b *Builder) AddRegexImportant(pattern, source, category string, important bool) error {
 	re, err := compileRegex(pattern)
 	if err != nil {
 		return err
 	}
-	b.idx.regexes = append(b.idx.regexes, regexEntry{re: re, source: source, category: category})
+	b.idx.regexes = append(b.idx.regexes, regexEntry{re: re, source: source, category: category, important: important})
+	b.idx.count++
+	return nil
+}
+
+// AddAllowRegex adds an exception pattern.
+func (b *Builder) AddAllowRegex(pattern string, local bool) error {
+	re, err := compileRegex(pattern)
+	if err != nil {
+		return err
+	}
+	b.idx.allowRegexes = append(b.idx.allowRegexes, allowRegex{re: re, local: local})
 	return nil
 }
 
@@ -142,36 +195,37 @@ func (m *Matcher) Lookup(domain string) Match {
 	}
 	idx := m.idx.Load()
 
-	if _, ok := idx.allowExact[d]; ok {
-		m.hits.Add(1)
-		return Match{Allowed: true, Source: "allowlist", Rule: d}
+	var allow *Match
+	var allowLocal bool
+	if a, ok := idx.allowExact[d]; ok {
+		allow, allowLocal = &Match{Allowed: true, Source: "allowlist", Rule: d}, a.local
 	}
 
+	var block *Match
 	name := d
 	first := true
 	for {
-		if _, ok := idx.allowWildcard[name]; ok {
-			m.hits.Add(1)
-			return Match{Allowed: true, Source: "allowlist", Rule: "*." + name}
+		if allow == nil {
+			if a, ok := idx.allowWildcard[name]; ok {
+				allow, allowLocal = &Match{Allowed: true, Source: "allowlist", Rule: "*." + name}, a.local
+			}
 		}
-		if first {
+		if block == nil && first {
 			if e, ok := idx.exact[name]; ok {
-				m.hits.Add(1)
-				return Match{Blocked: true, Source: e.source, Category: e.category, Rule: name}
+				block = &Match{Blocked: true, Source: e.source, Category: e.category, Rule: name, Important: e.important}
 			}
 		}
-		if e, ok := idx.wildcard[name]; ok {
-			// A wildcard on a single label is a whole-TLD block. That is
-			// occasionally what an operator wants (*.zip), but from a
-			// subscribed list it is almost always a parse artefact, and
-			// honouring it would take the network off the internet. Only
-			// locally-authored rules are trusted at that level.
-			if !strings.Contains(name, ".") && !isLocalSource(e.source) {
-				m.misses.Add(1)
-				return Match{}
+		if block == nil {
+			if e, ok := idx.wildcard[name]; ok {
+				// A wildcard on a single label is a whole-TLD block. That is
+				// occasionally what an operator wants (*.zip), but from a
+				// subscribed list it is almost always a parse artefact, and
+				// honouring it would take the network off the internet. Only
+				// locally-authored rules are trusted at that level.
+				if strings.Contains(name, ".") || isLocalSource(e.source) {
+					block = &Match{Blocked: true, Source: e.source, Category: e.category, Rule: "*." + name, Important: e.important}
+				}
 			}
-			m.hits.Add(1)
-			return Match{Blocked: true, Source: e.source, Category: e.category, Rule: "*." + name}
 		}
 		first = false
 		dot := strings.IndexByte(name, '.')
@@ -180,12 +234,30 @@ func (m *Matcher) Lookup(domain string) Match {
 		}
 		name = name[dot+1:]
 	}
-
-	for _, r := range idx.regexes {
-		if r.re.MatchString(d) {
-			m.hits.Add(1)
-			return Match{Blocked: true, Source: r.source, Category: r.category, Rule: r.re.pattern}
+	if block == nil {
+		for _, r := range idx.regexes {
+			if r.re.MatchString(d) {
+				block = &Match{Blocked: true, Source: r.source, Category: r.category, Rule: r.re.pattern, Important: r.important}
+				break
+			}
 		}
+	}
+	if allow == nil {
+		for _, r := range idx.allowRegexes {
+			if r.re.MatchString(d) {
+				allow, allowLocal = &Match{Allowed: true, Source: "allowlist", Rule: "/" + r.re.pattern + "/"}, r.local
+				break
+			}
+		}
+	}
+
+	switch {
+	case allow != nil && (allowLocal || block == nil || !block.Important):
+		m.hits.Add(1)
+		return *allow
+	case block != nil:
+		m.hits.Add(1)
+		return *block
 	}
 	m.misses.Add(1)
 	return Match{}

@@ -164,6 +164,27 @@ type Event struct {
 	Data     map[string]any `json:"data,omitempty"`
 }
 
+// List entry kinds, stored in block_domains.wildcard.
+const (
+	EntryExact         = 0
+	EntryWildcard      = 1
+	EntryRegex         = 2
+	EntryAllowExact    = 3
+	EntryAllowWildcard = 4
+	EntryAllowRegex    = 5
+)
+
+// ListEntries is a parsed list ready to store.
+type ListEntries struct {
+	Exact, Wildcard, Regex                []string
+	AllowExact, AllowWildcard, AllowRegex []string
+	Important                             map[string]bool
+}
+
+func (e ListEntries) Count() int {
+	return len(e.Exact) + len(e.Wildcard) + len(e.Regex) + len(e.AllowExact) + len(e.AllowWildcard) + len(e.AllowRegex)
+}
+
 type ListMeta struct {
 	Name        string     `json:"name"`
 	URL         string     `json:"url"`
@@ -201,9 +222,11 @@ type AdCandidate struct {
 }
 
 type LocalRule struct {
-	Domain    string    `json:"domain"`
-	Action    string    `json:"action"` // block | allow
-	Wildcard  bool      `json:"wildcard"`
+	Domain   string `json:"domain"`
+	Action   string `json:"action"` // block | allow
+	Wildcard bool   `json:"wildcard"`
+	// Regex means Domain is a pattern, not a name.
+	Regex     bool      `json:"regex,omitempty"`
 	Origin    string    `json:"origin"` // user | smart | ai | import
 	Note      string    `json:"note,omitempty"`
 	CreatedAt time.Time `json:"created_at"`

@@ -1,12 +1,12 @@
 package adblock
 
 import (
-	"bufio"
 	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -172,33 +172,86 @@ func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) error {
 		reader = gz
 	}
 
-	exact, wild, err := ParseList(reader)
+	parsed, err := Parse(reader, m.parseOptions(meta.Name))
 	if err != nil {
 		return err
 	}
-	if len(exact)+len(wild) == 0 {
+	if parsed.Total() == 0 {
 		return fmt.Errorf("list parsed to zero entries (format change?)")
 	}
-	if err := m.st.ReplaceListDomains(meta.Name, meta.Category, exact, wild); err != nil {
+	if err := m.st.ReplaceListDomains(meta.Name, meta.Category, ToListEntries(parsed)); err != nil {
 		return err
 	}
 	meta.ETag = resp.Header.Get("ETag")
 	now := time.Now()
 	meta.LastUpdated = &now
-	meta.Entries = len(exact) + len(wild)
+	meta.Entries = parsed.Total()
 	_ = m.st.UpsertListMeta(meta)
-	m.log("adblock: %s -> %d entries", meta.Name, meta.Entries)
+	if len(parsed.Skipped) > 0 {
+		m.log("adblock: %s -> %d entries (%d blocks, %d exceptions), skipped %s", meta.Name, meta.Entries, parsed.Blocks(), parsed.Allows(), skippedSummary(parsed.Skipped))
+	} else {
+		m.log("adblock: %s -> %d entries (%d blocks, %d exceptions)", meta.Name, meta.Entries, parsed.Blocks(), parsed.Allows())
+	}
 	return nil
+}
+
+// parseOptions reads a list's action and format from the configuration.
+func (m *Manager) parseOptions(name string) ParseOptions {
+	for _, l := range m.cfg.Snapshot().AdBlock.Lists {
+		if l.Name == name {
+			return ParseOptions{Format: l.Format, Allow: l.Action == "allow"}
+		}
+	}
+	return ParseOptions{}
+}
+
+// ToListEntries converts a parse result for storage.
+func ToListEntries(p *Entries) store.ListEntries {
+	return store.ListEntries{
+		Exact: p.Exact, Wildcard: p.Wildcard, Regex: p.Regex,
+		AllowExact: p.AllowExact, AllowWildcard: p.AllowWildcard, AllowRegex: p.AllowRegex,
+		Important: p.Important,
+	}
+}
+
+func skippedSummary(sk map[string]int) string {
+	parts := make([]string, 0, len(sk))
+	for k, v := range sk {
+		parts = append(parts, fmt.Sprintf("%d %s", v, k))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ", ")
 }
 
 // Rebuild reconstructs the in-memory index from the database. Called after a
 // list refresh and whenever local rules change.
 func (m *Manager) Rebuild() error {
 	b := NewBuilder()
-	if err := m.st.AllBlockDomains(func(domain, category string, wildcard bool) {
-		b.AddBlock(domain, "list", category, wildcard)
+	badRegex := 0
+	if err := m.st.AllBlockDomains(func(domain, category string, kind int, important bool) {
+		switch kind {
+		case store.EntryExact:
+			b.AddBlockImportant(domain, "list", category, false, important)
+		case store.EntryWildcard:
+			b.AddBlockImportant(domain, "list", category, true, important)
+		case store.EntryRegex:
+			if err := b.AddRegexImportant(domain, "list", category, important); err != nil {
+				badRegex++
+			}
+		case store.EntryAllowExact:
+			b.AddAllowFrom(domain, false, false)
+		case store.EntryAllowWildcard:
+			b.AddAllowFrom(domain, true, false)
+		case store.EntryAllowRegex:
+			if err := b.AddAllowRegex(domain, false); err != nil {
+				badRegex++
+			}
+		}
 	}); err != nil {
 		return err
+	}
+	if badRegex > 0 {
+		m.log("adblock: %d list regex entries did not compile and were skipped", badRegex)
 	}
 
 	// Config-level overrides come next.
@@ -217,9 +270,18 @@ func (m *Manager) Rebuild() error {
 		return err
 	}
 	for _, r := range local {
-		if r.Action == "allow" {
+		switch {
+		case r.Regex && r.Action == "allow":
+			if err := b.AddAllowRegex(r.Domain, true); err != nil {
+				m.log("adblock: local allow pattern %q: %v", r.Domain, err)
+			}
+		case r.Regex:
+			if err := b.AddRegex(r.Domain, "local:"+r.Origin, "manual"); err != nil {
+				m.log("adblock: local block pattern %q: %v", r.Domain, err)
+			}
+		case r.Action == "allow":
 			b.AddAllow(r.Domain, r.Wildcard)
-		} else {
+		default:
 			b.AddBlock(r.Domain, "local:"+r.Origin, "manual", r.Wildcard)
 		}
 	}
@@ -291,125 +353,6 @@ func (m *Manager) Run(ctx context.Context) {
 			}
 		}
 	}
-}
-
-// ParseList understands the formats real blocklists ship in:
-//
-//	hosts:      0.0.0.0 ads.example.com
-//	plain:      ads.example.com
-//	wildcard:   *.ads.example.com  |  .ads.example.com
-//	AdBlock:    ||ads.example.com^
-//	dnsmasq:    address=/ads.example.com/0.0.0.0
-//
-// Cosmetic AdBlock rules (##selector) and anything with a path component are
-// skipped: a DNS-level blocker cannot honour them, and pretending otherwise
-// produces overblocking.
-func ParseList(r io.Reader) (exact []string, wildcard []string, err error) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	seenExact := make(map[string]struct{}, 1<<16)
-	seenWild := make(map[string]struct{}, 1<<12)
-
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || line[0] == '#' || line[0] == '!' || strings.HasPrefix(line, "//") {
-			continue
-		}
-		// Strip trailing comments.
-		if i := strings.IndexAny(line, "#!"); i > 0 {
-			line = strings.TrimSpace(line[:i])
-		}
-		if line == "" {
-			continue
-		}
-
-		switch {
-		case strings.HasPrefix(line, "||"):
-			// AdBlock network rule. Only host-anchored rules with no path or
-			// option modifiers translate cleanly to DNS.
-			body := line[2:]
-			if i := strings.IndexAny(body, "/$"); i >= 0 {
-				continue
-			}
-			body = strings.TrimSuffix(body, "^")
-			if strings.ContainsAny(body, "*^|") {
-				continue
-			}
-			if d := normalize(body); d != "" {
-				seenWild[d] = struct{}{}
-			}
-
-		case strings.HasPrefix(line, "@@"):
-			// Exception rules are not applied here; they belong to the
-			// allowlist path and blindly importing them inverts a list.
-			continue
-
-		case strings.HasPrefix(line, "address=/"):
-			body := strings.TrimPrefix(line, "address=/")
-			if i := strings.Index(body, "/"); i > 0 {
-				if d := normalize(body[:i]); d != "" {
-					seenWild[d] = struct{}{}
-				}
-			}
-
-		case strings.HasPrefix(line, "server=/"):
-			body := strings.TrimPrefix(line, "server=/")
-			if i := strings.Index(body, "/"); i > 0 {
-				if d := normalize(body[:i]); d != "" {
-					seenWild[d] = struct{}{}
-				}
-			}
-
-		default:
-			fields := strings.Fields(line)
-			var host string
-			switch len(fields) {
-			case 1:
-				host = fields[0]
-			default:
-				// hosts format: an IP then one or more names.
-				ip := fields[0]
-				if ip == "0.0.0.0" || ip == "127.0.0.1" || ip == "::" || ip == "::1" || ip == "0.0.0.0.0" {
-					for _, h := range fields[1:] {
-						if h == "localhost" || h == "localhost.localdomain" ||
-							h == "local" || h == "broadcasthost" || h == "ip6-localhost" ||
-							h == "ip6-loopback" || h == "ip6-localnet" || h == "ip6-mcastprefix" ||
-							h == "ip6-allnodes" || h == "ip6-allrouters" {
-							continue
-						}
-						if d := normalize(h); d != "" {
-							seenExact[d] = struct{}{}
-						}
-					}
-					continue
-				}
-				host = fields[0]
-			}
-			isWild := strings.HasPrefix(host, "*.") || strings.HasPrefix(host, ".")
-			if d := normalize(strings.TrimPrefix(host, ".")); d != "" {
-				if isWild {
-					seenWild[d] = struct{}{}
-				} else {
-					seenExact[d] = struct{}{}
-				}
-			}
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, nil, err
-	}
-	// A wildcard entry already covers the exact name, so drop the duplicate.
-	exact = make([]string, 0, len(seenExact))
-	for d := range seenExact {
-		if _, ok := seenWild[d]; !ok {
-			exact = append(exact, d)
-		}
-	}
-	wildcard = make([]string, 0, len(seenWild))
-	for d := range seenWild {
-		wildcard = append(wildcard, d)
-	}
-	return exact, wildcard, nil
 }
 
 // dohBypassDomains are the public DNS-over-HTTPS resolvers a browser or app

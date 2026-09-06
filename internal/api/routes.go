@@ -71,6 +71,8 @@ func (s *Server) mount(r chi.Router) {
 		r.Post("/candidates/{domain}", s.handleDecideCandidate)
 		r.Post("/scan", s.handleSmartScan)
 		r.Get("/check/{domain}", s.handleCheckDomain)
+		r.Get("/presets", s.handlePresets)
+		r.Post("/presets/{id}", s.handleAddPreset)
 	})
 
 	r.Route("/firewall", func(r chi.Router) {

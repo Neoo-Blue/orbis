@@ -378,6 +378,12 @@ type BlockList struct {
 	// Category tags the list for per-client policy ("ads", "malware",
 	// "tracking", "adult", "social").
 	Category string `yaml:"category" json:"category"`
+	// Action "allow" makes every entry an exception (AdGuard Home's
+	// allowlist filters); empty or "block" is a blocklist.
+	Action string `yaml:"action,omitempty" json:"action,omitempty"`
+	// Format "regex" treats every line as a regular expression (Pi-hole's
+	// regex lists); empty detects per line.
+	Format string `yaml:"format,omitempty" json:"format,omitempty"`
 }
 
 type SmartCaptureConfig struct {
@@ -857,6 +863,33 @@ type AIConfig struct {
 	// Review is the scheduled blocklist review: allow/block suggestions with
 	// the operator's decisions remembered.
 	Review ReviewConfig `yaml:"review" json:"review"`
+	// Intel is the scheduled threat-intelligence assessment, and the active
+	// blocking that lets it act on its own findings.
+	Intel IntelConfig `yaml:"intel" json:"intel"`
+}
+
+// IntelConfig schedules the threat-intelligence assessment. The assessment
+// reads attacks, threat-feed hits, anomalies, bans and unusual traffic and
+// returns a risk level, findings and proposed actions. With ActiveBlocking
+// on, proposed bans and domain blocks that clear MinConfidence are applied
+// at once, bounded by MaxActionsPerRun and MaxBanHours, and every one can be
+// undone from the Threats page.
+type IntelConfig struct {
+	Enabled       bool `yaml:"enabled" json:"enabled"`
+	IntervalHours int  `yaml:"interval_hours" json:"interval_hours"`
+	// ActiveBlocking applies the assessment's actions without a click.
+	ActiveBlocking bool `yaml:"active_blocking" json:"active_blocking"`
+	// MinConfidence an action needs before active blocking applies it.
+	MinConfidence float64 `yaml:"min_confidence" json:"min_confidence"`
+	// MaxActionsPerRun caps how many actions one assessment may apply.
+	MaxActionsPerRun int `yaml:"max_actions_per_run" json:"max_actions_per_run"`
+	// MaxBanHours bounds the length of any ban the assessment applies.
+	MaxBanHours int `yaml:"max_ban_hours" json:"max_ban_hours"`
+	// BanAddresses / BlockDomains choose which kinds active blocking may take.
+	BanAddresses bool `yaml:"ban_addresses" json:"ban_addresses"`
+	BlockDomains bool `yaml:"block_domains" json:"block_domains"`
+	// Notify sends each assessment through the notification sinks.
+	Notify bool `yaml:"notify" json:"notify"`
 }
 
 // ReviewConfig schedules the ad-blocking specialist.
@@ -1186,6 +1219,16 @@ func Default() *Config {
 				Enabled:        false,
 				IntervalHours:  24,
 				MaxSuggestions: 8,
+			},
+			Intel: IntelConfig{
+				Enabled:          true,
+				IntervalHours:    6,
+				ActiveBlocking:   false,
+				MinConfidence:    0.85,
+				MaxActionsPerRun: 5,
+				MaxBanHours:      24,
+				BanAddresses:     true,
+				BlockDomains:     true,
 			},
 		},
 	}

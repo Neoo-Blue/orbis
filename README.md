@@ -265,6 +265,17 @@ authoritative records with wildcards, rewrites, conditional forwarding, rate lim
 protection. Turn the cache up and the TTL floor to an hour and it is a drop-in for unbound in
 front of a home network.
 
+**Lists from anywhere.** Any list AdGuard Home or Pi-hole accepts works here, with the same
+meaning: hosts files, plain domains, AdGuard rules with exceptions, `$important`, `$denyallow`,
+wildcards and `/regex/`, Pi-hole regex lists, dnsmasq, unbound and RPZ. Exceptions in a list
+apply as AdGuard applies them; an `$important` block beats a list's exception but never your
+own allow; rules DNS cannot honour (cosmetic, URL paths, per-client or per-record-type) are
+counted, not misapplied. A subscription can be an allowlist or a regex list. The Ad blocking
+page offers the popular lists (AdGuard DNS filter, OISD, HaGeZi, URLhaus, Phishing Army and
+more) with one click, and the Domain tester imports a whole Pi-hole (Teleporter backup, gravity
+database, adlists and regex lists) or an `AdGuardHome.yaml`: subscriptions become subscriptions,
+custom rules become your rules, with a preview of what was skipped and why.
+
 **Blocking beyond the lists.** CNAME uncloaking, SNI and QUIC blocking for devices that never
 ask the resolver, a DoH-bypass sinkhole, the built-in list of hosts smart TVs and streaming
 sticks use only for ads and telemetry, and *smart capture*: a heuristic pipeline, with an
@@ -416,6 +427,17 @@ Both write the same configuration, so nothing done in one is invisible in the ot
 both become a bottom tab bar; every page has been laid out and checked at phone width
 ([docs/UX-AUDIT.md](docs/UX-AUDIT.md) records the audit). Settings has search, a glossary
 explains every term in one sentence, and ⌘K jumps to any page, device or setting.
+
+**With the assistant configured, the network gets an analyst.** A scheduled **threat check**
+reads the window's attacks, threat-feed hits, anomalies, bans, blocked lookups and busiest
+destinations and writes an assessment: a risk level, findings in plain words, and the actions it
+would take, as timed bans and domain blocks. They wait for a click on Threats, AI intel, unless
+**active blocking** is on, in which case the confident ones are applied at once within the
+limits you set (confidence, actions per check, longest ban), audited, announced, and undoable. A
+guard rail refuses essential services, CDNs, update, certificate and time hosts, local names and
+the never-act-on list whatever the model says. Every event has an **Explain** button that says
+what it is, how dangerous, and what to do; the Domain tester can **ask the assistant** whether a
+host is an ad or tracking server. The chat has tools for all of it.
 
 **The assistant** talks to Anthropic, OpenAI, OpenRouter or a local Ollama, with 29 read tools
 and 21 write tools over the same code paths the interface uses. It explains why a domain is

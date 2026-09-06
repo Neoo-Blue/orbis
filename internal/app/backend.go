@@ -1580,3 +1580,63 @@ func (a *App) ApplyUpdate(ctx context.Context, actor string) (map[string]any, er
 	a.Store.Audit(actor, "update.apply", "", a.build, "latest", "started")
 	return a.Update.Status(), nil
 }
+
+// UnblockDomain removes the operator's own block on a name.
+func (a *App) UnblockDomain(domain string) error {
+	domain = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(domain, "*.")))
+	if domain == "" {
+		return fmt.Errorf("domain is required")
+	}
+	if err := a.Store.DeleteLocalRule(domain); err != nil {
+		return err
+	}
+	return a.Lists.Rebuild()
+}
+
+// IntelStatus is the threat-intelligence page's view.
+func (a *App) IntelStatus(limit int) map[string]any {
+	if a.Intel == nil {
+		return map[string]any{"enabled": false, "configured": false}
+	}
+	return a.Intel.Status(limit)
+}
+
+// RunIntel assesses the last hours now.
+func (a *App) RunIntel(ctx context.Context, hours int) (map[string]any, error) {
+	if a.Intel == nil {
+		return nil, fmt.Errorf("the assistant is not available")
+	}
+	in, actions, err := a.Intel.Assess(ctx, hours)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"assessment": in, "actions": actions}, nil
+}
+
+// DecideAIAction applies, dismisses or undoes a proposed action.
+func (a *App) DecideAIAction(id, decision, actor string) (*store.AIAction, error) {
+	if a.Intel == nil {
+		return nil, fmt.Errorf("the assistant is not available")
+	}
+	return a.Intel.Decide(id, decision, actor)
+}
+
+// Explain answers "what is this" for an event, alert, address or hostname.
+func (a *App) Explain(ctx context.Context, kind, key string) (map[string]any, error) {
+	if a.Explainer == nil {
+		return nil, fmt.Errorf("the assistant is not available")
+	}
+	e, err := a.Explainer.Explain(ctx, kind, key)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"explanation": e}, nil
+}
+
+// JudgeDomain asks the classifier about one hostname.
+func (a *App) JudgeDomain(ctx context.Context, domain string) (map[string]any, error) {
+	if a.Explainer == nil {
+		return nil, fmt.Errorf("the assistant is not available")
+	}
+	return a.Explainer.JudgeDomain(ctx, domain)
+}

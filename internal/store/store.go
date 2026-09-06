@@ -528,6 +528,20 @@ func (s *Store) AddEvent(e Event) error {
 	return err
 }
 
+// EventByID fetches one event.
+func (s *Store) EventByID(id string) (*Event, error) {
+	rows, err := s.db.Query("SELECT id, ts, severity, category, title, COALESCE(detail,''), COALESCE(client_id,''), COALESCE(flow_id,''), acknowledged, COALESCE(data,'{}') FROM events WHERE id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list, err := scanEvents(rows)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
 func (s *Store) Events(since time.Time, severity string, unackOnly bool, limit int) ([]Event, error) {
 	q := "SELECT id, ts, severity, category, title, COALESCE(detail,''), COALESCE(client_id,''), COALESCE(flow_id,''), acknowledged, COALESCE(data,'{}') FROM events WHERE ts >= ?"
 	args := []any{since.Unix()}
@@ -544,6 +558,10 @@ func (s *Store) Events(since time.Time, severity string, unackOnly bool, limit i
 		return nil, err
 	}
 	defer rows.Close()
+	return scanEvents(rows)
+}
+
+func scanEvents(rows *sql.Rows) ([]Event, error) {
 	out := []Event{}
 	for rows.Next() {
 		var e Event

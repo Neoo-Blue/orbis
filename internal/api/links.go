@@ -134,7 +134,7 @@ func (s *Server) handleWiFiPassphrase(w http.ResponseWriter, r *http.Request) {
 // escaped.
 func wifiQRPayload(ssid, passphrase string, hidden bool) string {
 	esc := func(v string) string {
-		r := strings.NewReplacer(`\\`, `\\\\`, `;`, `\\;`, `,`, `\\,`, `:`, `\\:`, `"`, `\\"`)
+		r := strings.NewReplacer("\\", "\\\\", ";", "\\;", ",", "\\,", ":", "\\:", "\"", "\\\"")
 		return r.Replace(v)
 	}
 	h := ""

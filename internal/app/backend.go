@@ -1518,3 +1518,20 @@ func (a *App) SetCountryRule(code, action, actor string) (map[string]any, error)
 	go a.ReapplyThreatEnforcement()
 	return a.CountryRules()
 }
+
+// IntrusionStatus is the assistant's and the page's view of the detector:
+// sources, rules, recent alerts and the addresses behind them.
+func (a *App) IntrusionStatus(since time.Time, limit int) (map[string]any, error) {
+	if a.IDS == nil {
+		return map[string]any{"enabled": false}, nil
+	}
+	out := a.IDS.Status()
+	alerts, err := a.IDS.Alerts(since, limit)
+	if err != nil {
+		return nil, err
+	}
+	out["alerts"] = alerts
+	out["offenders"] = a.IDS.TopOffenders(since)
+	out["enforcement"] = a.ThreatEnforcement()
+	return out, nil
+}

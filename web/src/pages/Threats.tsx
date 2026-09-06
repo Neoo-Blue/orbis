@@ -3,7 +3,7 @@ import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Banner, Card, Empty, Field, Icons, Loading, Segmented, Stat, Switch, useToast } from '../ui'
 import { ago, countryFlag, num } from '../format'
-import type { CountryStatus, ThreatDecision, ThreatFeed, ThreatHit } from '../types'
+import type { CountryStatus, IDSStatus, ThreatDecision, ThreatFeed, ThreatHit } from '../types'
 import { bytes, countryFlag as flag } from '../format'
 
 /**
@@ -14,22 +14,23 @@ import { bytes, countryFlag as flag } from '../format'
  * the most important line on the page: a hit that was only recorded and a
  * hit that was dropped must never look the same.
  */
-type Tab = 'hits' | 'feeds' | 'bans' | 'countries' | 'crowdsec'
+type Tab = 'attacks' | 'hits' | 'feeds' | 'bans' | 'countries' | 'crowdsec'
 
 const CATEGORIES = ['c2', 'hijacked', 'attackers', 'compromised', 'spam', 'other']
 
 export function ThreatsPage() {
-  const [tab, setTab] = useState<Tab>('hits')
+  const [tab, setTab] = useState<Tab>('attacks')
   const [hours, setHours] = useState(24)
   const { data: status, refresh: refreshStatus } = usePoll(() => api.threat.status(), 15000)
   const { data: hitsData, refresh: refreshHits } = usePoll(() => api.threat.hits(hours, 300), 15000, [hours])
   const { data: feedsData, refresh: refreshFeeds } = usePoll(() => api.threat.feeds(), 30000)
   const { data: bansData, refresh: refreshBans } = usePoll(() => api.threat.decisions(), 15000)
   const { data: countryData, refresh: refreshCountry } = usePoll(() => api.country.get(), 15000)
+  const { data: idsData, refresh: refreshIDS } = usePoll(() => api.ids.get(hours, 200), 15000, [hours])
   const toast = useToast()
   const [busy, setBusy] = useState<string | null>(null)
 
-  const refreshAll = () => { refreshStatus(); refreshHits(); refreshFeeds(); refreshBans(); refreshCountry() }
+  const refreshAll = () => { refreshStatus(); refreshHits(); refreshFeeds(); refreshBans(); refreshCountry(); refreshIDS() }
   const act = async (key: string, fn: () => Promise<unknown>, ok: string) => {
     setBusy(key)
     try {
@@ -80,13 +81,13 @@ export function ThreatsPage() {
         <Stat label="Active bans" value={num(status.decisions)} sub={sources || 'none'} />
         <Stat label="Hits, last 24h" value={num(status.hits_24h)} tone={status.hits_24h > 0 ? 'amber' : undefined}
           sub={status.hits_24h > 0 ? `${status.dropped_24h} dropped, ${status.hits_24h - status.dropped_24h} recorded only` : 'nothing touched a listed address'} />
-        <Stat label="CrowdSec" value={cs.enabled ? (cs.last_error ? 'error' : cs.last_pull ? 'connected' : 'connecting') : 'off'}
-          tone={cs.enabled && cs.last_error ? 'red' : cs.enabled && cs.last_pull ? 'accent' : undefined}
-          sub={cs.enabled ? (cs.last_error || (cs.last_pull ? `${cs.decisions} bans, pulled ${ago(cs.last_pull)}` : 'waiting for the first pull')) : 'not acting as a bouncer'} />
+        <Stat label="Attacks, last 24h" value={num(idsData?.bans_24h ?? 0)} tone={(idsData?.bans_24h ?? 0) > 0 ? 'amber' : undefined}
+          sub={idsData ? `${Object.values(idsData.alerts_24h ?? {}).reduce((a, b) => a + b, 0)} alert(s) from ${idsData.lines > 0 ? num(idsData.lines) + ' log lines' : 'logs and flows'}${cs.enabled ? ', CrowdSec on' : ''}` : 'detector starting'} />
       </div>
 
       <div className="toolbar">
         <Segmented value={tab} onChange={setTab} options={[
+          { value: 'attacks', label: `Attacks (${idsData?.alerts?.length ?? 0})` },
           { value: 'hits', label: `Hits (${hitsData?.hits.length ?? 0})` },
           { value: 'feeds', label: `Feeds (${feedsData?.feeds.length ?? 0})` },
           { value: 'bans', label: `Bans (${bansData?.decisions.length ?? 0})` },
@@ -94,7 +95,7 @@ export function ThreatsPage() {
           { value: 'crowdsec', label: 'CrowdSec' },
         ]} />
         <div className="spacer" />
-        {tab === 'hits' && (
+        {(tab === 'hits' || tab === 'attacks') && (
           <Segmented value={String(hours)} onChange={(v) => setHours(Number(v))}
             options={[{ value: '24', label: '24h' }, { value: '168', label: '7d' }, { value: '720', label: '30d' }]} />
         )}
@@ -107,6 +108,7 @@ export function ThreatsPage() {
         <a className="btn" href="#/settings/threats">Settings</a>
       </div>
 
+      {tab === 'attacks' && (idsData ? <AttacksTab data={idsData} busy={busy} act={act} /> : <Loading what="intrusion detection" />)}
       {tab === 'hits' && <HitsTable hits={hitsData?.hits ?? []} devices={hitsData?.devices ?? {}} hours={hours} />}
       {tab === 'feeds' && <FeedsTab feeds={feedsData?.feeds ?? []} busy={busy} act={act} />}
       {tab === 'bans' && <BansTab bans={bansData?.decisions ?? []} busy={busy} act={act} />}
@@ -411,6 +413,121 @@ function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string |
           </table>
         </div>
       </Card>
+    </>
+  )
+}
+
+
+const SOURCE_LABEL: Record<string, string> = { journal: 'this node', syslog: 'syslog', file: 'this node', orbis: 'Orbis login', flows: 'connections' }
+
+function AttacksTab({ data, busy, act }: { data: IDSStatus; busy: string | null; act: (k: string, fn: () => Promise<unknown>, ok: string) => Promise<void> }) {
+  const [line, setLine] = useState('')
+  const [result, setResult] = useState<Record<string, unknown> | null>(null)
+  const [ignore, setIgnore] = useState((data.ignore ?? []).join(', '))
+  const toast = useToast()
+  const nodeIP = typeof location !== 'undefined' ? location.hostname : 'orbis'
+  const port = (data.syslog?.listen ?? ':514').split(':').pop()
+  const titles = Object.fromEntries((data.rules ?? []).map((r) => [r.kind, r.title]))
+  return (
+    <>
+      <Card title="Intrusion detection" actions={
+        <Switch checked={data.enabled} disabled={busy === 'ids'} onChange={(v) => act('ids', () => api.config.patch({ 'ids.enabled': v }), v ? 'Detection is on' : 'Detection is off')} />
+      }>
+        <div style={{ display: 'grid', gap: 12 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            Repeated failures from one address become a timed ban at the gateway, longer each time it comes back: SSH, NAS, web and
+            app logins, remote desktop and VPN handshakes from logs; port scans, host sweeps, floods and knocking on sensitive ports
+            from the flow table. An address inside your network is reported, never banned. Bans land on the Bans tab and are enforced
+            wherever this node is in the path.
+          </div>
+          <div className="grid c3">
+            <div className="card" style={{ padding: 12 }}>
+              <div className="stat-label">This node's log</div>
+              <div style={{ marginTop: 4 }}>{data.journal || data.auth_log ? <span className="tag ok">reading {data.auth_log ? data.auth_log : 'the journal'}</span> : <span className="tag">off</span>}</div>
+              <div className="hint" style={{ marginTop: 6 }}>{num(data.lines)} lines read{data.last_line ? `, last ${ago(data.last_line)}` : ''}. sshd, login, mail and VPN failures.</div>
+            </div>
+            <div className="card" style={{ padding: 12 }}>
+              <div className="stat-label">Syslog from other hosts</div>
+              <div style={{ marginTop: 4 }}>{data.syslog?.running ? <span className="tag ok">listening on {data.syslog.listen}</span> : data.syslog?.error ? <span className="tag err" title={data.syslog.error}>failed</span> : <span className="tag">off</span>}</div>
+              <div className="hint" style={{ marginTop: 6 }}>
+                {(data.syslog?.hosts ?? []).length > 0 ? `Hearing from ${(data.syslog?.hosts ?? []).join(', ')}.` : 'Nothing received yet.'} Forward with rsyslog: <code>*.* @{nodeIP}:{port}</code>, or a NAS's log forwarding.
+              </div>
+            </div>
+            <div className="card" style={{ padding: 12 }}>
+              <div className="stat-label">Connections</div>
+              <div style={{ marginTop: 4 }}>{data.flows ? <span className="tag ok">watching inbound</span> : <span className="tag">off</span>}</div>
+              <div className="hint" style={{ marginTop: 6 }}>Scans, sweeps, floods and sensitive ports, from what this node sees{data.enforcement?.detect_only ? ' (its own and intercepted traffic)' : ''}.</div>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+            <Field label="Never act on" hint="Comma-separated addresses or ranges: your monitoring host, a scanner you run.">
+              <input className="input mono" value={ignore} onChange={(e) => setIgnore(e.target.value)}
+                onBlur={() => act('ign', () => api.config.patch({ 'ids.ignore': ignore.split(',').map((x) => x.trim()).filter(Boolean) }), 'Saved')} />
+            </Field>
+            <Field label="Test a log line" hint="Paste a line from a server to see whether it would count, before an attack proves it.">
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input className="input mono" value={line} onChange={(e) => setLine(e.target.value)} placeholder="Failed password for root from 203.0.113.9 port 2 ssh2" />
+                <button className="btn" disabled={!line.trim()} onClick={async () => {
+                  try { setResult(await api.ids.test(line)) } catch (e) { toast(e instanceof Error ? e.message : 'Could not test', 'err') }
+                }}>Test</button>
+              </div>
+              {result && (
+                <div className="hint" style={{ marginTop: 6 }}>
+                  {result.matched ? `Counts as ${String(result.title)} for ${String(result.ip)}${result.host ? ` (host ${String(result.host)})` : ''}: ${String(result.threshold)} in ${Math.round(Number(result.window_seconds) / 60)} min earns a ban.` : 'No scenario recognises that line.'}
+                </div>
+              )}
+            </Field>
+          </div>
+          <details>
+            <summary className="hint" style={{ cursor: 'pointer' }}>Scenarios and thresholds</summary>
+            <div className="table-wrap" style={{ marginTop: 8 }}><table className="t">
+              <thead><tr><th>Scenario</th><th>Fires at</th><th>Ban</th><th>Alerts 24h</th></tr></thead>
+              <tbody>{(data.rules ?? []).map((r) => (
+                <tr key={r.kind}><td>{r.title} <span className="hint mono">{r.kind}</span></td>
+                  <td className="hint">{r.threshold} in {Math.round(r.window_seconds / 60)} min</td>
+                  <td className="hint">{r.ban_seconds >= 3600 ? `${Math.round(r.ban_seconds / 3600)} h` : `${Math.round(r.ban_seconds / 60)} min`}, doubling for repeat offenders</td>
+                  <td className="mono">{num(data.alerts_24h?.[r.kind] ?? 0)}</td></tr>
+              ))}</tbody>
+            </table></div>
+          </details>
+        </div>
+      </Card>
+
+      <Card title="Alerts" flush>
+        <div className="table-wrap">
+          <table className="t">
+            <thead><tr><th>When</th><th>Address</th><th>What</th><th>Seen on</th><th>Result</th></tr></thead>
+            <tbody>
+              {(data.alerts ?? []).map((a) => (
+                <tr key={a.id}>
+                  <td className="hint" style={{ whiteSpace: 'nowrap' }}>{ago(a.ts)}</td>
+                  <td><span className="mono">{a.ip}</span>{(a.country || a.as_org) && <span className="hint" style={{ marginLeft: 6 }}>{a.country ? flag(a.country) : ''} {a.as_org}</span>}</td>
+                  <td>{titles[a.scenario] ?? a.scenario} <span className="hint">· {a.count} in window</span>{a.sample && <div className="hint mono" style={{ fontSize: 11, maxWidth: 420 }} title={a.sample}>{a.sample.slice(0, 90)}</div>}</td>
+                  <td className="hint">{a.host || SOURCE_LABEL[a.source] || a.source}</td>
+                  <td>{a.action === 'ban' ? <span className="tag ok">banned{a.ban_until ? ` until ${ago(a.ban_until).replace(' ago', '')}` : ''}</span> : a.action === 'reported' ? <span className="tag warn" title="Inside the network: reported, not banned">reported</span> : <span className="tag err">ban failed</span>}</td>
+                </tr>
+              ))}
+              {(data.alerts ?? []).length === 0 && <tr><td colSpan={5}><Empty title="No attacks detected in this window">That is the normal state. When a scenario fires it appears here with the address, what it did, and the ban.</Empty></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {(data.offenders ?? []).length > 0 && (
+        <Card title="Worst offenders" flush>
+          <div className="table-wrap"><table className="t">
+            <thead><tr><th>Address</th><th>Alerts</th><th>Bans</th><th>Scenarios</th><th>Last seen</th></tr></thead>
+            <tbody>{(data.offenders ?? []).map((o) => (
+              <tr key={o.ip}>
+                <td><span className="mono">{o.ip}</span>{(o.country || o.as_org) && <span className="hint" style={{ marginLeft: 6 }}>{o.country ? flag(o.country) : ''} {o.as_org}</span>}</td>
+                <td className="mono">{o.alerts}</td><td className="mono">{o.bans}</td>
+                <td className="hint">{o.scenarios.map((k) => titles[k] ?? k).join(', ')}</td>
+                <td className="hint">{ago(o.last)}</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        </Card>
+      )}
     </>
   )
 }

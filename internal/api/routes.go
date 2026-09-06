@@ -144,6 +144,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountHosted(r)
 	s.mountLinks(r)
 	s.mountCountry(r)
+	s.mountIDS(r)
 	s.mountSimple(r)
 
 	r.Route("/chat", func(r chi.Router) {

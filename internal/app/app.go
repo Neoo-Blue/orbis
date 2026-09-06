@@ -27,6 +27,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/flows"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
+	"github.com/Neoo-Blue/orbis/internal/ids"
 	"github.com/Neoo-Blue/orbis/internal/intercept"
 	"github.com/Neoo-Blue/orbis/internal/issues"
 	"github.com/Neoo-Blue/orbis/internal/links"
@@ -93,6 +94,8 @@ type App struct {
 	WiFi  *wifi.Manager
 	// Country blocks or allows traffic by the country an address is in.
 	Country *country.Manager
+	// IDS is the built-in intrusion detection: logs and flows into bans.
+	IDS *ids.Manager
 	// Usage rolls the live flow table and the query log into per-device,
 	// per-service counters.
 	Usage *usage.Meter
@@ -210,6 +213,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 			}
 			if a.Country != nil {
 				a.Country.Observe(u.Flow)
+			}
+			if a.IDS != nil {
+				a.IDS.ObserveFlow(u.Flow)
 			}
 		}
 	})
@@ -420,6 +426,41 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		},
 	}, logf)
 	a.Firewall.SetGeoSource(func() (v4, v6, exempt4 []string) { return a.geoSets() })
+
+	// Intrusion detection: this node's journal, syslog from other hosts,
+	// Orbis's own login page and the flow table, into timed bans that the
+	// threat sets enforce everywhere.
+	a.IDS = ids.NewManager(cfg, st, ids.Hooks{
+		Ban: func(ip string, d time.Duration, reason string) (*time.Time, error) {
+			dec, err := a.Threat.Ban(ip, d, reason, "ids", "ids")
+			if err != nil {
+				return nil, err
+			}
+			return dec.Until, nil
+		},
+		Locate: func(addr netip.Addr) (string, string) {
+			if a.Geo == nil {
+				return "", ""
+			}
+			loc := a.Geo.LookupAddr(addr)
+			return loc.Country, loc.ASOrg
+		},
+		ClientFor: func(addr netip.Addr) (string, string) {
+			c := a.Registry.ByIP(addr)
+			if c == nil {
+				return "", ""
+			}
+			name := c.Label
+			if name == "" {
+				name = c.Hostname
+			}
+			if name == "" {
+				name = c.IP
+			}
+			return c.ID, name
+		},
+		Emit: a.emit,
+	}, logf)
 	a.VPN = vpn.New(cfg, st, logf)
 	a.Tailscale = vpn.NewTailscale(cfg, logf)
 	a.Egress = vpn.NewEgressManager(logf)
@@ -600,6 +641,8 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.WiFi.Run(a.ctx) }()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.Country.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.IDS.Run(a.ctx) }()
 
 	if cfg.AdBlock.SmartCapture.Enabled {
 		a.wg.Add(1)

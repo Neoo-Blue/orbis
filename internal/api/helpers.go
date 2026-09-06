@@ -331,6 +331,18 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 			c.Issues.GitHub.Token = v
 			return true
 		}
+	case "ids.enabled":
+		return setBool(&c.IDS.Enabled, raw)
+	case "ids.journal":
+		return setBool(&c.IDS.Journal, raw)
+	case "ids.syslog_listen":
+		return setStr(&c.IDS.SyslogListen, raw)
+	case "ids.flows":
+		return setBool(&c.IDS.Flows, raw)
+	case "ids.ignore":
+		return setStrSlice(&c.IDS.Ignore, raw)
+	case "ids.ban_multiplier":
+		return setFloat(&c.IDS.BanMultiplier, raw)
 	case "country.enabled":
 		return setBool(&c.Country.Enabled, raw)
 	case "country.mode":

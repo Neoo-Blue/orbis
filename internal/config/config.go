@@ -54,6 +54,7 @@ type Config struct {
 	Discover  DiscoverConfig  `yaml:"discover" json:"discover"`
 	WiFi      WiFiConfig      `yaml:"wifi" json:"wifi"`
 	Country   CountryConfig   `yaml:"country" json:"country"`
+	IDS       IDSConfig       `yaml:"ids" json:"ids"`
 	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
 	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
 
@@ -641,6 +642,27 @@ type CountryConfig struct {
 	ExemptIPs     []string `yaml:"exempt_ips" json:"exempt_ips"`
 }
 
+// IDSConfig is the built-in intrusion detection: it reads this node's own
+// authentication log, receives syslog from other hosts, and watches the
+// flow table for scans and floods, turning repeated failures from one
+// address into a timed ban at the gateway.
+type IDSConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Journal reads sshd and login failures from journald (or auth.log)
+	// on this node.
+	Journal bool `yaml:"journal" json:"journal"`
+	// SyslogListen receives log lines from other hosts (rsyslog "*.* @host:514",
+	// a NAS's log forwarding). Empty disables the receiver.
+	SyslogListen string `yaml:"syslog_listen" json:"syslog_listen"`
+	// Flows enables scan, sweep and flood detection from the flow table.
+	Flows bool `yaml:"flows" json:"flows"`
+	// Ignore lists addresses and ranges never acted on (a monitoring host,
+	// a scanner you run yourself).
+	Ignore []string `yaml:"ignore" json:"ignore"`
+	// BanHours scales every scenario's ban; 1 is the built-in duration.
+	BanMultiplier float64 `yaml:"ban_multiplier" json:"ban_multiplier"`
+}
+
 type DHCPConfig struct {
 	Enabled bool         `yaml:"enabled" json:"enabled"`
 	Scopes  []DHCPScope  `yaml:"scopes" json:"scopes"`
@@ -1120,6 +1142,7 @@ func Default() *Config {
 		Discover: DiscoverConfig{Enabled: true, IntervalHours: 6, UPnP: true},
 		WiFi:     WiFiConfig{SSID: "Orbis", Band: "auto", Mode: "routed", Subnet: "192.168.60.1/24", LANAccess: true},
 		Country:  CountryConfig{Mode: "block", BlockOutbound: true, BlockInbound: true, DNS: true},
+		IDS:      IDSConfig{Enabled: true, Journal: true, SyslogListen: "0.0.0.0:514", Flows: true, BanMultiplier: 1},
 		Issues: IssuesConfig{
 			Enabled:     true,
 			AutoCapture: true,

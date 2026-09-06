@@ -53,6 +53,7 @@ where Orbis keeps going.
 | WireGuard server and client, Tailscale exit node | ○ | | | ● | | | ● |
 | Every connection identified: host, app, ASN, country | | | | ○ | | | ● |
 | Network map, live globe, anomaly detection | | | | | | | ● |
+| Built-in intrusion detection: logs and flows into escalating bans | | | | ○ | | | ● |
 | IP threat feeds, timed bans, CrowdSec bouncer | | | | ○ | | | ● |
 | Finds what you host (apps, containers, NAS) and forwards ports for it | | | | ○ | | | ● |
 | Tells WAN from LAN by itself, runs a Wi-Fi network from a USB or built-in adapter | | | | ○ | | | ● |
@@ -339,7 +340,21 @@ reads open issues, reproduces clear defects with a failing test, opens a pull
 request on a `fix/issue-N` branch (never pushing to `main`), and triages the
 rest with a comment. Humans review and merge. Nothing is deployed automatically.
 
-## Threat intelligence and CrowdSec
+## Intrusion detection, threat intelligence and CrowdSec
+
+**Built in, no cloud.** Orbis reads this node's own authentication journal, receives syslog from
+any other host (`*.* @orbis:514` in rsyslog, or a NAS's log forwarding), watches its own login
+page, and watches the flow table. Parsers recognise sshd, PAM, Synology DSM and QNAP logins,
+web servers' 401/403/404 bursts in combined and JSON formats, Home Assistant, Nextcloud,
+Vaultwarden, Jellyfin, remote desktop and VPN handshake failures. Each scenario has a window and
+a threshold (five SSH failures in five minutes, ten web logins, forty 404s in two minutes,
+fifteen ports in a minute, and so on); crossing it bans the address at the gateway, and a
+repeat offender's ban doubles each time up to a week. An address inside your own network is
+reported with the device's name instead of banned, because cutting a neighbour off at the
+gateway would not stop it. Bans join the same sets the threat feeds use, so they are enforced
+on the main ruleset, the intercept table and the Wi-Fi table alike. The Attacks tab shows the
+sources, the scenarios, every alert with country and operator, the worst offenders, and a box
+to paste a log line into to check that forwarding is understood before an attack proves it.
 
 DNS blocking stops a name from resolving. The **Threats** page works on addresses: feeds of
 hijacked netblocks, live botnet command servers and addresses seen attacking are fetched on a
@@ -352,11 +367,10 @@ was which. Your own servers and VPN endpoints go on an allow list that always wi
 
 **Bans** are timed decisions against an address or range, from you, from the assistant
 ("ban 203.0.113.7 for a day"), from the anomaly detector's scan findings when you let it, or
-from **CrowdSec**. Orbis does not parse server logs or share intelligence; CrowdSec does both,
-on the machines that serve the internet. Point Orbis at that engine's Local API with a key
-from `cscli bouncers add orbis` and it acts as the bouncer: bans arrive within one poll,
-are enforced at the gateway with country and operator shown, and are lifted when CrowdSec
-lifts them.
+from **CrowdSec**, which remains optional: what Orbis does not have is CrowdSec's community
+reputation feed. Point Orbis at an engine's Local API with a key from `cscli bouncers add
+orbis` and it acts as the bouncer too: bans arrive within one poll, are enforced at the gateway
+with country and operator shown, and are lifted when CrowdSec lifts them.
 
 ## Hosted apps, storage and port forwarding
 
@@ -455,7 +469,7 @@ own traffic and broadcast noise; the onboarding wizard measures this and tells y
                       | netlink        | smart capture    | tailscale    |
                       +-------+--------+------------------+--------------+
                               |
-topology . intercept . discover . upnp . links . wifi . country . alerts . report . notify . usage . issues . threat . ai + mcp
+topology . intercept . discover . upnp . links . wifi . country . ids . alerts . report . notify . usage . issues . threat . ai + mcp
                               |
                          SQLite (WAL)
 ```

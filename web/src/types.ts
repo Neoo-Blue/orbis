@@ -653,6 +653,7 @@ export interface AppConfig {
     enabled: boolean; mode: 'block' | 'allow'; countries: string[]; block_outbound: boolean; block_inbound: boolean
     dns: boolean; exempt_clients: string[]; exempt_domains: string[]; exempt_ips: string[]
   }
+  ids: { enabled: boolean; journal: boolean; syslog_listen: string; flows: boolean; ignore: string[]; ban_multiplier: number }
 }
 
 // ---- hosted apps, storage, port forwards ----
@@ -828,6 +829,43 @@ export interface CountryStatus {
   last_build?: string
   enforcement: { mode: string; inline: boolean; nft_available: boolean; intercepted_clients: number; detect_only: boolean }
   seen?: Array<{ country: string; connections: number; bytes: number; blocked: number }>
+}
+
+// ---- intrusion detection ----
+
+export interface IDSAlert {
+  id: number
+  ts: string
+  ip: string
+  scenario: string
+  count: number
+  source: string
+  host?: string
+  sample?: string
+  action: 'ban' | 'reported' | 'ban-failed'
+  ban_until?: string
+  country?: string
+  as_org?: string
+}
+
+export interface IDSStatus {
+  enabled: boolean
+  journal: boolean
+  auth_log: string
+  flows: boolean
+  lines: number
+  hits: number
+  bans_since_start: number
+  ignore: string[]
+  ban_multiplier: number
+  last_line?: string
+  syslog: { listen: string; running: boolean; error?: string; received?: number; hosts?: string[] }
+  rules: Array<{ kind: string; title: string; threshold: number; window_seconds: number; ban_seconds: number }>
+  alerts_24h?: Record<string, number>
+  bans_24h?: number
+  alerts: IDSAlert[]
+  offenders: Array<{ ip: string; country?: string; as_org?: string; alerts: number; bans: number; last: string; scenarios: string[] }>
+  enforcement: { mode: string; inline: boolean; nft_available: boolean; intercepted_clients: number; detect_only: boolean }
 }
 
 // ---- threat intelligence ----

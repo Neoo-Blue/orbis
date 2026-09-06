@@ -3,8 +3,8 @@ package api
 import "testing"
 
 func TestWiFiQRPayload(t *testing.T) {
-	got := wifiQRPayload("Orbis: home", `pa;ss"w,ord\\`, true)
-	want := `WIFI:T:WPA;S:Orbis\\: home;P:pa\\;ss\\"w\\,ord\\\\;H:true;;`
+	got := wifiQRPayload("Orbis: home", `pa;ss"w,ord\`, true)
+	want := `WIFI:T:WPA;S:Orbis\: home;P:pa\;ss\"w\,ord\\;H:true;;`
 	if got != want {
 		t.Errorf("payload = %q, want %q", got, want)
 	}

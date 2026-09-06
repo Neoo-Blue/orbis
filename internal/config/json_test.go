@@ -26,7 +26,7 @@ func TestJSONShapeMatchesYAML(t *testing.T) {
 
 	for _, key := range []string{
 		"mode", "node", "api", "store", "capture", "dns",
-		"adblock", "mitm", "firewall", "dhcp", "vpn", "tailscale", "ai", "geoip", "issues", "threat", "discover", "wifi", "country",
+		"adblock", "mitm", "firewall", "dhcp", "vpn", "tailscale", "ai", "geoip", "issues", "threat", "discover", "wifi", "country", "ids",
 	} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("top-level key %q is missing from the JSON encoding", key)
@@ -47,6 +47,7 @@ func TestJSONShapeMatchesYAML(t *testing.T) {
 		"discover":  {"enabled", "interval_hours", "extra_ports", "docker", "upnp"},
 		"wifi":      {"enabled", "interface", "ssid", "passphrase", "band", "channel", "country", "hidden", "isolate_clients", "mode", "bridge", "subnet", "lan_access", "wpa3"},
 		"country":   {"enabled", "mode", "countries", "block_outbound", "block_inbound", "dns", "exempt_clients", "exempt_domains", "exempt_ips"},
+		"ids":       {"enabled", "journal", "syslog_listen", "flows", "ignore", "ban_multiplier"},
 		"store":     {"path", "flow_retention_days", "event_retention_days"},
 		"geoip":     {"city_db", "asn_db"},
 		"issues":    {"enabled", "auto_capture", "redact_extra", "github"},

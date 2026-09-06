@@ -77,6 +77,9 @@ type Backend interface {
 	NetworkLinks(ctx context.Context) (map[string]any, error)
 	ConfigureWiFi(ctx context.Context, enabled *bool, ssid, passphrase, band, actor string) (map[string]any, error)
 
+	// Intrusion detection.
+	IntrusionStatus(since time.Time, limit int) (map[string]any, error)
+
 	// Country rules.
 	CountryRules() (map[string]any, error)
 	SetCountryRule(code, action, actor string) (map[string]any, error)
@@ -333,6 +336,18 @@ func Tools(allowWrite bool) []ToolDef {
 				"created, and the router's own UPnP mapping table. Use for \"what is running on the " +
 				"NAS\", \"which ports does the server expose\", \"is anything forwarded to the internet\".",
 			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "intrusion_status",
+			Description: "The built-in intrusion detection: which log sources feed it (this node's " +
+				"journal, syslog from other hosts, the Orbis login page, the flow table), the " +
+				"scenarios and their thresholds, recent alerts (brute force, scans, floods) with the " +
+				"address, country and network behind each, what was banned and for how long, and the " +
+				"worst offenders. Use for \"is anyone attacking\", \"who is hammering SSH\".",
+			Schema: objSchema(map[string]any{
+				"hours": numProp("Window (default 24, max 720)"),
+				"limit": numProp("Max alerts (default 50)"),
+			}, nil),
 		},
 		{
 			Name: "country_rules",
@@ -851,6 +866,9 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 			return "", err
 		}
 		return "Forward removed.", nil
+
+	case "intrusion_status":
+		return jsonOf(b.IntrusionStatus(hoursAgo(args, "hours", 24, 720), intArg(args, "limit", 50, 500)))
 
 	case "country_rules":
 		return jsonOf(b.CountryRules())

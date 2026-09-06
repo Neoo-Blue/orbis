@@ -496,6 +496,24 @@ var migrations = []string{
 		built    INTEGER NOT NULL,
 		db_size  INTEGER NOT NULL DEFAULT 0
 	)`,
+	// Intrusion detection alerts: one row each time a scenario fires for an
+	// address, with what was seen and what was done about it.
+	`CREATE TABLE IF NOT EXISTS ids_alerts (
+		id        INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts        INTEGER NOT NULL,
+		ip        TEXT NOT NULL,
+		scenario  TEXT NOT NULL,
+		count     INTEGER NOT NULL DEFAULT 0,
+		source    TEXT NOT NULL DEFAULT '',
+		host      TEXT NOT NULL DEFAULT '',
+		sample    TEXT NOT NULL DEFAULT '',
+		action    TEXT NOT NULL DEFAULT '',
+		ban_until INTEGER NOT NULL DEFAULT 0,
+		country   TEXT NOT NULL DEFAULT '',
+		as_org    TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ids_alerts_ts ON ids_alerts(ts)`,
+	`CREATE INDEX IF NOT EXISTS idx_ids_alerts_ip ON ids_alerts(ip, ts)`,
 	`CREATE TABLE IF NOT EXISTS port_forwards (
 		id          TEXT PRIMARY KEY,
 		name        TEXT NOT NULL DEFAULT '',

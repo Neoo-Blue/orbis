@@ -602,7 +602,10 @@ Docker specifics in [docs/DOCKER.md](docs/DOCKER.md); third-party notices in
 - **Pull requests** are welcome. Keep `go test -race ./...`, `go vet ./...` and the web build
   green, format only the files you touch, and describe the failure you saw before the fix.
 - **Security reports** follow [SECURITY.md](SECURITY.md).
-- **Releases** are tagged `vX.Y.Z`; each publishes the binaries and the multi-arch image.
+- **Releases** are tagged `vX.Y.Z`; each publishes the binaries, `sha256sums.txt` and the
+  multi-arch image. Every tag needs a matching section in [CHANGELOG.md](CHANGELOG.md): the
+  workflow turns it into the release notes, which the app shows before you click Update now,
+  and refuses to publish without one.
 
 ## Licence
 

@@ -93,6 +93,9 @@ jobs:
             -t ${{ env.IMAGE }}:latest \
             ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
 
+      - name: Write the release notes from CHANGELOG.md
+        run: deploy/release-notes.sh "${{ steps.ver.outputs.release_tag }}" "${{ steps.ver.outputs.channel }}" "${{ env.IMAGE }}" > dist/notes.md && cat dist/notes.md
+
       - name: Publish the release with install binaries
         uses: softprops/action-gh-release@v2
         with:
@@ -106,17 +109,4 @@ jobs:
             dist/orbisd-linux-amd64
             dist/orbisd-linux-arm64
             dist/sha256sums.txt
-          body: |
-            Orbis ${{ steps.ver.outputs.version }}
-
-            Install on a Debian/Ubuntu host, VM or LXC:
-            ```
-            curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/orbis/main/deploy/bootstrap.sh | sudo bash
-            ```
-
-            Docker:
-            ```
-            docker run -d --network host --cap-add NET_ADMIN --cap-add NET_RAW \
-              -v orbis-config:/etc/orbis -v orbis-data:/var/lib/orbis \
-              ${{ env.IMAGE }}:${{ steps.ver.outputs.channel }}
-            ```
+          body_path: dist/notes.md

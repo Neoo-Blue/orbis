@@ -29,6 +29,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: 'threats', label: 'Ban an address or range', keywords: 'ban block ip cidr timed decision attacker scanner' },
   { section: 'threats', label: 'CrowdSec bouncer', keywords: 'crowdsec bouncer lapi local api key decisions community blocklist' },
   { section: 'threats', label: 'Never block these addresses', keywords: 'threat allow exception whitelist vpn endpoint server' },
+  { section: 'threats', label: 'Block or allow countries', keywords: 'country geo block allow china russia geoblock whitelist blacklist region' },
   { section: 'hosted', label: 'Discover hosted apps (scan interval, extra ports)', keywords: 'discover scan services apps containers ports hosted nas storage' },
   { section: 'hosted', label: 'Docker hosts (Engine API)', keywords: 'docker socket containers engine api portainer synology 2375' },
   { section: 'hosted', label: 'Port forwarding via the router (UPnP)', keywords: 'port forward upnp router igd nat open port expose' },

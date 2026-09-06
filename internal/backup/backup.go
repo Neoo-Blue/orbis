@@ -213,6 +213,7 @@ func preserveSecrets(in *config.Config, live *config.Config) {
 	keep(&in.VPN.Server.PrivateKey, live.VPN.Server.PrivateKey)
 	keep(&in.Notify.Email.Password, live.Notify.Email.Password)
 	keep(&in.Threat.CrowdSec.APIKey, live.Threat.CrowdSec.APIKey)
+	keep(&in.WiFi.Passphrase, live.WiFi.Passphrase)
 	for i := range in.VPN.Client {
 		if i < len(live.VPN.Client) {
 			keep(&in.VPN.Client[i].PrivateKey, live.VPN.Client[i].PrivateKey)

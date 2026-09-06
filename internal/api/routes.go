@@ -142,6 +142,8 @@ func (s *Server) mount(r chi.Router) {
 	s.mountServices(r)
 	s.mountThreat(r)
 	s.mountHosted(r)
+	s.mountLinks(r)
+	s.mountCountry(r)
 	s.mountSimple(r)
 
 	r.Route("/chat", func(r chi.Router) {
@@ -1253,6 +1255,17 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			// Anything that changes which interfaces carry tunnel traffic,
 			// or where it egresses, invalidates the tunnel ruleset.
 			s.app.SyncTunnelRules()
+		case strings.HasPrefix(key, "country."):
+			s.app.Country.Reconfigure()
+			go s.app.ReapplyThreatEnforcement()
+		case strings.HasPrefix(key, "wifi."):
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+				defer cancel()
+				if err := s.app.WiFi.Reconcile(ctx); err != nil {
+					s.app.Log("wifi: %v", err)
+				}
+			}()
 		case key == "discover.enabled", key == "discover.extra_ports":
 			s.app.Discover.RequestScan()
 		case strings.HasPrefix(key, "threat."):

@@ -19,6 +19,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
+	"github.com/Neoo-Blue/orbis/internal/country"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
 	"github.com/Neoo-Blue/orbis/internal/discover"
 	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
@@ -28,6 +29,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/geoip"
 	"github.com/Neoo-Blue/orbis/internal/intercept"
 	"github.com/Neoo-Blue/orbis/internal/issues"
+	"github.com/Neoo-Blue/orbis/internal/links"
 	"github.com/Neoo-Blue/orbis/internal/lounge"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
@@ -38,6 +40,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/topology"
 	"github.com/Neoo-Blue/orbis/internal/usage"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
+	"github.com/Neoo-Blue/orbis/internal/wifi"
 	"github.com/google/uuid"
 	"github.com/miekg/dns"
 )
@@ -85,6 +88,11 @@ type App struct {
 	Threat *threat.Manager
 	// Discover finds what is hosted on the network and owns port forwards.
 	Discover *discover.Manager
+	// Links tells the cables apart; WiFi runs the access point.
+	Links *links.Watcher
+	WiFi  *wifi.Manager
+	// Country blocks or allows traffic by the country an address is in.
+	Country *country.Manager
 	// Usage rolls the live flow table and the query log into per-device,
 	// per-service counters.
 	Usage *usage.Meter
@@ -111,6 +119,11 @@ type App struct {
 
 	policyMu sync.RWMutex
 	policies map[string]*store.Policy
+
+	// geoCache is the last country set pushed, so a table rendered later
+	// (intercept, wifi, a full firewall apply) starts with it.
+	geoMu    sync.Mutex
+	geoCache struct{ v4, v6, exempt []string }
 
 	recordsMu sync.RWMutex
 	records   *dnsproxy.RecordSet
@@ -195,6 +208,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 			if a.Threat != nil {
 				a.Threat.Observe(u.Flow)
 			}
+			if a.Country != nil {
+				a.Country.Observe(u.Flow)
+			}
 		}
 	})
 	a.Registry.SetOnNew(func(c *store.Client) {
@@ -232,6 +248,11 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		if a.Intercept != nil {
 			if err := a.Intercept.SyncThreat(v4); err != nil {
 				logf("threat: intercept set sync: %v", err)
+			}
+		}
+		if a.WiFi != nil {
+			if err := a.WiFi.SyncThreat(v4); err != nil {
+				logf("threat: wifi set sync: %v", err)
 			}
 		}
 	})
@@ -292,6 +313,113 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		},
 		NodeAddr: nodeLANAddr,
 	}, logf)
+
+	// Cables and Wi-Fi.
+	a.WiFi = wifi.NewManager(cfg, wifi.Hooks{
+		StartDHCP:      func(scope config.DHCPScope) (func(), error) { return a.DHCP.StartScope(scope) },
+		ThreatElements: func() []string { v4, _ := a.Threat.Elements(); return v4 },
+		GeoElements: func() ([]string, []string, bool, bool) {
+			v4, _, ex := a.geoSets()
+			c := a.Cfg.Snapshot().Country
+			on := c.Enabled && c.Mode != "allow"
+			return v4, ex, on && c.BlockOutbound, on && c.BlockInbound
+		},
+		NameByMAC: func(mac string) string {
+			for _, c := range a.Registry.All() {
+				if strings.EqualFold(c.MAC, mac) {
+					if c.Label != "" {
+						return c.Label
+					}
+					return c.Hostname
+				}
+			}
+			return ""
+		},
+		LeaseByMAC: func(mac string) string {
+			for _, l := range a.DHCP.Leases() {
+				if strings.EqualFold(l.MAC, mac) {
+					return l.IP
+				}
+			}
+			return ""
+		},
+		Emit: a.emit,
+	}, logf)
+	a.Links = links.NewWatcher(cfg, links.Hooks{
+		ClientsIn: func(prefixes []netip.Prefix) int {
+			n := 0
+			for _, c := range a.Registry.All() {
+				addr, err := netip.ParseAddr(c.IP)
+				if err != nil {
+					continue
+				}
+				for _, p := range prefixes {
+					if p.Contains(addr) {
+						n++
+						break
+					}
+				}
+			}
+			return n
+		},
+		WiFiEnabled: func() bool { return a.Cfg.Snapshot().WiFi.Enabled },
+		Emit:        a.emit,
+		Applied: func() {
+			c := a.Cfg.Snapshot()
+			if c.Mode == config.ModeInline && c.Firewall.Enabled {
+				if err := a.Firewall.Apply(a.ctx); err != nil {
+					logf("links: firewall re-apply: %v", err)
+				}
+			}
+		},
+	}, logf)
+
+	// Country rules: decided at the resolver, the flow tracker and, in
+	// block mode, as packet-filter sets on every enforcement point.
+	a.Country = country.NewManager(cfg, st, a.Geo, country.Hooks{
+		OnSets: func(v4, v6, exempt4 []string) {
+			a.geoMu.Lock()
+			a.geoCache.v4, a.geoCache.v6, a.geoCache.exempt = v4, v6, exempt4
+			a.geoMu.Unlock()
+			if err := a.Firewall.SyncGeoSets(v4, v6, exempt4); err != nil {
+				logf("country: firewall set sync: %v", err)
+			}
+			if a.Intercept != nil {
+				if err := a.Intercept.SyncGeo(v4, exempt4); err != nil {
+					logf("country: intercept set sync: %v", err)
+				}
+			}
+			if a.WiFi != nil {
+				if err := a.WiFi.SyncGeo(v4, exempt4); err != nil {
+					logf("country: wifi set sync: %v", err)
+				}
+			}
+		},
+		Emit:     a.emit,
+		Blocker:  func(flowID, reason string) bool { return a.Tracker.BlockFlow(flowID, reason) },
+		Enforced: a.threatEnforced,
+		ClientFor: func(addr netip.Addr) (string, string) {
+			c := a.Registry.ByIP(addr)
+			if c == nil {
+				return "", ""
+			}
+			name := c.Label
+			if name == "" {
+				name = c.Hostname
+			}
+			if name == "" {
+				name = c.IP
+			}
+			return c.ID, name
+		},
+		ClientAddr: func(id string) string {
+			if c := a.Registry.ByID(id); c != nil {
+				return c.IP
+			}
+			return ""
+		},
+	}, logf)
+	a.Firewall.SetGeoSource(func() (v4, v6, exempt4 []string) { return a.geoSets() })
 	a.VPN = vpn.New(cfg, st, logf)
 	a.Tailscale = vpn.NewTailscale(cfg, logf)
 	a.Egress = vpn.NewEgressManager(logf)
@@ -326,6 +454,12 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		LocalRecords: a.localRecords,
 		Publish: func(q store.DNSQuery) {
 			a.Bus.Publish(Event{Type: "dns.query", Data: q})
+		},
+		CountryCheck: func(client netip.Addr, name string, addrs []netip.Addr) (bool, string) {
+			if a.Country == nil {
+				return false, ""
+			}
+			return a.Country.CheckAnswer(client, name, addrs)
 		},
 	}, logf)
 
@@ -460,6 +594,12 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.Threat.Run(a.ctx) }()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.Discover.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Links.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.WiFi.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Country.Run(a.ctx) }()
 
 	if cfg.AdBlock.SmartCapture.Enabled {
 		a.wg.Add(1)
@@ -894,7 +1034,20 @@ func (a *App) threatEnforced(local netip.Addr, outbound bool) bool {
 			return true
 		}
 	}
+	// Wi-Fi clients in routed mode go through this node's own table.
+	if a.WiFi != nil && a.WiFi.Running() && local.IsValid() {
+		if p := a.WiFi.Subnet(); p.IsValid() && p.Contains(local) {
+			return true
+		}
+	}
 	return false
+}
+
+// geoSets is the last country set pushed by the country manager.
+func (a *App) geoSets() (v4, v6, exempt4 []string) {
+	a.geoMu.Lock()
+	defer a.geoMu.Unlock()
+	return a.geoCache.v4, a.geoCache.v6, a.geoCache.exempt
 }
 
 // ThreatEnforcement describes where drops actually happen, for the UI.

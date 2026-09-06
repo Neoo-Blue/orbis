@@ -21,6 +21,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/issues"
 	"github.com/Neoo-Blue/orbis/internal/report"
 	"github.com/Neoo-Blue/orbis/internal/store"
+	"github.com/Neoo-Blue/orbis/internal/wifi"
 	"github.com/google/uuid"
 )
 
@@ -998,6 +999,9 @@ func (a *App) SyncIntercept() error {
 	if a.Threat != nil {
 		threat4, _ = a.Threat.Elements()
 	}
+	countryCfg := a.Cfg.Snapshot().Country
+	geo4, _, geoEx := a.geoSets()
+	geoOn := countryCfg.Enabled && countryCfg.Mode != "allow"
 	return a.Intercept.Apply(a.ctx, intercept.Config{
 		Enabled:      cfg.Enabled,
 		LANInterface: lan,
@@ -1013,6 +1017,10 @@ func (a *App) SyncIntercept() error {
 		Threat4:      threat4,
 		ThreatOut:    threatCfg.Enabled && threatCfg.BlockOutbound,
 		ThreatIn:     threatCfg.Enabled && threatCfg.BlockInbound,
+		Geo4:         geo4,
+		GeoExempt4:   geoEx,
+		GeoOut:       geoOn && countryCfg.BlockOutbound,
+		GeoIn:        geoOn && countryCfg.BlockInbound,
 	})
 }
 
@@ -1386,4 +1394,127 @@ func (a *App) RemoveForward(ctx context.Context, id, actor string) error {
 	}
 	a.Store.Audit(actor, "forward.delete", id, "", "", "ok")
 	return nil
+}
+
+// NetworkLinks is the assistant's view of the cables and the access point.
+func (a *App) NetworkLinks(ctx context.Context) (map[string]any, error) {
+	if a.Links == nil {
+		return map[string]any{}, nil
+	}
+	links, sug := a.Links.Refresh()
+	out := map[string]any{
+		"links": links, "suggestion": sug,
+		"auto_assign": a.Cfg.Snapshot().Network.Links.AutoAssign,
+		"mode":        string(a.Cfg.Snapshot().Mode), "wan_interface": a.Cfg.Snapshot().Firewall.WANInterface,
+	}
+	if a.WiFi != nil {
+		st := a.WiFi.Status(ctx)
+		delete(st, "hostapd_log")
+		out["wifi"] = st
+	}
+	return out, nil
+}
+
+// ConfigureWiFi switches the access point on or off and changes its name,
+// passphrase or band. A passphrase is generated when none is set.
+func (a *App) ConfigureWiFi(ctx context.Context, enabled *bool, ssid, passphrase, band, actor string) (map[string]any, error) {
+	if a.WiFi == nil {
+		return nil, fmt.Errorf("wi-fi is not available")
+	}
+	if enabled != nil && *enabled && len(wifi.Adapters()) == 0 && a.Cfg.Snapshot().WiFi.Interface == "" {
+		return nil, fmt.Errorf("this node has no wireless adapter")
+	}
+	err := a.Cfg.Update(func(c *config.Config) {
+		if enabled != nil {
+			c.WiFi.Enabled = *enabled
+		}
+		if ssid != "" {
+			c.WiFi.SSID = ssid
+		}
+		if passphrase != "" {
+			c.WiFi.Passphrase = passphrase
+		}
+		if band != "" {
+			c.WiFi.Band = band
+		}
+		if c.WiFi.Enabled && len(c.WiFi.Passphrase) < 8 {
+			c.WiFi.Passphrase = wifi.GeneratePassphrase()
+		}
+		if c.WiFi.SSID == "" {
+			c.WiFi.SSID = "Orbis"
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.Store.Audit(actor, "wifi.configure", a.Cfg.Snapshot().WiFi.SSID, "", fmt.Sprintf("enabled=%v", a.Cfg.Snapshot().WiFi.Enabled), "ok")
+	if err := a.WiFi.Reconcile(ctx); err != nil {
+		return nil, err
+	}
+	a.Links.Refresh()
+	st := a.WiFi.Status(ctx)
+	st["passphrase"] = a.Cfg.Snapshot().WiFi.Passphrase
+	return st, nil
+}
+
+// CountryRules is the assistant's and the page's view of the country rules,
+// with the countries seen in the last week so a list can be built from
+// what actually happens rather than from memory.
+func (a *App) CountryRules() (map[string]any, error) {
+	if a.Country == nil {
+		return map[string]any{"enabled": false}, nil
+	}
+	out := a.Country.Status()
+	out["enforcement"] = a.ThreatEnforcement()
+	if seen, err := a.Store.CountryTotals(time.Now().Add(-7 * 24 * time.Hour)); err == nil {
+		out["seen"] = seen
+	}
+	return out, nil
+}
+
+// SetCountryRule adds or removes a country from the list, or switches the
+// mode, and rebuilds the sets.
+func (a *App) SetCountryRule(code, action, actor string) (map[string]any, error) {
+	if a.Country == nil {
+		return nil, fmt.Errorf("country rules are not available")
+	}
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if len(code) != 2 && action != "mode_block" && action != "mode_allow" && action != "enable" && action != "disable" {
+		return nil, fmt.Errorf("country must be a two-letter code such as CN or RU")
+	}
+	err := a.Cfg.Update(func(c *config.Config) {
+		switch action {
+		case "add", "block", "allow":
+			for _, x := range c.Country.Countries {
+				if x == code {
+					return
+				}
+			}
+			c.Country.Countries = append(c.Country.Countries, code)
+			c.Country.Enabled = true
+		case "remove":
+			out := c.Country.Countries[:0]
+			for _, x := range c.Country.Countries {
+				if x != code {
+					out = append(out, x)
+				}
+			}
+			c.Country.Countries = out
+		case "mode_block":
+			c.Country.Mode = "block"
+		case "mode_allow":
+			c.Country.Mode = "allow"
+		case "enable":
+			c.Country.Enabled = true
+		case "disable":
+			c.Country.Enabled = false
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.Store.Audit(actor, "country.rule", code, "", action, "ok")
+	a.Country.Reconfigure()
+	go a.ReapplyThreatEnforcement()
+	return a.CountryRules()
 }

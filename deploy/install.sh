@@ -25,7 +25,7 @@ apt-get update -qq
 # nftables: the firewall engine. conntrack: flow termination + byte counters.
 # wireguard-tools: the VPN. iproute2: policy routing for VPN steering.
 apt-get install -y -qq --no-install-recommends \
-  nftables conntrack wireguard-tools iproute2 ca-certificates curl >/dev/null
+  nftables conntrack wireguard-tools iproute2 hostapd iw ca-certificates curl >/dev/null
 
 say "Installing orbisd to $PREFIX"
 install -m 0755 "$BIN_SRC" "$PREFIX/orbisd"

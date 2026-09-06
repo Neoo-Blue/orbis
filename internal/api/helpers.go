@@ -331,6 +331,57 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 			c.Issues.GitHub.Token = v
 			return true
 		}
+	case "country.enabled":
+		return setBool(&c.Country.Enabled, raw)
+	case "country.mode":
+		return setStr(&c.Country.Mode, raw)
+	case "country.countries":
+		return setStrSlice(&c.Country.Countries, raw)
+	case "country.block_outbound":
+		return setBool(&c.Country.BlockOutbound, raw)
+	case "country.block_inbound":
+		return setBool(&c.Country.BlockInbound, raw)
+	case "country.dns":
+		return setBool(&c.Country.DNS, raw)
+	case "country.exempt_clients":
+		return setStrSlice(&c.Country.ExemptClients, raw)
+	case "country.exempt_domains":
+		return setStrSlice(&c.Country.ExemptDomains, raw)
+	case "country.exempt_ips":
+		return setStrSlice(&c.Country.ExemptIPs, raw)
+	case "network.links.auto_assign":
+		return setBool(&c.Network.Links.AutoAssign, raw)
+	case "wifi.enabled":
+		return setBool(&c.WiFi.Enabled, raw)
+	case "wifi.interface":
+		return setStr(&c.WiFi.Interface, raw)
+	case "wifi.ssid":
+		return setStr(&c.WiFi.SSID, raw)
+	case "wifi.passphrase":
+		if v, ok := raw.(string); ok && v != config.MaskedSecret {
+			c.WiFi.Passphrase = v
+			return true
+		}
+	case "wifi.band":
+		return setStr(&c.WiFi.Band, raw)
+	case "wifi.channel":
+		return setInt(&c.WiFi.Channel, raw)
+	case "wifi.country":
+		return setStr(&c.WiFi.Country, raw)
+	case "wifi.hidden":
+		return setBool(&c.WiFi.Hidden, raw)
+	case "wifi.isolate_clients":
+		return setBool(&c.WiFi.IsolateClients, raw)
+	case "wifi.mode":
+		return setStr(&c.WiFi.Mode, raw)
+	case "wifi.bridge":
+		return setStr(&c.WiFi.Bridge, raw)
+	case "wifi.subnet":
+		return setStr(&c.WiFi.Subnet, raw)
+	case "wifi.lan_access":
+		return setBool(&c.WiFi.LANAccess, raw)
+	case "wifi.wpa3":
+		return setBool(&c.WiFi.WPA3, raw)
 	case "discover.enabled":
 		return setBool(&c.Discover.Enabled, raw)
 	case "discover.interval_hours":

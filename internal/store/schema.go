@@ -486,6 +486,16 @@ var migrations = []string{
 		online     INTEGER NOT NULL DEFAULT 1,
 		PRIMARY KEY (host, port, proto)
 	)`,
+	// Address ranges per country, extracted from the GeoIP database once and
+	// kept so a restart loads the packet-filter sets without a minute of
+	// iteration.
+	`CREATE TABLE IF NOT EXISTS geo_sets (
+		country  TEXT PRIMARY KEY,
+		v4       TEXT NOT NULL DEFAULT '',
+		v6       TEXT NOT NULL DEFAULT '',
+		built    INTEGER NOT NULL,
+		db_size  INTEGER NOT NULL DEFAULT 0
+	)`,
 	`CREATE TABLE IF NOT EXISTS port_forwards (
 		id          TEXT PRIMARY KEY,
 		name        TEXT NOT NULL DEFAULT '',

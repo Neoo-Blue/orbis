@@ -644,6 +644,15 @@ export interface AppConfig {
     enabled: boolean; interval_hours: number; extra_ports: number[]
     docker: Array<{ name: string; url: string; enabled: boolean }>; upnp: boolean
   }
+  wifi: {
+    enabled: boolean; interface: string; ssid: string; passphrase: string; band: string; channel: number
+    country: string; hidden: boolean; isolate_clients: boolean; mode: string; bridge: string; subnet: string
+    lan_access: boolean; wpa3: boolean
+  }
+  country: {
+    enabled: boolean; mode: 'block' | 'allow'; countries: string[]; block_outbound: boolean; block_inbound: boolean
+    dns: boolean; exempt_clients: string[]; exempt_domains: string[]; exempt_ips: string[]
+  }
 }
 
 // ---- hosted apps, storage, port forwards ----
@@ -730,6 +739,95 @@ export interface HostedResponse {
   hosts: HostedHost[]
   docker: Array<{ name: string; url: string; enabled: boolean }>
   forwarding: { inline: boolean; upnp: boolean }
+}
+
+// ---- cables, wi-fi, countries ----
+
+export interface NetLink {
+  name: string
+  mac: string
+  wireless: boolean
+  carrier: boolean
+  up: boolean
+  speed_mbps?: number
+  addresses: string[]
+  default_route: boolean
+  neighbours: number
+  clients: number
+  role: 'wan' | 'lan' | 'wifi' | 'unplugged' | 'single' | ''
+  configured: 'wan' | 'lan' | 'none'
+  confidence: 'high' | 'low' | ''
+  evidence: string[]
+}
+
+export interface LinkSuggestion {
+  wan: string
+  lan: string[]
+  wifi: string[]
+  confidence: 'high' | 'low'
+  changes: string[]
+  reason: string
+}
+
+export interface LinksResponse {
+  links: NetLink[]
+  suggestion: LinkSuggestion
+  auto_assign: boolean
+  mode: string
+  wan_interface: string
+}
+
+export interface WiFiClient {
+  mac: string
+  name?: string
+  ip?: string
+  signal_dbm?: number
+  rx_bytes: number
+  tx_bytes: number
+  connected_seconds: number
+}
+
+export interface WiFiStatus {
+  enabled: boolean
+  running: boolean
+  interface: string
+  ssid: string
+  mode: string
+  subnet: string
+  error: string
+  restarts: number
+  hostapd_available: boolean
+  iw_available: boolean
+  adapters: string[]
+  hostapd_log?: string
+  since?: string
+  clients?: WiFiClient[]
+  channel?: number
+  channel_info?: string
+  type?: string
+  passphrase?: string
+  config?: { band: string; channel: number; country: string; hidden: boolean; isolate_clients: boolean; bridge: string; lan_access: boolean; wpa3: boolean; interface: string }
+}
+
+export interface CountryStatus {
+  enabled: boolean
+  mode: 'block' | 'allow'
+  countries: string[]
+  block_outbound: boolean
+  block_inbound: boolean
+  dns: boolean
+  exempt_clients: string[]
+  exempt_domains: string[]
+  exempt_ips: string[]
+  set_sizes: Record<string, number>
+  set_total: number
+  building: boolean
+  error: string
+  counters: Record<string, number>
+  packet_sets: boolean
+  last_build?: string
+  enforcement: { mode: string; inline: boolean; nft_available: boolean; intercepted_clients: number; detect_only: boolean }
+  seen?: Array<{ country: string; connections: number; bytes: number; blocked: number }>
 }
 
 // ---- threat intelligence ----
@@ -1012,6 +1110,7 @@ export interface PlacementCheck {
 }
 
 export interface OnboardingState {
+  links?: { links: NetLink[]; suggestion: LinkSuggestion } | null
   onboarded: boolean
   mode: string
   password_set: boolean

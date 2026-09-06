@@ -559,3 +559,40 @@ func broadcastOf(n *net.IPNet) net.IP {
 }
 
 var _ = context.Background
+
+var extraOnce sync.Once
+
+// StartScope serves one scope on its interface regardless of the node's
+// mode. The mode gate in Start exists because a second DHCP server on a
+// network that already has one breaks it; on an interface this node alone
+// owns (its own Wi-Fi network) that danger does not exist. The returned
+// function stops that server.
+func (s *Server) StartScope(scope config.DHCPScope) (func(), error) {
+	if scope.Interface == "" {
+		return nil, fmt.Errorf("dhcp scope %q has no interface", scope.Name)
+	}
+	var loadErr error
+	extraOnce.Do(func() {
+		loadErr = s.Load()
+		go s.expiryLoop()
+	})
+	if loadErr != nil {
+		return nil, loadErr
+	}
+	iface, err := net.InterfaceByName(scope.Interface)
+	if err != nil {
+		return nil, fmt.Errorf("interface %s: %w", scope.Interface, err)
+	}
+	laddr := &net.UDPAddr{IP: net.IPv4zero, Port: dhcpv4.ServerPort}
+	srv, err := server4.NewServer(iface.Name, laddr, s.handler(scope))
+	if err != nil {
+		return nil, fmt.Errorf("dhcp listen on %s: %w", scope.Interface, err)
+	}
+	go func() {
+		if err := srv.Serve(); err != nil {
+			s.log("dhcp: server for %s stopped: %v", scope.Name, err)
+		}
+	}()
+	s.log("dhcp: serving scope %q on %s (%s-%s)", scope.Name, scope.Interface, scope.RangeStart, scope.RangeEnd)
+	return func() { _ = srv.Close() }, nil
+}

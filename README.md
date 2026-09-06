@@ -55,6 +55,8 @@ where Orbis keeps going.
 | Network map, live globe, anomaly detection | | | | | | | ● |
 | IP threat feeds, timed bans, CrowdSec bouncer | | | | ○ | | | ● |
 | Finds what you host (apps, containers, NAS) and forwards ports for it | | | | ○ | | | ● |
+| Tells WAN from LAN by itself, runs a Wi-Fi network from a USB or built-in adapter | | | | ○ | | | ● |
+| Block or allow whole countries, at DNS and in the packet filter | | ○ | | ○ | | | ● |
 | Assistant with tools, MCP server | | | | | | | ● |
 
 ● built in · ○ partial or via add-on · blank: not in scope for that product
@@ -128,6 +130,23 @@ behind each port. NAS and SAN devices are recognised by vendor and by the protoc
 exposed to the internet. Each service has a Forward button: a DNAT rule when this node is the
 gateway, a UPnP mapping on the upstream router when it is not, with a warning before anything
 that has no business on the open internet.
+
+**Knows which cable is which.** Physical ports are classified from the default route, the
+neighbours answering on them and where the known devices live: this one is the internet, that
+one is the network, that port is empty, the wireless adapter is the Wi-Fi network. A cable
+plugged in later is noticed within seconds and either applied, when the evidence is clear and
+you allowed it, or proposed with its reasons.
+
+**Its own Wi-Fi network.** With a wireless adapter, Orbis broadcasts an SSID through hostapd on
+its own subnet, with itself as gateway, DHCP and resolver, translated out through the wired
+side. Every device that joins is fully behind Orbis, threat sets and country rules included,
+even when Orbis is not the main router. Bridge mode attaches the adapter to an existing bridge
+instead.
+
+**Countries, not just names.** Block a list of countries, or allow only a list. The resolver
+refuses names whose answers land there for every device, new connections are marked and killed
+where Orbis is in the path, and in block mode the countries' address ranges are loaded as
+packet-filter sets on every enforcement point.
 
 **A real firewall.** Zones with trust levels, an ordered rule table with live hit counters, NAT and
 port forwarding, time-based rules, IPv6, flow offload, an anti-lockout rule, all compiled into one
@@ -365,6 +384,40 @@ does not actually serve it (eero does this) is reported as such rather than as a
 Forwarding a sensitive service needs an explicit confirmation, and the assistant will not do it
 without telling you why a VPN or a tunnel is the better answer.
 
+## Cables, Wi-Fi and countries
+
+The **Cables & Wi-Fi** page tells the physical ports apart with evidence rather than a dropdown.
+The wired port carrying the default route is the internet; other wired ports with a carrier are
+the network; a wireless adapter is the Wi-Fi network; a port with no carrier is empty. Each
+verdict lists what it rests on: the default route, how many neighbours answer on the port, how
+many known devices live on its subnet. Two cables with the devices all behind the uplink is
+what a freshly plugged, still-quiet LAN looks like and also what a mistake looks like, so that
+case is a proposal, never applied silently. With auto-assign on, an unambiguous classification
+is written to the WAN interface and the zones the moment a cable goes in; otherwise it waits
+for one click. One cable means observe mode on the network, unless the access point is on, in
+which case that cable is the uplink the Wi-Fi is translated onto. The onboarding wizard is
+pre-filled from the same evidence.
+
+**Wi-Fi.** A wireless adapter becomes an access point with one switch. Orbis writes the hostapd
+configuration, takes the adapter from NetworkManager, picks 5 GHz when the adapter and the
+country code allow it, and in routed mode gives the network its own subnet with Orbis as
+gateway, DHCP server and resolver, translated out through the wired side in its own nftables
+table. That table carries the threat and country sets too, so a phone on the Orbis network is
+filtered at every layer even while the Pi it runs on is not the house's router. The passphrase
+is generated when you do not set one and shown on the page behind the admin login. Connected
+devices are listed with signal, bytes and names. Bridge mode hands the adapter to an existing
+bridge and leaves addressing to the wired network.
+
+**Countries.** The Countries tab on the Threats page blocks a list of countries or allows only
+a list. Three layers act: the resolver refuses a name whose addresses land in a blocked country,
+for every device that uses it; a new connection to or from one is marked and killed where Orbis
+is in the path; and in block mode the countries' ranges, extracted once from the GeoIP database
+and cached, are loaded into the packet filter on the main ruleset, the intercept table and the
+Wi-Fi table. Allow mode enforces at the resolver and per connection, since the complement of a
+short list is most of the internet. Devices, domains and addresses can be exempted, and the
+page lists the countries your traffic actually went to last week so the list is built from
+what happens rather than from memory.
+
 ## Modes and placement
 
 **Observe** (the default) watches whatever traffic reaches it and records what it would have done.
@@ -402,7 +455,7 @@ own traffic and broadcast noise; the onboarding wizard measures this and tells y
                       | netlink        | smart capture    | tailscale    |
                       +-------+--------+------------------+--------------+
                               |
-topology . intercept . discover . upnp . alerts . report . notify . usage . issues . threat . ai + mcp
+topology . intercept . discover . upnp . links . wifi . country . alerts . report . notify . usage . issues . threat . ai + mcp
                               |
                          SQLite (WAL)
 ```

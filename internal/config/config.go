@@ -52,6 +52,8 @@ type Config struct {
 	Issues    IssuesConfig    `yaml:"issues" json:"issues"`
 	Threat    ThreatConfig    `yaml:"threat" json:"threat"`
 	Discover  DiscoverConfig  `yaml:"discover" json:"discover"`
+	WiFi      WiFiConfig      `yaml:"wifi" json:"wifi"`
+	Country   CountryConfig   `yaml:"country" json:"country"`
 	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
 	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
 
@@ -112,6 +114,16 @@ type NetworkConfig struct {
 	// Intercept inserts Orbis into selected devices' path by ARP, without
 	// becoming the network's gateway or DHCP server.
 	Intercept InterceptConfig `yaml:"intercept" json:"intercept"`
+	// Links is how physical interfaces are told apart: which cable is the
+	// internet and which is the network, and whether to act on that alone.
+	Links LinksConfig `yaml:"links" json:"links"`
+}
+
+// LinksConfig controls automatic WAN/LAN assignment. With AutoAssign the
+// node applies an unambiguous classification when a cable is plugged in;
+// without it, the classification is proposed and waits for a click.
+type LinksConfig struct {
+	AutoAssign bool `yaml:"auto_assign" json:"auto_assign"`
 }
 
 // InterceptConfig is ARP interception: Orbis answers ARP for the real gateway
@@ -571,6 +583,62 @@ type DockerHost struct {
 	Name    string `yaml:"name" json:"name"`
 	URL     string `yaml:"url" json:"url"`
 	Enabled bool   `yaml:"enabled" json:"enabled"`
+}
+
+// WiFiConfig runs an access point on a wireless adapter. In routed mode the
+// Wi-Fi network gets its own subnet with this node as its gateway, DHCP and
+// resolver, translated out through the wired side, which works whether or
+// not this node is the network's gateway. In bridge mode hostapd attaches the
+// adapter to an existing bridge and the wired network's DHCP serves it.
+type WiFiConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Interface is the wireless adapter; empty picks the first one found.
+	Interface  string `yaml:"interface" json:"interface"`
+	SSID       string `yaml:"ssid" json:"ssid"`
+	Passphrase string `yaml:"passphrase" json:"passphrase"`
+	// Band is auto, 2.4 or 5. Auto prefers 5 GHz when the adapter and the
+	// country code allow it.
+	Band    string `yaml:"band" json:"band"`
+	Channel int    `yaml:"channel" json:"channel"`
+	// Country is the ISO 3166-1 alpha-2 regulatory domain; 5 GHz needs it.
+	Country        string `yaml:"country" json:"country"`
+	Hidden         bool   `yaml:"hidden" json:"hidden"`
+	IsolateClients bool   `yaml:"isolate_clients" json:"isolate_clients"`
+	// Mode is routed or bridge.
+	Mode   string `yaml:"mode" json:"mode"`
+	Bridge string `yaml:"bridge" json:"bridge"`
+	// Subnet is this node's address on the Wi-Fi network with its prefix,
+	// e.g. 192.168.60.1/24; DHCP hands out the rest of it.
+	Subnet string `yaml:"subnet" json:"subnet"`
+	// LANAccess lets Wi-Fi clients reach the wired network (routed mode).
+	LANAccess bool `yaml:"lan_access" json:"lan_access"`
+	// WPA3 offers SAE alongside WPA2 for clients that support it.
+	WPA3 bool `yaml:"wpa3" json:"wpa3"`
+}
+
+// CountryConfig blocks or allows traffic by the country an address belongs
+// to. Block mode drops what is listed; allow mode drops everything that is
+// not listed (addresses with no known country are left alone). It acts at
+// three places: the resolver refuses names whose answers land in a blocked
+// country, new connections are marked and killed where this node enforces,
+// and in block mode the countries' address ranges become packet-filter sets.
+type CountryConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Mode is block or allow.
+	Mode      string   `yaml:"mode" json:"mode"`
+	Countries []string `yaml:"countries" json:"countries"`
+	// BlockOutbound stops devices reaching those countries; BlockInbound
+	// stops those countries reaching in.
+	BlockOutbound bool `yaml:"block_outbound" json:"block_outbound"`
+	BlockInbound  bool `yaml:"block_inbound" json:"block_inbound"`
+	// DNS refuses names whose addresses are in a blocked country, which is
+	// what protects devices this node only serves DNS to.
+	DNS bool `yaml:"dns" json:"dns"`
+	// Exemptions: device ids, domain suffixes and addresses or ranges the
+	// rule does not apply to.
+	ExemptClients []string `yaml:"exempt_clients" json:"exempt_clients"`
+	ExemptDomains []string `yaml:"exempt_domains" json:"exempt_domains"`
+	ExemptIPs     []string `yaml:"exempt_ips" json:"exempt_ips"`
 }
 
 type DHCPConfig struct {
@@ -1050,6 +1118,8 @@ func Default() *Config {
 			CrowdSec:            CrowdSecConfig{PollSeconds: 30},
 		},
 		Discover: DiscoverConfig{Enabled: true, IntervalHours: 6, UPnP: true},
+		WiFi:     WiFiConfig{SSID: "Orbis", Band: "auto", Mode: "routed", Subnet: "192.168.60.1/24", LANAccess: true},
+		Country:  CountryConfig{Mode: "block", BlockOutbound: true, BlockInbound: true, DNS: true},
 		Issues: IssuesConfig{
 			Enabled:     true,
 			AutoCapture: true,
@@ -1383,6 +1453,9 @@ func (c *Config) Redacted() Config {
 	}
 	if cp.Threat.CrowdSec.APIKey != "" {
 		cp.Threat.CrowdSec.APIKey = mask
+	}
+	if cp.WiFi.Passphrase != "" {
+		cp.WiFi.Passphrase = mask
 	}
 	if cp.API.SessionKey != "" {
 		cp.API.SessionKey = mask

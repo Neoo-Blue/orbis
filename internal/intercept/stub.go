@@ -44,6 +44,10 @@ type ForwardConfig struct {
 	Threat4      []string
 	ThreatOut    bool
 	ThreatIn     bool
+	Geo4         []string
+	GeoExempt4   []string
+	GeoOut       bool
+	GeoIn        bool
 	LANInterface string
 	Clients      []netip.Addr
 	RedirectDNS  bool
@@ -58,5 +62,6 @@ type ForwardConfig struct {
 func ApplyForwarding(context.Context, ForwardConfig) error { return nil }
 func RemoveForwarding(context.Context) error               { return nil }
 func SyncThreat(context.Context, []string) error           { return nil }
+func SyncGeo(context.Context, []string, []string) error    { return nil }
 func EnableForwardingSysctl() (bool, error)                { return false, nil }
 func writeForwarding(bool) error                           { return nil }

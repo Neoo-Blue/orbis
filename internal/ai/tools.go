@@ -73,6 +73,14 @@ type Backend interface {
 	ForwardPort(ctx context.Context, req discover.ForwardRequest, actor string) (*store.PortForward, error)
 	RemoveForward(ctx context.Context, id, actor string) error
 
+	// Cables and Wi-Fi.
+	NetworkLinks(ctx context.Context) (map[string]any, error)
+	ConfigureWiFi(ctx context.Context, enabled *bool, ssid, passphrase, band, actor string) (map[string]any, error)
+
+	// Country rules.
+	CountryRules() (map[string]any, error)
+	SetCountryRule(code, action, actor string) (map[string]any, error)
+
 	// Mutating operations.
 	AddRule(r *store.Rule) error
 	DeleteRule(id string) error
@@ -327,6 +335,23 @@ func Tools(allowWrite bool) []ToolDef {
 			Schema: objSchema(map[string]any{}, nil),
 		},
 		{
+			Name: "country_rules",
+			Description: "The country rules: block mode (listed countries are dropped) or allow mode " +
+				"(everything else is), which directions, the exemptions, how many address ranges are " +
+				"loaded, how often each country was refused, and the countries this network actually " +
+				"talked to in the last week with bytes. Use for \"which countries does my traffic go to\" " +
+				"decisions and \"is China blocked\".",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "network_links",
+			Description: "The physical interfaces: which cable carries the internet (WAN), which is the " +
+				"network (LAN), which port is empty, and the wireless adapter, each with the evidence " +
+				"(default route, neighbours, known devices). Includes the access point's state and " +
+				"connected Wi-Fi clients. Use for \"which cable is the internet\", \"is the Wi-Fi up\".",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
 			Name: "threat_status",
 			Description: "IP threat intelligence: which address feeds are loaded (hijacked netblocks, " +
 				"botnet command servers, known attackers), the active bans and where each came from " +
@@ -382,6 +407,31 @@ func Tools(allowWrite bool) []ToolDef {
 			Description: "Remove a port forward this node created, by its id (from list_hosted).",
 			Mutating:    true,
 			Schema:      objSchema(map[string]any{"id": strProp("The forward id")}, []string{"id"}),
+		},
+		{
+			Name: "set_country_rule",
+			Description: "Change the country rules: add or remove a country (two-letter code), switch " +
+				"between block and allow mode, or enable/disable. Adding a country turns the rules on. " +
+				"Blocking a country cuts every device off from every server there, including CDNs and " +
+				"game servers, so say what it will affect before doing it.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"code":   strProp("Two-letter country code, e.g. CN (not needed for mode or enable actions)"),
+				"action": enumProp("add, remove, mode_block, mode_allow, enable, disable", []string{"add", "remove", "mode_block", "mode_allow", "enable", "disable"}),
+			}, []string{"action"}),
+		},
+		{
+			Name: "configure_wifi",
+			Description: "Turn the access point on or off, or change its network name, passphrase or " +
+				"band (auto, 2.4, 5). Turning it on with no passphrase set generates one; tell the " +
+				"operator to read it on the Cables & Wi-Fi page rather than repeating it here.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"enabled":    boolProp("true to broadcast, false to stop"),
+				"ssid":       strProp("Network name, 1 to 32 characters"),
+				"passphrase": strProp("8 to 63 characters; leave empty to keep or generate"),
+				"band":       enumProp("auto, 2.4 or 5", []string{"auto", "2.4", "5"}),
+			}, nil),
 		},
 		{
 			Name: "ban_address",
@@ -568,6 +618,8 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"add_shortcut": true, "remove_shortcut": true,
 		"ban_address": true, "unban_address": true,
 		"forward_port": true, "remove_forward": true,
+		"configure_wifi":   true,
+		"set_country_rule": true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -799,6 +851,28 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 			return "", err
 		}
 		return "Forward removed.", nil
+
+	case "country_rules":
+		return jsonOf(b.CountryRules())
+
+	case "set_country_rule":
+		return jsonOf(b.SetCountryRule(strArg(args, "code"), strArg(args, "action"), actor))
+
+	case "network_links":
+		return jsonOf(b.NetworkLinks(ctx))
+
+	case "configure_wifi":
+		var enabled *bool
+		if v, ok := args["enabled"].(bool); ok {
+			enabled = &v
+		}
+		st, err := b.ConfigureWiFi(ctx, enabled, strArg(args, "ssid"), strArg(args, "passphrase"), strArg(args, "band"), actor)
+		if err != nil {
+			return "", err
+		}
+		delete(st, "passphrase")
+		delete(st, "hostapd_log")
+		return jsonOf(st, nil)
 
 	case "threat_status":
 		return jsonOf(b.ThreatStatus(hoursAgo(args, "hours", 24, 720), intArg(args, "limit", 50, 500)))

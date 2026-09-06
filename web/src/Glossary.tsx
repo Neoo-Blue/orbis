@@ -35,6 +35,9 @@ const TERMS: Array<{ term: string; plain: string }> = [
   { term: 'Port forward', plain: 'Opens one port on your internet address and sends it to one device inside. Needed for a game server or a service you want to reach from outside; a VPN or a tunnel is the safer way for anything private.' },
   { term: 'UPnP', plain: 'A way for devices to ask the router to open ports for them. Orbis uses it to create port forwards on your router when Orbis itself is not the gateway.' },
   { term: 'Docker Engine API', plain: 'How Docker is controlled. When a host exposes it (read-only is enough), Orbis can name the containers behind the ports it finds instead of guessing from a web page.' },
+  { term: 'WAN and LAN', plain: 'WAN is the cable to the internet (the modem or the router upstream). LAN is the cable to your own devices. Orbis reads which is which from the default route and from where your devices live, and says so with its reasons.' },
+  { term: 'Access point', plain: 'Orbis broadcasting a Wi-Fi network from a wireless adapter. Devices that join it get their addresses, DNS and filtering from Orbis, even when Orbis is not the main router.' },
+  { term: 'Country rule', plain: 'Block everything to or from certain countries, or allow only certain countries. Decided by where an address is registered, so a CDN with servers everywhere may be affected.' },
 ]
 
 export function GlossaryButton() {

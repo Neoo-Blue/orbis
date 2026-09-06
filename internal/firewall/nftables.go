@@ -48,6 +48,7 @@ type Engine struct {
 	// threat supplies the listed-address elements the ruleset embeds, so a
 	// full apply and the incremental set sync always agree.
 	threat func() (v4, v6 []string)
+	geo    func() (v4, v6, exempt4 []string)
 }
 
 func New(cfg *config.Config, st *store.Store, log func(string, ...any)) *Engine {
@@ -260,6 +261,8 @@ func (e *Engine) UnblockAddress(addr netip.Addr) error {
 // configuration: the listed-address sets from the threat manager.
 type renderExtras struct {
 	ThreatV4, ThreatV6 []string
+	// Country sets: the listed countries' ranges and the exempt devices.
+	GeoV4, GeoV6, GeoExemptV4 []string
 }
 
 func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (string, error) {
@@ -324,6 +327,26 @@ func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (
 	w("    auto-merge")
 	writeElements(w, extras.ThreatV6)
 	w("  }")
+	// Country rules: the listed countries' address ranges, and the devices
+	// the rule does not apply to.
+	w("  set orbis_geo_v4 {")
+	w("    type ipv4_addr")
+	w("    flags interval")
+	w("    auto-merge")
+	writeElements(w, extras.GeoV4)
+	w("  }")
+	w("  set orbis_geo_v6 {")
+	w("    type ipv6_addr")
+	w("    flags interval")
+	w("    auto-merge")
+	writeElements(w, extras.GeoV6)
+	w("  }")
+	w("  set orbis_geo_exempt_v4 {")
+	w("    type ipv4_addr")
+	w("    flags interval")
+	w("    auto-merge")
+	writeElements(w, extras.GeoExemptV4)
+	w("  }")
 	w("")
 
 	if cfg.Firewall.FlowOffload {
@@ -349,6 +372,10 @@ func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (
 	if cfg.Threat.Enabled && cfg.Threat.BlockInbound {
 		w("    ip saddr @orbis_threat_v4 counter drop comment \"threat: inbound from listed address\"")
 		w("    ip6 saddr @orbis_threat_v6 counter drop comment \"threat: inbound from listed address\"")
+	}
+	if cfg.Country.Enabled && cfg.Country.Mode != "allow" && cfg.Country.BlockInbound {
+		w("    ip saddr @orbis_geo_v4 counter drop comment \"country: inbound from a listed country\"")
+		w("    ip6 saddr @orbis_geo_v6 counter drop comment \"country: inbound from a listed country\"")
 	}
 	if cfg.Firewall.AntiLockout {
 		// Without this, one bad rule strands the operator outside their own
@@ -418,9 +445,17 @@ func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (
 		w("    ip daddr @orbis_threat_v4 counter drop comment \"threat: outbound to listed address\"")
 		w("    ip6 daddr @orbis_threat_v6 counter drop comment \"threat: outbound to listed address\"")
 	}
+	if cfg.Country.Enabled && cfg.Country.Mode != "allow" && cfg.Country.BlockOutbound {
+		w("    ip saddr != @orbis_geo_exempt_v4 ip daddr @orbis_geo_v4 counter drop comment \"country: outbound to a listed country\"")
+		w("    ip6 daddr @orbis_geo_v6 counter drop comment \"country: outbound to a listed country\"")
+	}
 	if cfg.Threat.Enabled && cfg.Threat.BlockInbound {
 		w("    ip saddr @orbis_threat_v4 counter drop comment \"threat: inbound from listed address\"")
 		w("    ip6 saddr @orbis_threat_v6 counter drop comment \"threat: inbound from listed address\"")
+	}
+	if cfg.Country.Enabled && cfg.Country.Mode != "allow" && cfg.Country.BlockInbound {
+		w("    ip saddr @orbis_geo_v4 counter drop comment \"country: inbound from a listed country\"")
+		w("    ip6 saddr @orbis_geo_v6 counter drop comment \"country: inbound from a listed country\"")
 	}
 	// Runtime blocks take effect before any user rule can allow them.
 	w("    ip daddr @orbis_blocked_v4 counter reject with icmp type admin-prohibited comment \"orbis dynamic block\"")
@@ -590,19 +625,47 @@ func (e *Engine) SetThreatSource(fn func() (v4, v6 []string)) {
 
 func (e *Engine) extras() renderExtras {
 	e.mu.Lock()
-	fn := e.threat
+	fn, gfn := e.threat, e.geo
 	e.mu.Unlock()
-	if fn == nil {
-		return renderExtras{}
+	var out renderExtras
+	if fn != nil {
+		out.ThreatV4, out.ThreatV6 = fn()
 	}
-	v4, v6 := fn()
-	return renderExtras{ThreatV4: v4, ThreatV6: v6}
+	if gfn != nil {
+		out.GeoV4, out.GeoV6, out.GeoExemptV4 = gfn()
+	}
+	return out
+}
+
+// SetGeoSource wires the country manager's sets into rendering.
+func (e *Engine) SetGeoSource(fn func() (v4, v6, exempt4 []string)) {
+	e.mu.Lock()
+	e.geo = fn
+	e.mu.Unlock()
+}
+
+// SyncGeoSets replaces the country sets in the live ruleset.
+func (e *Engine) SyncGeoSets(v4, v6, exempt4 []string) error {
+	return e.syncSets([]struct {
+		name  string
+		elems []string
+	}{{"orbis_geo_v4", v4}, {"orbis_geo_v6", v6}, {"orbis_geo_exempt_v4", exempt4}})
 }
 
 // SyncThreatSets replaces the listed-address sets in the live ruleset in one
 // transaction, without re-applying everything else (which would reset every
 // counter). A ruleset that is not installed is left alone.
 func (e *Engine) SyncThreatSets(v4, v6 []string) error {
+	return e.syncSets([]struct {
+		name  string
+		elems []string
+	}{{"orbis_threat_v4", v4}, {"orbis_threat_v6", v6}})
+}
+
+func (e *Engine) syncSets(sets []struct {
+	name  string
+	elems []string
+}) error {
 	cfg := e.cfg.Snapshot()
 	if cfg.Mode != config.ModeInline || !cfg.Firewall.Enabled || !e.available {
 		return nil
@@ -614,10 +677,7 @@ func (e *Engine) SyncThreatSets(v4, v6 []string) error {
 		return nil
 	}
 	var b strings.Builder
-	for _, s := range []struct {
-		name  string
-		elems []string
-	}{{"orbis_threat_v4", v4}, {"orbis_threat_v6", v6}} {
+	for _, s := range sets {
 		fmt.Fprintf(&b, "flush set inet %s %s\n", tableName, s.name)
 		for i := 0; i < len(s.elems); i += 200 {
 			end := min(i+200, len(s.elems))

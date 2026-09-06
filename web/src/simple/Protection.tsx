@@ -76,6 +76,11 @@ export function SimpleProtection({ config, save, onNavigate }: {
           <BigSwitch icon="🧠" title="Learn new ad hosts automatically" checked={config.adblock.smart_capture.enabled}
             desc="Watches for hosts that behave like ad servers before any list knows them, and asks the assistant to judge."
             onChange={(v) => save({ 'adblock.smart_capture.enabled': v })} />
+          <BigSwitch icon="🌍" title="Block countries" checked={config.country?.enabled ?? false} disabled={(config.country?.countries ?? []).length === 0}
+            desc={(config.country?.countries ?? []).length > 0
+              ? `${config.country.mode === 'allow' ? 'Only allowing' : 'Blocking'} ${config.country.countries.join(', ')}. Pick countries on the Threats page.`
+              : 'No countries chosen yet. Pick them on the Threats page under Countries.'}
+            onChange={(v) => save({ 'country.enabled': v })} />
           <BigSwitch icon="🚫" title="Block known-bad internet addresses" checked={config.threat?.enabled ?? false}
             desc="Hijacked networks, botnet control servers and known attackers, from published security feeds. Catches a device that never asks the DNS filter."
             onChange={(v) => save({ 'threat.enabled': v })} />

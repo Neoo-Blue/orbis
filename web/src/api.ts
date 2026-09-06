@@ -11,6 +11,7 @@ import type {
   AlertRule, ReportData, BuiltinList,
   ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
   HostedResponse, StorageDevice, PortForward, RouterInfo,
+  LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus,
 } from './types'
 
 export class ApiError extends Error {
@@ -331,6 +332,21 @@ export const api = {
     pauses: () => get<{ pauses: Record<string, string> }>('/pauses'),
   },
 
+  links: {
+    get: () => get<LinksResponse>('/links'),
+    apply: (body?: { wan: string; lan: string[]; wifi: string[] }) => post<{ applied: LinkSuggestion }>('/links/apply', body ?? {}),
+  },
+  wifi: {
+    status: () => get<WiFiStatus>('/wifi/status'),
+    enable: (body: { ssid?: string; passphrase?: string; band?: string }) => post<WiFiStatus>('/wifi/enable', body),
+    disable: () => post<WiFiStatus>('/wifi/disable'),
+    passphrase: (passphrase?: string) => post<WiFiStatus>('/wifi/passphrase', { passphrase: passphrase ?? '' }),
+  },
+  country: {
+    get: () => get<CountryStatus>('/country'),
+    rule: (code: string, action: 'add' | 'remove' | 'mode_block' | 'mode_allow' | 'enable' | 'disable') =>
+      post<CountryStatus>('/country/rules', { code, action }),
+  },
   hosted: {
     overview: () => get<HostedResponse>('/hosted'),
     scan: () => post<{ started: boolean }>('/hosted/scan'),

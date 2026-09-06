@@ -3,7 +3,8 @@ import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Banner, Card, Empty, Field, Icons, Loading, Segmented, Stat, Switch, useToast } from '../ui'
 import { ago, countryFlag, num } from '../format'
-import type { ThreatDecision, ThreatFeed, ThreatHit } from '../types'
+import type { CountryStatus, ThreatDecision, ThreatFeed, ThreatHit } from '../types'
+import { bytes, countryFlag as flag } from '../format'
 
 /**
  * Threats: IP-level threat intelligence. Where the DNS pages work on names,
@@ -13,7 +14,7 @@ import type { ThreatDecision, ThreatFeed, ThreatHit } from '../types'
  * the most important line on the page: a hit that was only recorded and a
  * hit that was dropped must never look the same.
  */
-type Tab = 'hits' | 'feeds' | 'bans' | 'crowdsec'
+type Tab = 'hits' | 'feeds' | 'bans' | 'countries' | 'crowdsec'
 
 const CATEGORIES = ['c2', 'hijacked', 'attackers', 'compromised', 'spam', 'other']
 
@@ -24,10 +25,11 @@ export function ThreatsPage() {
   const { data: hitsData, refresh: refreshHits } = usePoll(() => api.threat.hits(hours, 300), 15000, [hours])
   const { data: feedsData, refresh: refreshFeeds } = usePoll(() => api.threat.feeds(), 30000)
   const { data: bansData, refresh: refreshBans } = usePoll(() => api.threat.decisions(), 15000)
+  const { data: countryData, refresh: refreshCountry } = usePoll(() => api.country.get(), 15000)
   const toast = useToast()
   const [busy, setBusy] = useState<string | null>(null)
 
-  const refreshAll = () => { refreshStatus(); refreshHits(); refreshFeeds(); refreshBans() }
+  const refreshAll = () => { refreshStatus(); refreshHits(); refreshFeeds(); refreshBans(); refreshCountry() }
   const act = async (key: string, fn: () => Promise<unknown>, ok: string) => {
     setBusy(key)
     try {
@@ -88,6 +90,7 @@ export function ThreatsPage() {
           { value: 'hits', label: `Hits (${hitsData?.hits.length ?? 0})` },
           { value: 'feeds', label: `Feeds (${feedsData?.feeds.length ?? 0})` },
           { value: 'bans', label: `Bans (${bansData?.decisions.length ?? 0})` },
+          { value: 'countries', label: `Countries (${countryData?.countries.length ?? 0})` },
           { value: 'crowdsec', label: 'CrowdSec' },
         ]} />
         <div className="spacer" />
@@ -107,6 +110,7 @@ export function ThreatsPage() {
       {tab === 'hits' && <HitsTable hits={hitsData?.hits ?? []} devices={hitsData?.devices ?? {}} hours={hours} />}
       {tab === 'feeds' && <FeedsTab feeds={feedsData?.feeds ?? []} busy={busy} act={act} />}
       {tab === 'bans' && <BansTab bans={bansData?.decisions ?? []} busy={busy} act={act} />}
+      {tab === 'countries' && countryData && <CountriesTab data={countryData} busy={busy} act={act} />}
       {tab === 'crowdsec' && <CrowdSecTab status={status} />}
     </div>
   )
@@ -309,5 +313,104 @@ function CrowdSecTab({ status }: { status: { crowdsec: { enabled: boolean; url: 
         </div>
       </div>
     </Card>
+  )
+}
+
+
+const names = typeof Intl !== 'undefined' && 'DisplayNames' in Intl ? new Intl.DisplayNames(['en'], { type: 'region' }) : null
+function countryName(code: string): string {
+  try { return names?.of(code) ?? code } catch { return code }
+}
+
+function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string | null; act: (k: string, fn: () => Promise<unknown>, ok: string) => Promise<void> }) {
+  const [code, setCode] = useState('')
+  const [domains, setDomains] = useState((data.exempt_domains ?? []).join(', '))
+  const [ips, setIps] = useState((data.exempt_ips ?? []).join(', '))
+  const listed = new Set(data.countries)
+  const seen = (data.seen ?? []).filter((s) => s.country)
+  const verb = data.mode === 'allow' ? 'Only allowing' : 'Blocking'
+  return (
+    <>
+      <Card title="Country rules" actions={
+        <Switch checked={data.enabled} disabled={busy === 'toggle' || data.countries.length === 0}
+          onChange={(v) => act('toggle', () => api.country.rule('', v ? 'enable' : 'disable'), v ? 'Country rules are on' : 'Country rules are off')} />
+      }>
+        <div style={{ display: 'grid', gap: 12 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            Decided by where an address is registered. Names that resolve into a blocked country are refused by the resolver for every device;
+            connections to or from one are marked and, where this node is in the path, dropped; in block mode the countries' address ranges
+            are also loaded into the packet filter. A CDN with servers in many countries may be affected: add its domain as an exception.
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Segmented value={data.mode} onChange={(v) => act('mode', () => api.country.rule('', v === 'allow' ? 'mode_allow' : 'mode_block'), v === 'allow' ? 'Allow mode: everything not listed is blocked' : 'Block mode: what is listed is blocked')}
+              options={[{ value: 'block', label: 'Block listed' }, { value: 'allow', label: 'Allow only listed' }]} />
+            <span className="hint">{data.enabled ? `${verb} ${data.countries.length} countr${data.countries.length === 1 ? 'y' : 'ies'}.` : 'Off.'}
+              {data.packet_sets && data.set_total > 0 ? ` ${num(data.set_total)} address ranges loaded.` : ''}
+              {data.building ? ' Building sets…' : ''}
+              {data.mode === 'allow' ? ' Allow mode enforces at the resolver and per connection; the packet filter carries only exemptions.' : ''}
+            </span>
+          </div>
+          {data.error && <Banner tone="warn">{data.error}</Banner>}
+          {data.enabled && data.enforcement?.detect_only && (
+            <Banner tone="info">Names are refused for every device that uses this resolver. Connections that bypass DNS are recorded, not dropped, because this node is not in the path.</Banner>
+          )}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {data.countries.map((c) => (
+              <span key={c} className="tag" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                {flag(c)} {countryName(c)} <span className="hint mono">{c}</span>
+                {data.set_sizes?.[c] ? <span className="hint">{num(data.set_sizes[c])} ranges</span> : null}
+                <button className="btn sm" disabled={busy === 'rm:' + c} onClick={() => act('rm:' + c, () => api.country.rule(c, 'remove'), `${countryName(c)} removed`)} title="Remove">×</button>
+              </span>
+            ))}
+            {data.countries.length === 0 && <span className="hint">no countries listed yet</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input className="input mono" style={{ width: 90 }} value={code} placeholder="CN" maxLength={2} onChange={(e) => setCode(e.target.value.toUpperCase())}
+              onKeyDown={(e) => { if (e.key === 'Enter' && code.length === 2) act('add', () => api.country.rule(code, 'add'), `${countryName(code)} added`).then(() => setCode('')) }} />
+            <button className="btn" disabled={code.length !== 2 || busy === 'add'} onClick={() => act('add', () => api.country.rule(code, 'add'), `${countryName(code)} added`).then(() => setCode(''))}>Add {code.length === 2 ? countryName(code) : 'country'}</button>
+            <span className="hint">Two-letter code. Adding a country turns the rules on.</span>
+          </div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><Switch checked={data.block_outbound} onChange={(v) => act('out', () => api.config.patch({ 'country.block_outbound': v }), 'Saved')} /> devices reaching those countries</label>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><Switch checked={data.block_inbound} onChange={(v) => act('in', () => api.config.patch({ 'country.block_inbound': v }), 'Saved')} /> those countries reaching in</label>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}><Switch checked={data.dns} onChange={(v) => act('dns', () => api.config.patch({ 'country.dns': v }), 'Saved')} /> refuse names at the resolver</label>
+          </div>
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+            <Field label="Exempt domains" hint="Comma-separated suffixes the rule ignores, e.g. a CDN or a game.">
+              <input className="input mono" value={domains} onChange={(e) => setDomains(e.target.value)}
+                onBlur={() => act('exd', () => api.config.patch({ 'country.exempt_domains': domains.split(',').map((x) => x.trim()).filter(Boolean) }), 'Exemptions saved')} />
+            </Field>
+            <Field label="Exempt addresses" hint="Comma-separated IPs or ranges.">
+              <input className="input mono" value={ips} onChange={(e) => setIps(e.target.value)}
+                onBlur={() => act('exi', () => api.config.patch({ 'country.exempt_ips': ips.split(',').map((x) => x.trim()).filter(Boolean) }), 'Exemptions saved')} />
+            </Field>
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Countries your traffic went to, last 7 days" flush>
+        <div className="table-wrap">
+          <table className="t">
+            <thead><tr><th>Country</th><th>Connections</th><th>Bytes</th><th>Refused</th><th></th></tr></thead>
+            <tbody>
+              {seen.map((s) => (
+                <tr key={s.country}>
+                  <td>{flag(s.country)} {countryName(s.country)} <span className="hint mono">{s.country}</span></td>
+                  <td className="mono">{num(s.connections)}</td>
+                  <td className="mono">{bytes(s.bytes)}</td>
+                  <td className="mono">{num((data.counters?.['dns:' + s.country] ?? 0) + (data.counters?.['flow:' + s.country] ?? 0))}</td>
+                  <td>
+                    {listed.has(s.country)
+                      ? <button className="btn sm" onClick={() => act('rm:' + s.country, () => api.country.rule(s.country, 'remove'), `${countryName(s.country)} removed`)}>Remove</button>
+                      : <button className="btn sm" onClick={() => act('add:' + s.country, () => api.country.rule(s.country, 'add'), `${countryName(s.country)} added`)}>{data.mode === 'allow' ? 'Allow' : 'Block'}</button>}
+                  </td>
+                </tr>
+              ))}
+              {seen.length === 0 && <tr><td colSpan={5}><Empty title="No country data yet" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </>
   )
 }

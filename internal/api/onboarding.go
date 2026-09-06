@@ -43,6 +43,7 @@ func (s *Server) handleOnboardingState(w http.ResponseWriter, r *http.Request) {
 		"current_mode":   string(cfg.Mode),
 		"placement":      s.placementChecks(cfg),
 		"interfaces":     listInterfaces(),
+		"links":          onboardingLinks(s),
 		"dns_enabled":    cfg.DNS.Enabled,
 		"dhcp_enabled":   cfg.DHCP.Enabled,
 		"adblock":        cfg.AdBlock.Enabled,
@@ -131,21 +132,20 @@ func pctDetail(foreign, total int) string {
 	return itoa(foreign) + " of " + itoa(total) + " recent flows (" + itoa(p) + "%) came from other devices."
 }
 
-
 // handleOnboardingApply writes the wizard's choices in one transaction, so a
 // half-applied setup cannot leave the node in a state nobody chose.
 func (s *Server) handleOnboardingApply(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Mode        string `json:"mode"` // simple | advanced
-		NodeName    string `json:"node_name"`
-		Placement   string `json:"placement"` // observe | inline
-		EnableDNS   *bool  `json:"enable_dns"`
-		EnableAds   *bool  `json:"enable_adblock"`
-		EnableDHCP  *bool  `json:"enable_dhcp"`
-		EnableYT    *bool  `json:"enable_youtube"`
-		WANIface    string `json:"wan_interface"`
-		Upstreams   []string `json:"upstreams"`
-		Finish      bool   `json:"finish"`
+		Mode       string   `json:"mode"` // simple | advanced
+		NodeName   string   `json:"node_name"`
+		Placement  string   `json:"placement"` // observe | inline
+		EnableDNS  *bool    `json:"enable_dns"`
+		EnableAds  *bool    `json:"enable_adblock"`
+		EnableDHCP *bool    `json:"enable_dhcp"`
+		EnableYT   *bool    `json:"enable_youtube"`
+		WANIface   string   `json:"wan_interface"`
+		Upstreams  []string `json:"upstreams"`
+		Finish     bool     `json:"finish"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -225,4 +225,14 @@ func (s *Server) handleOnboardingReset(w http.ResponseWriter, r *http.Request) {
 	}
 	s.app.Store.Audit(r.RemoteAddr, "onboarding.reset", "", "", "", "ok")
 	writeOK(w, map[string]any{"ok": true, "onboarded": false})
+}
+
+// onboardingLinks pre-fills the wizard with the cable classification so the
+// WAN dropdown starts on the right interface, with the reason shown.
+func onboardingLinks(s *Server) map[string]any {
+	if s.app.Links == nil {
+		return nil
+	}
+	ls, sug := s.app.Links.Refresh()
+	return map[string]any{"links": ls, "suggestion": sug}
 }

@@ -3,7 +3,7 @@ import { api } from '../api'
 import { usePoll, type LiveEvent } from '../hooks'
 import { Banner, Card, Dot, Empty, Icons, Loading, Stat } from '../ui'
 import { ago, bits, bytes, clientName, compact, duration, num, pct, countryFlag } from '../format'
-import type { Client, EventItem, Flow, Summary, SystemStatus } from '../types'
+import type { Client, EventItem, Flow, Summary, SystemStatus, NodeResources } from '../types'
 
 interface Props {
   status: SystemStatus | null
@@ -82,6 +82,8 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
           value={`${summary.clients_online}`}
           sub={`${summary.clients} known · ${compact(summary.blocklist_entries)} block entries`} />
       </div>
+
+      {status?.resources && <NodeResourcesRow r={status.resources} version={status.version} />}
 
       <div className="grid c3">
         <Card title="Subsystems" actions={<span className="tag">up {duration(summary.uptime_seconds)}</span>}>
@@ -274,6 +276,37 @@ function EventList({ events }: { events: EventItem[] }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+
+/**
+ * What the node itself is spending. The daemon's CPU is a share of one core,
+ * the host's of all cores; memory is the daemon's resident set against the
+ * machine. A Pi's firmware throttle word is decoded when present, since
+ * under-voltage is the usual reason a Pi "feels slow".
+ */
+function NodeResourcesRow({ r, version }: { r: NodeResources; version?: string }) {
+  const gb = (b: number) => (b / (1024 ** 3)).toFixed(b >= 10 * 1024 ** 3 ? 0 : 1) + ' GB'
+  const memPct = r.mem_total_bytes > 0 ? Math.round((r.rss_bytes / r.mem_total_bytes) * 100) : 0
+  const hostUsed = r.mem_total_bytes > 0 ? Math.round(((r.mem_total_bytes - r.mem_available_bytes) / r.mem_total_bytes) * 100) : 0
+  const hot = (r.temp_c ?? 0) >= 75
+  const throttledNow = (r.throttled ?? '').startsWith('now')
+  return (
+    <div className="grid c4">
+      <Stat label="Orbis CPU" tone={r.process_cpu_percent > 150 ? 'amber' : undefined}
+        value={`${Math.round(r.process_cpu_percent)}%`}
+        sub={`of one core · host ${Math.round(r.host_cpu_percent)}% of ${r.cores} · load ${r.load1.toFixed(2)}`} />
+      <Stat label="Orbis memory" tone={memPct > 60 ? 'amber' : undefined}
+        value={gb(r.rss_bytes)}
+        sub={`${memPct}% of ${gb(r.mem_total_bytes)} · host ${hostUsed}% used · heap ${gb(r.heap_bytes)}`} />
+      <Stat label="Temperature" tone={hot || throttledNow ? 'red' : (r.throttled ?? 'ok') !== 'ok' && r.throttled ? 'amber' : undefined}
+        value={r.temp_c ? `${Math.round(r.temp_c)} °C` : 'n/a'}
+        sub={r.throttled ? r.throttled : 'no throttle data on this platform'} />
+      <Stat label="Uptime"
+        value={duration(r.uptime_seconds)}
+        sub={`${version ? `Orbis ${version} · ` : ''}${num(r.goroutines)} goroutines`} />
     </div>
   )
 }

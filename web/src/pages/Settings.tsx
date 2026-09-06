@@ -340,6 +340,11 @@ function GeneralSection({ config, status, save, refresh, toast }: SectionProps) 
       <Card title="Health">
         <dl className="kv">
           <dt>Uptime</dt><dd>{duration(status?.uptime_sec ?? 0)}</dd>
+          {status?.resources && (<>
+            <dt>Orbis CPU</dt><dd>{Math.round(status.resources.process_cpu_percent)}% of one core (host {Math.round(status.resources.host_cpu_percent)}% of {status.resources.cores} cores, load {status.resources.load1.toFixed(2)})</dd>
+            <dt>Orbis memory</dt><dd>{(status.resources.rss_bytes / 1024 ** 3).toFixed(2)} GB resident of {(status.resources.mem_total_bytes / 1024 ** 3).toFixed(1)} GB (heap {(status.resources.heap_bytes / 1024 ** 3).toFixed(2)} GB, {status.resources.goroutines} goroutines)</dd>
+            {status.resources.temp_c ? <><dt>Temperature</dt><dd>{Math.round(status.resources.temp_c)} °C{status.resources.throttled ? `, ${status.resources.throttled}` : ''}</dd></> : null}
+          </>)}
           <dt>Config file</dt><dd>/etc/orbis/orbis.yaml</dd>
           <dt>Database</dt><dd>{config.store.path}</dd>
           <dt>API listening on</dt><dd>{config.api.listen}</dd>

@@ -161,6 +161,7 @@ func (a *App) SystemStatus() map[string]any {
 		"node":       cfg.Node.Name,
 		"version":    orDefaultStr(a.build, "dev"),
 		"uptime_sec": int(a.Uptime().Seconds()),
+		"resources":  a.Resources(),
 		"capture":    a.captureStatus(),
 		"dns":        a.DNS.Stats(),
 		"dhcp":       a.DHCP.Stats(),
@@ -670,6 +671,7 @@ func (a *App) Health() map[string]any {
 	}
 	out := map[string]any{
 		"level": level, "headline": headline, "points": points,
+		"resources":      a.Resources(),
 		"devices_online": online, "devices_total": len(clients), "devices_paused": blocked,
 		"blocked_today": blockedToday, "protection_on": cfg.AdBlock.Enabled,
 		"youtube_tv": cfg.YouTube.Lounge.Enabled, "mode": string(cfg.Mode),

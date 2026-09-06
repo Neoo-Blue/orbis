@@ -70,6 +70,11 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
           <Tile big={health.devices_online} label="devices online" sub={health.devices_paused ? `${health.devices_paused} paused` : 'none paused'} onClick={() => onNavigate('s-devices')} />
           <Tile big={health.protection_on ? 'On' : 'Off'} label="protection" sub={health.youtube_tv ? 'YouTube TV ads skipped' : 'YouTube TV skipping off'} onClick={() => onNavigate('s-protection')} />
           <Tile big="Usage" label="what is using the internet" sub="by app and by device" onClick={() => onNavigate('s-usage')} />
+          {health.resources && (
+            <Tile big={`${Math.round(health.resources.process_cpu_percent)}%`} label="of one CPU core used by Orbis"
+              sub={`${(health.resources.rss_bytes / 1024 ** 3).toFixed(1)} GB memory${health.resources.temp_c ? ` · ${Math.round(health.resources.temp_c)} °C` : ''}${(health.resources.throttled ?? '').startsWith('now') ? ' · power problem' : ''}`}
+              onClick={() => onNavigate('s-settings')} />
+          )}
         </div>
       </Section>
     </div>

@@ -96,6 +96,8 @@ type App struct {
 	Country *country.Manager
 	// IDS is the built-in intrusion detection: logs and flows into bans.
 	IDS *ids.Manager
+	// res samples what the node is spending.
+	res *resourceSampler
 	// Usage rolls the live flow table and the query log into per-device,
 	// per-service counters.
 	Usage *usage.Meter
@@ -643,6 +645,9 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.Country.Run(a.ctx) }()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.IDS.Run(a.ctx) }()
+	a.res = newResourceSampler()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.sampleResources(a.ctx) }()
 
 	if cfg.AdBlock.SmartCapture.Enabled {
 		a.wg.Add(1)

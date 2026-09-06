@@ -233,6 +233,7 @@ export interface Policy {
 // ---- simple interface ----
 
 export interface Health {
+  resources?: NodeResources
   level: 'ok' | 'attention' | 'problem'
   headline: string
   points: Array<{ level: 'ok' | 'attention' | 'problem'; text: string }>
@@ -282,11 +283,31 @@ export interface SysctlStatus {
   error?: string
 }
 
+export interface NodeResources {
+  sampled_at: string
+  process_cpu_percent: number
+  host_cpu_percent: number
+  cores: number
+  rss_bytes: number
+  heap_bytes: number
+  go_sys_bytes: number
+  goroutines: number
+  mem_total_bytes: number
+  mem_available_bytes: number
+  load1: number
+  load5: number
+  load15: number
+  temp_c?: number
+  throttled?: string
+  uptime_seconds: number
+}
+
 export interface SystemStatus {
   mode: Mode
   node: string
   version?: string
   uptime_sec: number
+  resources?: NodeResources
   capture: Record<string, number | boolean>
   dns: Record<string, unknown>
   dhcp: Record<string, unknown>

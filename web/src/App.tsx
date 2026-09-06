@@ -364,8 +364,8 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
               </Banner>
             </div>
           )}
-          {!updated && route !== 'settings' && (
-            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }} className="update-slot">
+          {!updated && route !== 'settings' && route !== 's-settings' && (
+            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
               <UpdateBanner onSettings={() => navigate('settings')} />
             </div>
           )}

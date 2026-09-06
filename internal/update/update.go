@@ -122,12 +122,12 @@ func CanApply() bool {
 }
 
 // Run checks at start (after a short delay so the network is up) and every
-// six hours; a kick checks now.
+// hour; a kick checks now.
 func (m *Manager) Run(ctx context.Context) {
 	m.announceInstalled()
 	first := time.NewTimer(2 * time.Minute)
 	defer first.Stop()
-	tick := time.NewTicker(6 * time.Hour)
+	tick := time.NewTicker(time.Hour)
 	defer tick.Stop()
 	for {
 		select {

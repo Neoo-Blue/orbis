@@ -172,7 +172,7 @@ features apply to bare-metal and VM installs.
 
 ### Updating
 
-Orbis checks GitHub for a newer release every six hours and says so on every page and in
+Orbis checks GitHub for a newer release every hour and says so on every page and in
 Settings, About & diagnostics. What happens next depends on how it was installed:
 
 - **Binary under systemd** (the installer's way): one click. Orbis downloads the release for its

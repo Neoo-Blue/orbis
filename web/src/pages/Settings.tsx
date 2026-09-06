@@ -85,8 +85,8 @@ export function SettingsPage({ status, onAuthChange }: {
   const props = { config, status, save, refresh, interfaces: ifaces?.interfaces ?? [], toast }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '218px minmax(0, 1fr)', gap: 18, alignItems: 'start' }}>
-      <nav style={{ position: 'sticky', top: 0, display: 'grid', gap: 2 }}>
+    <div className="settings-layout">
+      <nav className="settings-nav">
         <div style={{ padding: '0 0 8px' }}>
           <Search value={query} onChange={setQuery} placeholder="Find a setting…" />
         </div>

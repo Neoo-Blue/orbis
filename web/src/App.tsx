@@ -43,7 +43,8 @@ type Route =
   | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services'
   | 'profiles' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
 
-const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
+type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; group?: string; short?: string }
+const ROUTES: NavRoute[] = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
   { id: 'globe', label: 'Globe', icon: 'globe' },
   { id: 'flows', label: 'Connections', icon: 'activity' },
@@ -71,16 +72,29 @@ const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?
 ]
 
 /** The simple interface: seven plain words, one screen each. */
-const SIMPLE_ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
+const SIMPLE_ROUTES: NavRoute[] = [
   { id: 's-home', label: 'Home', icon: 'grid' },
   { id: 's-devices', label: 'Devices', icon: 'devices' },
-  { id: 's-protection', label: 'Protection', icon: 'shield' },
+  { id: 's-protection', label: 'Protection', icon: 'shield', short: 'Protect' },
   { id: 's-usage', label: 'Usage', icon: 'tv' },
   { id: 'assistant', label: 'Ask', icon: 'chat' },
   { id: 's-alerts', label: 'Alerts', icon: 'bell' },
   { id: 's-settings', label: 'Settings', icon: 'gear' },
 ]
 const ALL_ROUTES = [...ROUTES, ...SIMPLE_ROUTES]
+
+/** useMediaQuery tracks a CSS media query, for the few places markup (not
+ *  style) has to differ on a phone. */
+function useMediaQuery(q: string): boolean {
+  const [match, setMatch] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
+  useEffect(() => {
+    const m = window.matchMedia(q)
+    const on = () => setMatch(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [q])
+  return match
+}
 
 function routeFromHash(): Route {
   const raw = location.hash.replace(/^#\/?/, '').split('/')[0]
@@ -212,9 +226,10 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   const candidates = summary?.ad_candidates ?? 0
 
   const navRoutes = ui === 'simple' ? SIMPLE_ROUTES : ROUTES
+  const narrow = useMediaQuery('(max-width: 880px)')
   const grouped = useMemo(() => {
-    const out: Array<{ group?: string; items: typeof ROUTES }> = []
-    let current: { group?: string; items: typeof ROUTES } | null = null
+    const out: Array<{ group?: string; items: NavRoute[] }> = []
+    let current: { group?: string; items: NavRoute[] } | null = null
     for (const r of navRoutes) {
       if (r.group || !current) {
         current = { group: r.group, items: [] }
@@ -244,12 +259,12 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           </svg>
           <div>
             <div className="brand-name">Orbis</div>
-            <span className={`brand-mode ${mode}`}>{mode}</span>
+            <span className={`brand-mode ${mode}`} title={`${mode} mode`}>{mode}</span>
           </div>
         </div>
 
         {grouped.map((g, gi) => (
-          <div key={gi}>
+          <div key={gi} className="nav-section">
             {g.group && <div className="nav-group">{g.group}</div>}
             {g.items.map((r) => {
               const Icon = Icons[r.icon]
@@ -261,7 +276,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
                 <button key={r.id} className="nav-item" onClick={() => navigate(r.id)} title={r.label}
                   aria-current={shown === r.id ? 'page' : undefined}>
                   <Icon />
-                  <span>{r.label}</span>
+                  <span>{narrow && r.short ? r.short : r.label}</span>
                   {badge}
                 </button>
               )

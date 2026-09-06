@@ -41,10 +41,13 @@ Findings are grouped by what was done about them.
   obvious next step.
 - **Onboarding** offers Simple and Advanced but only changes which wizard
   steps show; it should also set `node.ui_mode`.
-- **Mobile.** The advanced navigation collapses to an icon rail at 880px with
-  no labels; tables overflow horizontally by design. The simple mode is
-  mobile-first; the advanced mode is desktop-first and should stay so, but the
-  icon rail needs tooltips.
+- **Mobile** (fixed 2026-09-05, verified with phone-size screenshots of every
+  page on a scratch instance). The simple tab bar had stacked vertically because
+  the nav wraps items in a section div; the top bar squeezed the mode toggle to
+  a sliver; Settings kept its 218 px side column; stat grids stayed two columns
+  from an unlayered desktop rule; tab strips wrapped their labels; drawers were
+  wider than the screen. All addressed. The advanced icon rail now has tooltips.
+  Tables still scroll horizontally by design.
 - **Empty states** vary in tone. Some explain what to do next, some do not.
 - **Destructive actions** use `confirm()`; a consistent in-app confirmation
   with an undo toast would be better, particularly for block and delete.

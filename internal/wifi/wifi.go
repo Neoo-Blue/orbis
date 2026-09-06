@@ -282,22 +282,39 @@ func (m *Manager) startLocked(ctx context.Context, cfg config.WiFiConfig, iface 
 		return err
 	}
 
-	cmd := exec.Command(hostapd, path)
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start hostapd: %w", err)
+	// A hostapd left by a previous daemon is still letting go of the
+	// adapter for a second or two after it was told to stop; starting
+	// underneath it fails at once. Wait for it, then try twice.
+	for i := 0; i < 10; i++ {
+		if out, _ := exec.CommandContext(ctx, "pgrep", "-f", "hostapd .*"+iface).Output(); len(strings.TrimSpace(string(out))) == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	m.cmd, m.running, m.iface, m.startedAt = cmd, true, iface, time.Now()
-	m.lastLines = nil
-	go m.pump(stdout)
-	go func() { _ = cmd.Wait() }()
+	var cmd *exec.Cmd
+	for attempt := 0; attempt < 2; attempt++ {
+		cmd = exec.Command(hostapd, path)
+		stdout, _ := cmd.StdoutPipe()
+		cmd.Stderr = cmd.Stdout
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("start hostapd: %w", err)
+		}
+		m.cmd, m.running, m.iface, m.startedAt = cmd, true, iface, time.Now()
+		m.lastLines = nil
+		go m.pump(stdout)
+		go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
 
-	// hostapd reports a bad channel or a busy adapter within a second.
-	time.Sleep(1500 * time.Millisecond)
-	if cmd.ProcessState != nil {
+		// hostapd reports a bad channel or a busy adapter within a second.
+		time.Sleep(1500 * time.Millisecond)
+		if cmd.ProcessState == nil {
+			break
+		}
 		m.running = false
-		return fmt.Errorf("hostapd exited at once: %s", m.tail())
+		if attempt == 1 {
+			return fmt.Errorf("hostapd exited at once: %s", m.tail())
+		}
+		m.log("wifi: hostapd exited at once (%s); retrying", m.tail())
+		time.Sleep(3 * time.Second)
 	}
 
 	if mode == "routed" {

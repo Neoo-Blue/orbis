@@ -534,6 +534,9 @@ func (w *Watcher) propose(sug Suggestion) {
 	}
 }
 
+// signature is the carrier state of every port. The default route is left
+// out on purpose: tunnels and multi-WAN move it around at runtime, and a
+// route moving is not a cable moving.
 func signature(links []Link) string {
 	parts := make([]string, 0, len(links))
 	for _, l := range links {
@@ -541,11 +544,7 @@ func signature(links []Link) string {
 		if l.Carrier {
 			c = "1"
 		}
-		d := ""
-		if l.DefaultRoute {
-			d = "*"
-		}
-		parts = append(parts, l.Name+d+"="+c)
+		parts = append(parts, l.Name+"="+c)
 	}
 	return strings.Join(parts, ",")
 }

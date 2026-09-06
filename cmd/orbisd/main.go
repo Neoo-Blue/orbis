@@ -9,9 +9,14 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +24,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/app"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/mcp"
+	"github.com/Neoo-Blue/orbis/internal/update"
 )
 
 // version is overwritten at build time with -ldflags "-X main.version=...".
@@ -36,11 +42,24 @@ func main() {
 		showVersion = flag.Bool("version", false, "print version and exit")
 		checkOnly   = flag.Bool("check", false, "validate the configuration and exit")
 		printRules  = flag.Bool("print-ruleset", false, "render the nftables ruleset to stdout and exit")
+		selfUpdate  = flag.Bool("update", false, "install the latest release from GitHub over this binary and exit")
 		mcpMode     = flag.Bool("mcp", false, "run as a Model Context Protocol server on stdin/stdout")
 		mcpWrite    = flag.Bool("mcp-write", false, "allow the MCP server to change configuration (off by default)")
 		verbose     = flag.Bool("v", false, "verbose logging")
 	)
 	flag.Parse()
+
+	// A small board has no memory cgroup to lean on, so the runtime itself
+	// is told where the ceiling is: the collector works harder as the heap
+	// nears it instead of the kernel killing the daemon at the wall.
+	applyMemoryLimit()
+	if *selfUpdate {
+		os.Exit(runSelfUpdate(*configPath))
+	}
+	// Profiling is opt-in and loopback-only: ORBIS_PPROF=127.0.0.1:6060.
+	if addr := os.Getenv("ORBIS_PPROF"); addr != "" {
+		startPprof(addr)
+	}
 
 	if *showVersion {
 		fmt.Printf("orbisd %s\n", versionString())
@@ -117,7 +136,7 @@ func main() {
 		logger.Fatalf("api: %v", err)
 	}
 
-	logf("orbis %s ready — open http://%s", versionString(), cfg.API.Listen)
+	logf("orbis %s ready, open http://%s", versionString(), cfg.API.Listen)
 	if cfg.Mode == config.ModeObserve {
 		logf("running in OBSERVE mode: nothing is routed through this node and no " +
 			"ruleset is installed. Switch to inline mode when you are ready to enforce.")
@@ -176,4 +195,102 @@ func versionString() string {
 		return "dev+" + rev + dirty
 	}
 	return version
+}
+
+// applyMemoryLimit sets the Go soft memory limit to 70% of physical memory
+// unless GOMEMLIMIT already says otherwise.
+func applyMemoryLimit() {
+	if os.Getenv("GOMEMLIMIT") != "" {
+		return
+	}
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return
+		}
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || kb <= 0 {
+			return
+		}
+		limit := kb * 1024 * 7 / 10
+		if limit < 512<<20 {
+			limit = 512 << 20
+		}
+		debug.SetMemoryLimit(limit)
+		log.Printf("memory limit %d MB (70%% of %d MB)", limit>>20, kb>>10)
+		return
+	}
+}
+
+// startPprof serves net/http/pprof on a loopback address for diagnosis.
+func startPprof(addr string) {
+	if !strings.HasPrefix(addr, "127.") && !strings.HasPrefix(addr, "localhost") && !strings.HasPrefix(addr, "[::1]") {
+		log.Printf("pprof: refusing to listen on %s; loopback only", addr)
+		return
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	go func() {
+		log.Printf("pprof: listening on %s", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Printf("pprof: %v", err)
+		}
+	}()
+}
+
+// runSelfUpdate is the headless path: check, install, restart, report.
+func runSelfUpdate(configPath string) int {
+	dataDir := "/var/lib/orbis"
+	if cfg, err := config.Load(configPath); err == nil && cfg.Store.Path != "" {
+		dataDir = filepath.Dir(cfg.Store.Path)
+	}
+	if st, err := os.Stat(dataDir); err != nil || !st.IsDir() {
+		dataDir = os.TempDir()
+	}
+	m := update.NewManager(versionString(), dataDir, update.Hooks{}, log.Printf)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	rel, err := m.Check(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "check:", err)
+		return 1
+	}
+	if !update.Newer(rel.Version, versionString()) {
+		fmt.Printf("already up to date: %s (latest release %s)\n", versionString(), rel.Version)
+		return 0
+	}
+	fmt.Printf("updating %s -> %s\n", versionString(), rel.Version)
+	if err := m.Apply(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "update:", err)
+		return 1
+	}
+	last := ""
+	for {
+		st := m.Status()
+		state, _ := st["state"].(string)
+		if state != last {
+			fmt.Println(state)
+			last = state
+		}
+		switch state {
+		case "error":
+			fmt.Fprintln(os.Stderr, st["error"])
+			return 1
+		case "restarting", "installed":
+			fmt.Println("done")
+			return 0
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }

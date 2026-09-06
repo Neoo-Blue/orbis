@@ -108,6 +108,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// needing a lockout table.
 		time.Sleep(750 * time.Millisecond)
 		s.app.Store.Audit(r.RemoteAddr, "auth.login", "", "", "", "failed")
+		if s.app.IDS != nil {
+			s.app.IDS.LoginFailure(r.RemoteAddr)
+		}
 		writeErr(w, http.StatusUnauthorized, "incorrect password")
 		return
 	}

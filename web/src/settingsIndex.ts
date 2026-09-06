@@ -5,7 +5,7 @@
  */
 export type SettingsSection =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
-  | 'dhcp' | 'vpn' | 'tailscale' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
+  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'hosted' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
 
 export interface SettingsEntry { section: SettingsSection; label: string; keywords: string }
 
@@ -25,12 +25,22 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: 'dns', label: 'Encrypted DNS server (DoT, DoH)', keywords: 'serve dns over tls https 853 8443 certificate' },
   { section: 'dns', label: 'Rebind protection', keywords: 'rebinding private answers security' },
   { section: 'adblock', label: 'Ad blocking on or off', keywords: 'ads trackers enable disable' },
+  { section: 'threats', label: 'Block known-bad addresses (threat feeds)', keywords: 'threat intelligence ip feed blocklist spamhaus drop feodo botnet c2 malware attackers reputation' },
+  { section: 'threats', label: 'Ban an address or range', keywords: 'ban block ip cidr timed decision attacker scanner' },
+  { section: 'threats', label: 'CrowdSec bouncer', keywords: 'crowdsec bouncer lapi local api key decisions community blocklist' },
+  { section: 'threats', label: 'Never block these addresses', keywords: 'threat allow exception whitelist vpn endpoint server' },
+  { section: 'threats', label: 'Block or allow countries', keywords: 'country geo block allow china russia geoblock whitelist blacklist region' },
+  { section: 'hosted', label: 'Discover hosted apps (scan interval, extra ports)', keywords: 'discover scan services apps containers ports hosted nas storage' },
+  { section: 'hosted', label: 'Docker hosts (Engine API)', keywords: 'docker socket containers engine api portainer synology 2375' },
+  { section: 'hosted', label: 'Port forwarding via the router (UPnP)', keywords: 'port forward upnp router igd nat open port expose' },
   { section: 'adblock', label: 'Blocklists', keywords: 'lists subscriptions hagezi oisd stevenblack malware phishing update interval' },
   { section: 'adblock', label: 'Allowlist and denylist', keywords: 'allow deny whitelist blacklist exception' },
   { section: 'adblock', label: 'Block DNS bypass (private DNS)', keywords: 'doh bypass cloudflare-dns dns.google android private dns' },
   { section: 'adblock', label: 'Streaming and TV ads list', keywords: 'smart tv roku samsung ads telemetry' },
   { section: 'adblock', label: 'CNAME uncloaking', keywords: 'cname cloaking first party trackers' },
   { section: 'adblock', label: 'Smart capture (learn new ad hosts)', keywords: 'heuristic ai judge candidates auto block score' },
+  { section: 'adblock', label: 'Import from Pi-hole or AdGuard Home', keywords: 'import pihole pi-hole adguard home teleporter gravity adlists yaml migrate' },
+  { section: 'adblock', label: 'Popular blocklists (presets)', keywords: 'preset oisd hagezi adguard dns filter stevenblack urlhaus phishing list subscribe' },
   { section: 'proxy', label: 'Filter proxy on or off', keywords: 'mitm https interception in-stream youtube certificate' },
   { section: 'proxy', label: 'Which hosts are intercepted', keywords: 'intercept hosts bypass hosts patterns' },
   { section: 'proxy', label: 'Only these devices', keywords: 'only clients phone laptop certificate installed' },
@@ -51,6 +61,8 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: 'assistant', label: 'Network brief schedule', keywords: 'brief report check hours notify' },
   { section: 'assistant', label: 'Blocklist specialist review', keywords: 'review suggestions allow block daily' },
   { section: 'assistant', label: 'Anomaly detection', keywords: 'anomaly beacon exfiltration new device alert triage' },
+  { section: 'assistant', label: 'AI threat check (threat intelligence)', keywords: 'threat intelligence assessment risk findings ai intel schedule' },
+  { section: 'assistant', label: 'Active blocking by the assistant', keywords: 'active blocking automatic ban block confidence limits undo ai' },
   { section: 'problems', label: 'Problem recording and GitHub reporting', keywords: 'issues bugs report github token relay privacy scrub' },
   { section: 'capture', label: 'Packet capture interfaces', keywords: 'capture interfaces snaplen conntrack pcap' },
   { section: 'storage', label: 'Database path and retention', keywords: 'database sqlite retention days flows events prune' },

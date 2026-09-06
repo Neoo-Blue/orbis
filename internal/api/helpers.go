@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
@@ -314,6 +315,24 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 		return setInt(&c.AI.Review.IntervalHours, raw)
 	case "ai.review.max_suggestions":
 		return setInt(&c.AI.Review.MaxSuggestions, raw)
+	case "ai.intel.enabled":
+		return setBool(&c.AI.Intel.Enabled, raw)
+	case "ai.intel.interval_hours":
+		return setInt(&c.AI.Intel.IntervalHours, raw)
+	case "ai.intel.active_blocking":
+		return setBool(&c.AI.Intel.ActiveBlocking, raw)
+	case "ai.intel.min_confidence":
+		return setFloat(&c.AI.Intel.MinConfidence, raw)
+	case "ai.intel.max_actions_per_run":
+		return setInt(&c.AI.Intel.MaxActionsPerRun, raw)
+	case "ai.intel.max_ban_hours":
+		return setInt(&c.AI.Intel.MaxBanHours, raw)
+	case "ai.intel.ban_addresses":
+		return setBool(&c.AI.Intel.BanAddresses, raw)
+	case "ai.intel.block_domains":
+		return setBool(&c.AI.Intel.BlockDomains, raw)
+	case "ai.intel.notify":
+		return setBool(&c.AI.Intel.Notify, raw)
 
 	case "issues.enabled":
 		return setBool(&c.Issues.Enabled, raw)
@@ -330,6 +349,100 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 			c.Issues.GitHub.Token = v
 			return true
 		}
+	case "ids.enabled":
+		return setBool(&c.IDS.Enabled, raw)
+	case "ids.journal":
+		return setBool(&c.IDS.Journal, raw)
+	case "ids.syslog_listen":
+		return setStr(&c.IDS.SyslogListen, raw)
+	case "ids.flows":
+		return setBool(&c.IDS.Flows, raw)
+	case "ids.ignore":
+		return setStrSlice(&c.IDS.Ignore, raw)
+	case "ids.ban_multiplier":
+		return setFloat(&c.IDS.BanMultiplier, raw)
+	case "country.enabled":
+		return setBool(&c.Country.Enabled, raw)
+	case "country.mode":
+		return setStr(&c.Country.Mode, raw)
+	case "country.countries":
+		return setStrSlice(&c.Country.Countries, raw)
+	case "country.block_outbound":
+		return setBool(&c.Country.BlockOutbound, raw)
+	case "country.block_inbound":
+		return setBool(&c.Country.BlockInbound, raw)
+	case "country.dns":
+		return setBool(&c.Country.DNS, raw)
+	case "country.exempt_clients":
+		return setStrSlice(&c.Country.ExemptClients, raw)
+	case "country.exempt_domains":
+		return setStrSlice(&c.Country.ExemptDomains, raw)
+	case "country.exempt_ips":
+		return setStrSlice(&c.Country.ExemptIPs, raw)
+	case "network.links.auto_assign":
+		return setBool(&c.Network.Links.AutoAssign, raw)
+	case "wifi.enabled":
+		return setBool(&c.WiFi.Enabled, raw)
+	case "wifi.interface":
+		return setStr(&c.WiFi.Interface, raw)
+	case "wifi.ssid":
+		return setStr(&c.WiFi.SSID, raw)
+	case "wifi.passphrase":
+		if v, ok := raw.(string); ok && v != config.MaskedSecret {
+			c.WiFi.Passphrase = v
+			return true
+		}
+	case "wifi.band":
+		return setStr(&c.WiFi.Band, raw)
+	case "wifi.channel":
+		return setInt(&c.WiFi.Channel, raw)
+	case "wifi.country":
+		return setStr(&c.WiFi.Country, raw)
+	case "wifi.hidden":
+		return setBool(&c.WiFi.Hidden, raw)
+	case "wifi.isolate_clients":
+		return setBool(&c.WiFi.IsolateClients, raw)
+	case "wifi.mode":
+		return setStr(&c.WiFi.Mode, raw)
+	case "wifi.bridge":
+		return setStr(&c.WiFi.Bridge, raw)
+	case "wifi.subnet":
+		return setStr(&c.WiFi.Subnet, raw)
+	case "wifi.lan_access":
+		return setBool(&c.WiFi.LANAccess, raw)
+	case "wifi.wpa3":
+		return setBool(&c.WiFi.WPA3, raw)
+	case "discover.enabled":
+		return setBool(&c.Discover.Enabled, raw)
+	case "discover.interval_hours":
+		return setInt(&c.Discover.IntervalHours, raw)
+	case "discover.upnp":
+		return setBool(&c.Discover.UPnP, raw)
+	case "discover.extra_ports":
+		return setIntSlice(&c.Discover.ExtraPorts, raw)
+	case "threat.enabled":
+		return setBool(&c.Threat.Enabled, raw)
+	case "threat.block_outbound":
+		return setBool(&c.Threat.BlockOutbound, raw)
+	case "threat.block_inbound":
+		return setBool(&c.Threat.BlockInbound, raw)
+	case "threat.update_interval_hours":
+		return setInt(&c.Threat.UpdateIntervalHours, raw)
+	case "threat.allow":
+		return setStrSlice(&c.Threat.Allow, raw)
+	case "threat.auto_ban_scanners":
+		return setBool(&c.Threat.AutoBanScanners, raw)
+	case "threat.crowdsec.enabled":
+		return setBool(&c.Threat.CrowdSec.Enabled, raw)
+	case "threat.crowdsec.url":
+		return setStr(&c.Threat.CrowdSec.URL, raw)
+	case "threat.crowdsec.api_key":
+		if v, ok := raw.(string); ok && v != config.MaskedSecret {
+			c.Threat.CrowdSec.APIKey = v
+			return true
+		}
+	case "threat.crowdsec.poll_seconds":
+		return setInt(&c.Threat.CrowdSec.PollSeconds, raw)
 	case "issues.github.relay_url":
 		return setStr(&c.Issues.GitHub.RelayURL, raw)
 	case "issues.github.auto_report":
@@ -391,6 +504,36 @@ func setFloat(dst *float64, raw any) bool {
 		return true
 	}
 	return false
+}
+
+// setIntSlice accepts a JSON array of numbers or numeric strings, or a
+// comma-separated string, for lists of ports.
+func setIntSlice(dst *[]int, raw any) bool {
+	var out []int
+	add := func(v any) {
+		switch x := v.(type) {
+		case float64:
+			out = append(out, int(x))
+		case string:
+			for _, part := range strings.Split(x, ",") {
+				if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
+					out = append(out, n)
+				}
+			}
+		}
+	}
+	switch x := raw.(type) {
+	case []any:
+		for _, v := range x {
+			add(v)
+		}
+	case string, float64:
+		add(x)
+	default:
+		return false
+	}
+	*dst = out
+	return true
 }
 
 func setStrSlice(dst *[]string, raw any) bool {

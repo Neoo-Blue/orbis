@@ -22,7 +22,84 @@ func (s *Server) mountAI(r chi.Router) {
 		r.Get("/notes", s.handleNotes)
 		r.Post("/notes", s.handleNoteCreate)
 		r.Delete("/notes/{id}", s.handleNoteDelete)
+		r.Get("/intel", s.handleIntel)
+		r.Post("/intel/run", s.handleIntelRun)
+		r.Post("/actions/{id}", s.handleAIActionDecide)
+		r.Post("/explain", s.handleExplain)
+		r.Post("/judge", s.handleJudge)
 	})
+}
+
+// Threat intelligence: the assessments, running one, deciding actions.
+
+func (s *Server) handleIntel(w http.ResponseWriter, r *http.Request) {
+	writeOK(w, s.app.IntelStatus(queryInt(r, "limit", 5, 60)))
+}
+
+func (s *Server) handleIntelRun(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Hours int `json:"hours"`
+	}
+	_ = decodeJSON(r, &req)
+	if req.Hours <= 0 {
+		req.Hours = s.cfg.Snapshot().AI.Intel.IntervalHours
+	}
+	out, err := s.app.RunIntel(r.Context(), req.Hours)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.app.Store.Audit(r.RemoteAddr, "ai.intel", "", "", fmt.Sprint(req.Hours), "ok")
+	writeOK(w, out)
+}
+
+func (s *Server) handleAIActionDecide(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Decision string `json:"decision"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	a, err := s.app.DecideAIAction(chi.URLParam(r, "id"), req.Decision, r.RemoteAddr)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"action": a})
+}
+
+func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind string `json:"kind"`
+		Key  string `json:"key"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.app.Explain(r.Context(), req.Kind, req.Key)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeOK(w, out)
+}
+
+func (s *Server) handleJudge(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Domain string `json:"domain"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := s.app.JudgeDomain(r.Context(), req.Domain)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeOK(w, out)
 }
 
 func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) {

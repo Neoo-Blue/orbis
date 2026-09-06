@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -19,23 +20,30 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
+	"github.com/Neoo-Blue/orbis/internal/country"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
+	"github.com/Neoo-Blue/orbis/internal/discover"
 	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
 	"github.com/Neoo-Blue/orbis/internal/dpi"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/flows"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
+	"github.com/Neoo-Blue/orbis/internal/ids"
 	"github.com/Neoo-Blue/orbis/internal/intercept"
 	"github.com/Neoo-Blue/orbis/internal/issues"
+	"github.com/Neoo-Blue/orbis/internal/links"
 	"github.com/Neoo-Blue/orbis/internal/lounge"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
 	"github.com/Neoo-Blue/orbis/internal/notify"
 	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"github.com/Neoo-Blue/orbis/internal/store"
+	"github.com/Neoo-Blue/orbis/internal/threat"
 	"github.com/Neoo-Blue/orbis/internal/topology"
+	"github.com/Neoo-Blue/orbis/internal/update"
 	"github.com/Neoo-Blue/orbis/internal/usage"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
+	"github.com/Neoo-Blue/orbis/internal/wifi"
 	"github.com/google/uuid"
 	"github.com/miekg/dns"
 )
@@ -72,6 +80,8 @@ type App struct {
 	Lounge    *lounge.Manager
 
 	AI        *ai.Client
+	Intel     *ai.Intel
+	Explainer *ai.Explainer
 	Assistant *ai.Assistant
 	Analyzer  *ai.Analyzer
 	Briefer   *ai.Briefer
@@ -79,6 +89,21 @@ type App struct {
 
 	// Issues is the problem recorder (and GitHub reporter).
 	Issues *issues.Recorder
+	// Threat is IP threat intelligence: feeds, bans, the CrowdSec bouncer.
+	Threat *threat.Manager
+	// Discover finds what is hosted on the network and owns port forwards.
+	Discover *discover.Manager
+	// Links tells the cables apart; WiFi runs the access point.
+	Links *links.Watcher
+	WiFi  *wifi.Manager
+	// Country blocks or allows traffic by the country an address is in.
+	Country *country.Manager
+	// IDS is the built-in intrusion detection: logs and flows into bans.
+	IDS *ids.Manager
+	// res samples what the node is spending.
+	res *resourceSampler
+	// Update notices new releases and installs them where it can.
+	Update *update.Manager
 	// Usage rolls the live flow table and the query log into per-device,
 	// per-service counters.
 	Usage *usage.Meter
@@ -105,6 +130,11 @@ type App struct {
 
 	policyMu sync.RWMutex
 	policies map[string]*store.Policy
+
+	// geoCache is the last country set pushed, so a table rendered later
+	// (intercept, wifi, a full firewall apply) starts with it.
+	geoMu    sync.Mutex
+	geoCache struct{ v4, v6, exempt []string }
 
 	recordsMu sync.RWMutex
 	records   *dnsproxy.RecordSet
@@ -186,6 +216,15 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		a.Bus.Publish(Event{Type: string(u.Kind), Data: u.Flow})
 		if u.Kind == flows.UpdateNew {
 			a.observeConsent(u.Flow)
+			if a.Threat != nil {
+				a.Threat.Observe(u.Flow)
+			}
+			if a.Country != nil {
+				a.Country.Observe(u.Flow)
+			}
+			if a.IDS != nil {
+				a.IDS.ObserveFlow(u.Flow)
+			}
 		}
 	})
 	a.Registry.SetOnNew(func(c *store.Client) {
@@ -210,6 +249,226 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	// Firewall + VPN.
 	a.Firewall = firewall.New(cfg, st, logf)
 	a.Tracker.SetEnforcer(a.Firewall)
+
+	// Threat intelligence sits between the flow tracker (which sees every
+	// new connection) and the two enforcement points (the firewall's sets
+	// when inline, the intercept table for pulled-in devices otherwise).
+	a.Threat = threat.NewManager(cfg, st, a.Geo, a.build, logf)
+	a.Firewall.SetThreatSource(a.Threat.Elements)
+	a.Threat.SetOnChange(func(v4, v6 []string) {
+		if err := a.Firewall.SyncThreatSets(v4, v6); err != nil {
+			logf("threat: firewall set sync: %v", err)
+		}
+		if a.Intercept != nil {
+			if err := a.Intercept.SyncThreat(v4); err != nil {
+				logf("threat: intercept set sync: %v", err)
+			}
+		}
+		if a.WiFi != nil {
+			if err := a.WiFi.SyncThreat(v4); err != nil {
+				logf("threat: wifi set sync: %v", err)
+			}
+		}
+	})
+	a.Threat.SetBlocker(func(flowID, reason string) bool { return a.Tracker.BlockFlow(flowID, reason) })
+	a.Threat.SetEnforced(a.threatEnforced)
+	a.Threat.SetNamer(func(id string) string {
+		for _, c := range a.Registry.All() {
+			if c.ID == id {
+				if c.Label != "" {
+					return c.Label
+				}
+				if c.Hostname != "" {
+					return c.Hostname
+				}
+				return c.IP
+			}
+		}
+		return ""
+	})
+	a.Threat.SetEmit(a.emit)
+
+	// Hosted apps, storage and port forwards.
+	a.Discover = discover.NewManager(cfg, st, discover.Hooks{
+		Hosts: func() []discover.Host {
+			clients := a.Registry.All()
+			out := make([]discover.Host, 0, len(clients))
+			for _, c := range clients {
+				name := c.Label
+				if name == "" {
+					name = c.Hostname
+				}
+				if name == "" {
+					name = c.IP
+				}
+				out = append(out, discover.Host{
+					ID: c.ID, IP: c.IP, Name: name, Vendor: c.Vendor, DeviceType: c.DeviceType, MAC: c.MAC,
+					Online: c.Online, LastSeen: c.LastSeen,
+				})
+			}
+			return out
+		},
+		ActiveFlows:   func() []store.Flow { return a.Tracker.Active(0) },
+		Emit:          a.emit,
+		AddRule:       a.AddRule,
+		DeleteRule:    a.DeleteRule,
+		ApplyFirewall: a.Firewall.Apply,
+		Inline: func() (bool, string) {
+			c := a.Cfg.Snapshot()
+			if c.Mode != config.ModeInline || !c.Firewall.Enabled || !a.Firewall.Available() {
+				return false, ""
+			}
+			for _, z := range c.Firewall.Zones {
+				if z.Trust == "wan" {
+					return true, z.Name
+				}
+			}
+			return true, ""
+		},
+		NodeAddr: nodeLANAddr,
+	}, logf)
+
+	// Cables and Wi-Fi.
+	a.WiFi = wifi.NewManager(cfg, wifi.Hooks{
+		StartDHCP:      func(scope config.DHCPScope) (func(), error) { return a.DHCP.StartScope(scope) },
+		ThreatElements: func() []string { v4, _ := a.Threat.Elements(); return v4 },
+		GeoElements: func() ([]string, []string, bool, bool) {
+			v4, _, ex := a.geoSets()
+			c := a.Cfg.Snapshot().Country
+			on := c.Enabled && c.Mode != "allow"
+			return v4, ex, on && c.BlockOutbound, on && c.BlockInbound
+		},
+		NameByMAC: func(mac string) string {
+			for _, c := range a.Registry.All() {
+				if strings.EqualFold(c.MAC, mac) {
+					if c.Label != "" {
+						return c.Label
+					}
+					return c.Hostname
+				}
+			}
+			return ""
+		},
+		LeaseByMAC: func(mac string) string {
+			for _, l := range a.DHCP.Leases() {
+				if strings.EqualFold(l.MAC, mac) {
+					return l.IP
+				}
+			}
+			return ""
+		},
+		Emit: a.emit,
+	}, logf)
+	a.Links = links.NewWatcher(cfg, links.Hooks{
+		ClientsIn: func(prefixes []netip.Prefix) int {
+			n := 0
+			for _, c := range a.Registry.All() {
+				addr, err := netip.ParseAddr(c.IP)
+				if err != nil {
+					continue
+				}
+				for _, p := range prefixes {
+					if p.Contains(addr) {
+						n++
+						break
+					}
+				}
+			}
+			return n
+		},
+		WiFiEnabled: func() bool { return a.Cfg.Snapshot().WiFi.Enabled },
+		Emit:        a.emit,
+		Applied: func() {
+			c := a.Cfg.Snapshot()
+			if c.Mode == config.ModeInline && c.Firewall.Enabled {
+				if err := a.Firewall.Apply(a.ctx); err != nil {
+					logf("links: firewall re-apply: %v", err)
+				}
+			}
+		},
+	}, logf)
+
+	// Country rules: decided at the resolver, the flow tracker and, in
+	// block mode, as packet-filter sets on every enforcement point.
+	a.Country = country.NewManager(cfg, st, a.Geo, country.Hooks{
+		OnSets: func(v4, v6, exempt4 []string) {
+			a.geoMu.Lock()
+			a.geoCache.v4, a.geoCache.v6, a.geoCache.exempt = v4, v6, exempt4
+			a.geoMu.Unlock()
+			if err := a.Firewall.SyncGeoSets(v4, v6, exempt4); err != nil {
+				logf("country: firewall set sync: %v", err)
+			}
+			if a.Intercept != nil {
+				if err := a.Intercept.SyncGeo(v4, exempt4); err != nil {
+					logf("country: intercept set sync: %v", err)
+				}
+			}
+			if a.WiFi != nil {
+				if err := a.WiFi.SyncGeo(v4, exempt4); err != nil {
+					logf("country: wifi set sync: %v", err)
+				}
+			}
+		},
+		Emit:     a.emit,
+		Blocker:  func(flowID, reason string) bool { return a.Tracker.BlockFlow(flowID, reason) },
+		Enforced: a.threatEnforced,
+		ClientFor: func(addr netip.Addr) (string, string) {
+			c := a.Registry.ByIP(addr)
+			if c == nil {
+				return "", ""
+			}
+			name := c.Label
+			if name == "" {
+				name = c.Hostname
+			}
+			if name == "" {
+				name = c.IP
+			}
+			return c.ID, name
+		},
+		ClientAddr: func(id string) string {
+			if c := a.Registry.ByID(id); c != nil {
+				return c.IP
+			}
+			return ""
+		},
+	}, logf)
+	a.Firewall.SetGeoSource(func() (v4, v6, exempt4 []string) { return a.geoSets() })
+
+	// Intrusion detection: this node's journal, syslog from other hosts,
+	// Orbis's own login page and the flow table, into timed bans that the
+	// threat sets enforce everywhere.
+	a.IDS = ids.NewManager(cfg, st, ids.Hooks{
+		Ban: func(ip string, d time.Duration, reason string) (*time.Time, error) {
+			dec, err := a.Threat.Ban(ip, d, reason, "ids", "ids")
+			if err != nil {
+				return nil, err
+			}
+			return dec.Until, nil
+		},
+		Locate: func(addr netip.Addr) (string, string) {
+			if a.Geo == nil {
+				return "", ""
+			}
+			loc := a.Geo.LookupAddr(addr)
+			return loc.Country, loc.ASOrg
+		},
+		ClientFor: func(addr netip.Addr) (string, string) {
+			c := a.Registry.ByIP(addr)
+			if c == nil {
+				return "", ""
+			}
+			name := c.Label
+			if name == "" {
+				name = c.Hostname
+			}
+			if name == "" {
+				name = c.IP
+			}
+			return c.ID, name
+		},
+		Emit: a.emit,
+	}, logf)
 	a.VPN = vpn.New(cfg, st, logf)
 	a.Tailscale = vpn.NewTailscale(cfg, logf)
 	a.Egress = vpn.NewEgressManager(logf)
@@ -244,6 +503,12 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		LocalRecords: a.localRecords,
 		Publish: func(q store.DNSQuery) {
 			a.Bus.Publish(Event{Type: "dns.query", Data: q})
+		},
+		CountryCheck: func(client netip.Addr, name string, addrs []netip.Addr) (bool, string) {
+			if a.Country == nil {
+				return false, ""
+			}
+			return a.Country.CheckAnswer(client, name, addrs)
 		},
 	}, logf)
 
@@ -287,6 +552,8 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Briefer = ai.NewBriefer(cfg, a.AI, a, st, a.recordBrief, logf)
 	a.Reviewer = ai.NewReviewer(cfg, a.AI, a, st, a.recordBrief, logf)
 	a.Smart.SetJudge(ai.NewJudge(a.AI, logf))
+	a.Intel = ai.NewIntel(cfg, a.AI, a, st, a.recordBrief, logf)
+	a.Explainer = ai.NewExplainer(a.AI, a, st, logf)
 
 	// Problem recorder. Device names are scrubbed from every report, and
 	// the diagnostics bundle is the same snapshot the status page shows.
@@ -374,6 +641,24 @@ func (a *App) Start() {
 	// the network, so it is as short as the disk allows.
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.Lists.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Threat.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Discover.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Links.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.WiFi.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Country.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.IDS.Run(a.ctx) }()
+	a.res = newResourceSampler()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.sampleResources(a.ctx) }()
+	a.Update = update.NewManager(orDefaultStr(a.build, "dev"), filepath.Dir(cfg.Store.Path), update.Hooks{Emit: a.emit}, a.log)
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Update.Run(a.ctx) }()
 
 	if cfg.AdBlock.SmartCapture.Enabled {
 		a.wg.Add(1)
@@ -400,6 +685,10 @@ func (a *App) Start() {
 			a.raise(store.SevWarning, "dhcp", "DHCP server failed to start", err.Error())
 		}
 	}
+
+	// Listed addresses come from the database first, so the ruleset that is
+	// about to render already carries them; the network refresh follows.
+	a.Threat.Load()
 
 	if cfg.Firewall.Enabled && cfg.Mode == config.ModeInline {
 		if err := a.Firewall.Apply(a.ctx); err != nil {
@@ -446,6 +735,18 @@ func (a *App) Start() {
 
 	if cfg.AI.Enabled && cfg.AI.Anomaly.Enabled {
 		a.wg.Add(1)
+		a.Analyzer.OnScan = func(src string) {
+			if !a.Cfg.Snapshot().Threat.AutoBanScanners {
+				return
+			}
+			addr, err := netip.ParseAddr(src)
+			if err != nil || geoip.IsPrivate(addr) || a.Tracker == nil {
+				return
+			}
+			if _, err := a.Threat.Ban(src, time.Hour, "port scan detected by the anomaly detector", "scan", "anomaly"); err == nil {
+				a.log("threat: banned %s for an hour after a scan finding", src)
+			}
+		}
 		go func() { defer a.wg.Done(); a.Analyzer.Run(a.ctx) }()
 	}
 	// The model router and the brief writer always run: both read the
@@ -455,6 +756,8 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.AI.Router().Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.Briefer.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.Reviewer.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Intel.Run(a.ctx) }()
 
 	// Installing a GeoIP database should fix the history too, not just new
 	// traffic, so reconcile stored rows once at startup.
@@ -679,7 +982,7 @@ func (a *App) SyncTunnelRules() {
 		// leaving it to the operator is the difference between the VPN
 		// working and appearing to connect but moving nothing.
 		if err := enableForwarding(tc.IPv6); err != nil {
-			a.log("firewall: could not enable IP forwarding (%v) — tunnel clients will connect but reach nothing", err)
+			a.log("firewall: could not enable IP forwarding (%v), tunnel clients will connect but reach nothing", err)
 			a.raise(store.SevWarning, "vpn", "IP forwarding is off",
 				"Tunnel clients can connect but cannot reach anything through this node. "+
 					"On a container, set net.ipv4.ip_forward=1 on the host.")
@@ -765,6 +1068,77 @@ func (a *App) raise(severity, category, title, detail string) {
 				Severity: severity, Category: category, Title: title, Detail: detail, Source: "auto",
 			})
 		}()
+	}
+}
+
+// emit records an event that is a detection rather than a defect: stored,
+// streamed, notified when it is a warning or worse, never filed as a problem.
+func (a *App) emit(ev store.Event) {
+	_ = a.Store.AddEvent(ev)
+	if a.Notifier != nil && store.SeverityRank(ev.Severity) >= store.SeverityRank(store.SevWarning) {
+		a.Notifier.Send(ev)
+	}
+	a.Bus.Publish(Event{Type: "event.new", Data: map[string]any{
+		"severity": ev.Severity, "category": ev.Category, "title": ev.Title, "detail": ev.Detail, "client_id": ev.ClientID,
+	}})
+}
+
+// threatEnforced answers whether a listed-address hit for this local device
+// is dropped by a ruleset this node controls, or merely observed.
+func (a *App) threatEnforced(local netip.Addr, outbound bool) bool {
+	cfg := a.Cfg.Snapshot()
+	if cfg.Mode == config.ModeInline && cfg.Firewall.Enabled && a.Firewall.Available() {
+		return true
+	}
+	if cfg.Network.Intercept.Enabled && a.Intercept != nil && a.Intercept.Running() && local.IsValid() {
+		if _, ok := cfg.Network.Intercept.Clients[local.String()]; ok {
+			return true
+		}
+	}
+	// Wi-Fi clients in routed mode go through this node's own table.
+	if a.WiFi != nil && a.WiFi.Running() && local.IsValid() {
+		if p := a.WiFi.Subnet(); p.IsValid() && p.Contains(local) {
+			return true
+		}
+	}
+	return false
+}
+
+// geoSets is the last country set pushed by the country manager.
+func (a *App) geoSets() (v4, v6, exempt4 []string) {
+	a.geoMu.Lock()
+	defer a.geoMu.Unlock()
+	return a.geoCache.v4, a.geoCache.v6, a.geoCache.exempt
+}
+
+// ThreatEnforcement describes where drops actually happen, for the UI.
+func (a *App) ThreatEnforcement() map[string]any {
+	cfg := a.Cfg.Snapshot()
+	inline := cfg.Mode == config.ModeInline && cfg.Firewall.Enabled && a.Firewall.Available()
+	intercepting := 0
+	if cfg.Network.Intercept.Enabled && a.Intercept != nil && a.Intercept.Running() {
+		intercepting = len(cfg.Network.Intercept.Clients)
+	}
+	return map[string]any{
+		"mode": string(cfg.Mode), "inline": inline, "nft_available": a.Firewall.Available(),
+		"intercepted_clients": intercepting,
+		"detect_only":         !inline && intercepting == 0,
+	}
+}
+
+// ReapplyThreatEnforcement re-renders whichever rulesets embed the threat
+// rules after the feature or a direction was switched.
+func (a *App) ReapplyThreatEnforcement() {
+	cfg := a.Cfg.Snapshot()
+	if cfg.Firewall.Enabled && cfg.Mode == config.ModeInline {
+		if err := a.Firewall.Apply(a.ctx); err != nil {
+			a.log("threat: firewall re-apply: %v", err)
+		}
+	}
+	if cfg.Network.Intercept.Enabled && len(cfg.Network.Intercept.Clients) > 0 {
+		if err := a.SyncIntercept(); err != nil {
+			a.log("threat: intercept re-apply: %v", err)
+		}
 	}
 }
 

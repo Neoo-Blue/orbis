@@ -53,6 +53,19 @@ type ForwardConfig struct {
 	// straight past it.
 	HTTPScoped  bool
 	HTTPClients []netip.Addr
+	// Threat4 are listed addresses (threat feeds and bans) as nftables
+	// elements. With ThreatOut, an intercepted client's connections to them
+	// are dropped; with ThreatIn, connections from them to an intercepted
+	// client are. This is how a node in observe mode still enforces for the
+	// devices it has pulled in front of.
+	Threat4   []string
+	ThreatOut bool
+	ThreatIn  bool
+	// Country sets, same shape: listed ranges, exempt devices, directions.
+	Geo4       []string
+	GeoExempt4 []string
+	GeoOut     bool
+	GeoIn      bool
 }
 
 // ApplyForwarding installs the intercept table. It is idempotent: the table is
@@ -68,6 +81,54 @@ func ApplyForwarding(ctx context.Context, cfg ForwardConfig) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("apply intercept rules: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// SyncThreat replaces the intercept table's listed-address set in one
+// transaction. When the table is not installed there is nothing to sync.
+func SyncThreat(ctx context.Context, v4 []string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "flush set ip %s threat_v4\n", forwardTable)
+	for i := 0; i < len(v4); i += 200 {
+		end := min(i+200, len(v4))
+		fmt.Fprintf(&b, "add element ip %s threat_v4 { %s }\n", forwardTable, strings.Join(v4[i:end], ", "))
+	}
+	cmd := exec.CommandContext(ctx, "nft", "-f", "-")
+	cmd.Stdin = strings.NewReader(b.String())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "No such file or directory") || strings.Contains(msg, "does not exist") {
+			return nil
+		}
+		return fmt.Errorf("sync intercept threat set: %v: %s", err, msg)
+	}
+	return nil
+}
+
+// SyncGeo replaces the intercept table's country sets in one transaction.
+func SyncGeo(ctx context.Context, v4, exempt4 []string) error {
+	var b strings.Builder
+	for _, set := range []struct {
+		name  string
+		elems []string
+	}{{"geo_v4", v4}, {"geo_exempt_v4", exempt4}} {
+		fmt.Fprintf(&b, "flush set ip %s %s\n", forwardTable, set.name)
+		for i := 0; i < len(set.elems); i += 200 {
+			end := min(i+200, len(set.elems))
+			fmt.Fprintf(&b, "add element ip %s %s { %s }\n", forwardTable, set.name, strings.Join(set.elems[i:end], ", "))
+		}
+	}
+	cmd := exec.CommandContext(ctx, "nft", "-f", "-")
+	cmd.Stdin = strings.NewReader(b.String())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if strings.Contains(msg, "No such file or directory") || strings.Contains(msg, "does not exist") {
+			return nil
+		}
+		return fmt.Errorf("sync intercept country sets: %v: %s", err, msg)
 	}
 	return nil
 }
@@ -122,6 +183,52 @@ func renderForwarding(cfg ForwardConfig) string {
 		w("  }")
 	}
 
+	// The drop rules are rendered whenever a direction is switched on, even
+	// with nothing listed yet: the table is built at startup before the first
+	// feed has loaded, and the set is filled in place afterwards. Rules that
+	// depended on the set being non-empty would never appear until a restart.
+	threatOn := cfg.ThreatOut || cfg.ThreatIn
+	w("  set threat_v4 {")
+	w("    type ipv4_addr")
+	w("    flags interval")
+	w("    auto-merge")
+	if len(cfg.Threat4) > 0 {
+		w("    elements = {")
+		for i := 0; i < len(cfg.Threat4); i += 16 {
+			end := min(i+16, len(cfg.Threat4))
+			line := strings.Join(cfg.Threat4[i:end], ", ")
+			if end < len(cfg.Threat4) {
+				line += ","
+			}
+			w("      %s", line)
+		}
+		w("    }")
+	}
+	w("  }")
+	geoOn := cfg.GeoOut || cfg.GeoIn
+	for _, set := range []struct {
+		name  string
+		elems []string
+	}{{"geo_v4", cfg.Geo4}, {"geo_exempt_v4", cfg.GeoExempt4}} {
+		w("  set %s {", set.name)
+		w("    type ipv4_addr")
+		w("    flags interval")
+		w("    auto-merge")
+		if len(set.elems) > 0 {
+			w("    elements = {")
+			for i := 0; i < len(set.elems); i += 16 {
+				end := min(i+16, len(set.elems))
+				line := strings.Join(set.elems[i:end], ", ")
+				if end < len(set.elems) {
+					line += ","
+				}
+				w("      %s", line)
+			}
+			w("    }")
+		}
+		w("  }")
+	}
+
 	// Masquerade intercepted clients out towards the gateway. Without this the
 	// reply is sent to the client's real path and never comes back here, so the
 	// connection hangs.
@@ -158,10 +265,24 @@ func renderForwarding(cfg ForwardConfig) string {
 	// cannot see HTTP/3, and YouTube in particular will happily use it and
 	// sail past the filter. Refusing UDP/443 makes the browser fall back to
 	// TCP within a second and remember that for the session.
-	if webRedirect {
+	if webRedirect || threatOn || geoOn {
 		w("  chain forward {")
 		w("    type filter hook forward priority filter - 5; policy accept;")
-		w("    ip saddr @%s udp dport 443 counter reject with icmp type port-unreachable comment \"intercept: no quic past the filter\"", web)
+		if geoOn && cfg.GeoOut {
+			w("    ip saddr @clients ip saddr != @geo_exempt_v4 ip daddr @geo_v4 counter drop comment \"country: outbound to a listed country\"")
+		}
+		if geoOn && cfg.GeoIn {
+			w("    ip daddr @clients ip saddr @geo_v4 counter drop comment \"country: inbound from a listed country\"")
+		}
+		if threatOn && cfg.ThreatOut {
+			w("    ip saddr @clients ip daddr @threat_v4 counter drop comment \"threat: outbound to listed address\"")
+		}
+		if threatOn && cfg.ThreatIn {
+			w("    ip daddr @clients ip saddr @threat_v4 counter drop comment \"threat: inbound from listed address\"")
+		}
+		if webRedirect {
+			w("    ip saddr @%s udp dport 443 counter reject with icmp type port-unreachable comment \"intercept: no quic past the filter\"", web)
+		}
 		w("  }")
 	}
 

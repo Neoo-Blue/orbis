@@ -8,6 +8,7 @@
 package geoip
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -427,4 +428,44 @@ var countryNames = map[string]string{
 	"TW": "Taiwan", "HK": "Hong Kong", "SG": "Singapore", "MY": "Malaysia", "TH": "Thailand",
 	"VN": "Vietnam", "ID": "Indonesia", "PH": "Philippines", "AU": "Australia",
 	"NZ": "New Zealand", "ZA": "South Africa", "NG": "Nigeria", "EG": "Egypt", "KE": "Kenya",
+}
+
+// CountryNetworks walks the city database once and returns every network
+// that belongs to one of the given countries. It is the slow path behind
+// country blocking (a minute on a small board), so callers cache the result.
+func (r *Resolver) CountryNetworks(codes []string) (map[string][]netip.Prefix, int64, error) {
+	r.mu.RLock()
+	db := r.city
+	r.mu.RUnlock()
+	if db == nil {
+		return nil, 0, fmt.Errorf("no city database loaded")
+	}
+	want := map[string]bool{}
+	for _, c := range codes {
+		want[strings.ToUpper(strings.TrimSpace(c))] = true
+	}
+	out := map[string][]netip.Prefix{}
+	var rec struct {
+		Country struct {
+			ISOCode string `maxminddb:"iso_code"`
+		} `maxminddb:"country"`
+	}
+	networks := db.Networks(maxminddb.SkipAliasedNetworks)
+	for networks.Next() {
+		n, err := networks.Network(&rec)
+		if err != nil {
+			continue
+		}
+		code := strings.ToUpper(rec.Country.ISOCode)
+		if !want[code] {
+			continue
+		}
+		if p, err := netip.ParsePrefix(n.String()); err == nil {
+			out[code] = append(out[code], p.Masked())
+		}
+	}
+	if err := networks.Err(); err != nil {
+		return out, 0, err
+	}
+	return out, int64(db.Metadata.NodeCount), nil
 }

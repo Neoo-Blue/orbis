@@ -56,7 +56,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
 
         <Card>
           <form onSubmit={submit} style={{ display: 'grid', gap: 13 }}>
-            <Field label="Password" hint={setup ? 'At least 10 characters. There is no recovery — store it somewhere.' : undefined}>
+            <Field label="Password" hint={setup ? 'At least 10 characters. There is no recovery, store it somewhere.' : undefined}>
               <input className="input" type="password" value={password} autoFocus
                 autoComplete={setup ? 'new-password' : 'current-password'}
                 onChange={(e) => setPassword(e.target.value)} />

@@ -127,7 +127,7 @@ func (m *Manager) Available() (bool, string) {
 		case strings.Contains(msg, "not permitted"):
 			return false, "creating VLAN interfaces needs CAP_NET_ADMIN; in a container, run it privileged"
 		case strings.Contains(msg, "Unknown device type"), strings.Contains(msg, "not supported"):
-			return false, "the 8021q kernel module is not loaded — run `modprobe 8021q` on the host"
+			return false, "the 8021q kernel module is not loaded, run `modprobe 8021q` on the host"
 		case msg == "":
 			return false, err.Error()
 		}

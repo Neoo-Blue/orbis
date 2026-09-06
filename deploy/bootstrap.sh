@@ -56,7 +56,7 @@ install_inplace() {
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends \
-      nftables conntrack wireguard-tools iproute2 tcpdump ca-certificates curl >/dev/null
+      nftables conntrack wireguard-tools iproute2 tcpdump hostapd iw ca-certificates curl >/dev/null
   else
     c_warn "apt-get not found; assuming dependencies (nftables, iproute2, conntrack) are present"
   fi

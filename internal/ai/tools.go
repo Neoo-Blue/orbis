@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/discover"
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/google/uuid"
 )
@@ -61,6 +62,40 @@ type Backend interface {
 	// ReportIssue records a problem (scrubbed) and files it when reporting
 	// is enabled.
 	ReportIssue(ctx context.Context, title, detail, actor string) (*store.Issue, error)
+
+	// Threat intelligence: listed addresses, bans and the hits against them.
+	ThreatStatus(since time.Time, limit int) (map[string]any, error)
+	BanAddress(value string, hours int, reason, actor string) (*store.ThreatDecision, error)
+	UnbanAddress(value, actor string) (int, error)
+
+	// Hosted apps: what the network runs, its storage, and port forwards.
+	HostedOverview(ctx context.Context) (map[string]any, error)
+	ForwardPort(ctx context.Context, req discover.ForwardRequest, actor string) (*store.PortForward, error)
+	RemoveForward(ctx context.Context, id, actor string) error
+
+	// Cables and Wi-Fi.
+	NetworkLinks(ctx context.Context) (map[string]any, error)
+	ConfigureWiFi(ctx context.Context, enabled *bool, ssid, passphrase, band, actor string) (map[string]any, error)
+
+	// Intrusion detection.
+	IntrusionStatus(since time.Time, limit int) (map[string]any, error)
+
+	// Threat intelligence and explanations.
+	UnblockDomain(domain string) error
+	IntelStatus(limit int) map[string]any
+	RunIntel(ctx context.Context, hours int) (map[string]any, error)
+	DecideAIAction(id, decision, actor string) (*store.AIAction, error)
+	Explain(ctx context.Context, kind, key string) (map[string]any, error)
+	JudgeDomain(ctx context.Context, domain string) (map[string]any, error)
+
+	// Updates.
+	UpdateStatus() map[string]any
+	CheckUpdate(ctx context.Context) (map[string]any, error)
+	ApplyUpdate(ctx context.Context, actor string) (map[string]any, error)
+
+	// Country rules.
+	CountryRules() (map[string]any, error)
+	SetCountryRule(code, action, actor string) (map[string]any, error)
 
 	// Mutating operations.
 	AddRule(r *store.Rule) error
@@ -306,6 +341,96 @@ func Tools(allowWrite bool) []ToolDef {
 				"id": strProp("The note id"),
 			}, []string{"id"}),
 		},
+		{
+			Name: "list_hosted",
+			Description: "What this network hosts: every device with the services found on it (name, " +
+				"port, whether it is a Docker container and which image), the NAS and SAN devices with " +
+				"their file protocols and who is using them right now, the port forwards this node " +
+				"created, and the router's own UPnP mapping table. Use for \"what is running on the " +
+				"NAS\", \"which ports does the server expose\", \"is anything forwarded to the internet\".",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "threat_intel",
+			Description: "The latest AI threat-intelligence assessments: risk level, findings, and the " +
+				"actions proposed or applied (timed bans, domain blocks) with their status. Use it " +
+				"before answering questions about the network's security posture.",
+			Schema: objSchema(map[string]any{"limit": numProp("How many assessments, default 3")}, nil),
+		},
+		{
+			Name: "run_threat_intel",
+			Description: "Run a threat-intelligence assessment over the last hours now. Proposes actions; " +
+				"with active blocking on, the confident ones are applied at once. Takes up to a minute.",
+			Mutating: true,
+			Schema:   objSchema(map[string]any{"hours": numProp("Window in hours, default the configured interval")}, nil),
+		},
+		{
+			Name:        "decide_ai_action",
+			Description: "Apply, dismiss or undo one action proposed by a threat-intelligence assessment.",
+			Mutating:    true,
+			Schema: objSchema(map[string]any{
+				"id":       strProp("The action id from threat_intel"),
+				"decision": enumProp("What to do with it", []string{"apply", "dismiss", "undo"}),
+			}, []string{"id", "decision"}),
+		},
+		{
+			Name: "explain",
+			Description: "Plain-language explanation of one event, intrusion alert, address or hostname: " +
+				"what it is, how dangerous, what to do. kind is event, alert, ip or domain; key is the id, " +
+				"address or name.",
+			Schema: objSchema(map[string]any{
+				"kind": enumProp("What the key names", []string{"event", "alert", "ip", "domain"}),
+				"key":  strProp("The event or alert id, the address, or the hostname"),
+			}, []string{"kind", "key"}),
+		},
+		{
+			Name: "check_update",
+			Description: "Whether a newer Orbis release exists on GitHub: the running version, the " +
+				"latest release with its notes, how this node was installed (systemd, binary, docker) " +
+				"and whether it can install the update itself. Checks GitHub when asked.",
+			Schema: objSchema(map[string]any{"refresh": boolProp("Ask GitHub now instead of using the last check")}, nil),
+		},
+		{
+			Name: "intrusion_status",
+			Description: "The built-in intrusion detection: which log sources feed it (this node's " +
+				"journal, syslog from other hosts, the Orbis login page, the flow table), the " +
+				"scenarios and their thresholds, recent alerts (brute force, scans, floods) with the " +
+				"address, country and network behind each, what was banned and for how long, and the " +
+				"worst offenders. Use for \"is anyone attacking\", \"who is hammering SSH\".",
+			Schema: objSchema(map[string]any{
+				"hours": numProp("Window (default 24, max 720)"),
+				"limit": numProp("Max alerts (default 50)"),
+			}, nil),
+		},
+		{
+			Name: "country_rules",
+			Description: "The country rules: block mode (listed countries are dropped) or allow mode " +
+				"(everything else is), which directions, the exemptions, how many address ranges are " +
+				"loaded, how often each country was refused, and the countries this network actually " +
+				"talked to in the last week with bytes. Use for \"which countries does my traffic go to\" " +
+				"decisions and \"is China blocked\".",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "network_links",
+			Description: "The physical interfaces: which cable carries the internet (WAN), which is the " +
+				"network (LAN), which port is empty, and the wireless adapter, each with the evidence " +
+				"(default route, neighbours, known devices). Includes the access point's state and " +
+				"connected Wi-Fi clients. Use for \"which cable is the internet\", \"is the Wi-Fi up\".",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "threat_status",
+			Description: "IP threat intelligence: which address feeds are loaded (hijacked netblocks, " +
+				"botnet command servers, known attackers), the active bans and where each came from " +
+				"(manual, assistant, the scan detector, CrowdSec), whether drops are enforced or only " +
+				"recorded on this node, and recent hits: devices that reached, or were reached from, a " +
+				"listed address. Use for \"is anything on my network talking to a known-bad address\".",
+			Schema: objSchema(map[string]any{
+				"hours": numProp("Window for hits (default 24, max 720)"),
+				"limit": numProp("Max hits to return (default 50)"),
+			}, nil),
+		},
 
 		// ---- mutating ----
 		{
@@ -327,6 +452,82 @@ func Tools(allowWrite bool) []ToolDef {
 			Description: "Remove a shortcut by name.",
 			Mutating:    true,
 			Schema:      objSchema(map[string]any{"name": strProp("The shortcut name")}, []string{"name"}),
+		},
+		{
+			Name: "forward_port",
+			Description: "Open an internet port to a service on the network. When this node is the " +
+				"gateway it writes a DNAT rule; otherwise it asks the upstream router over UPnP. " +
+				"Services that should not face the internet (storage, admin panels, databases, remote " +
+				"desktop) are refused unless confirm=true; warn the operator and suggest a VPN or a " +
+				"tunnel before confirming.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"host":     strProp("LAN address of the service"),
+				"port":     numProp("The service's port on that host"),
+				"ext_port": numProp("Internet-facing port (default: same as port)"),
+				"proto":    enumProp("tcp (default) or udp", []string{"tcp", "udp"}),
+				"name":     strProp("A label, e.g. Plex"),
+				"confirm":  boolProp("Set true only after the operator accepted the exposure warning"),
+			}, []string{"host", "port"}),
+		},
+		{
+			Name:        "remove_forward",
+			Description: "Remove a port forward this node created, by its id (from list_hosted).",
+			Mutating:    true,
+			Schema:      objSchema(map[string]any{"id": strProp("The forward id")}, []string{"id"}),
+		},
+		{
+			Name: "apply_update",
+			Description: "Install the latest Orbis release on this node and restart it. Only where the " +
+				"node runs the bare binary (systemd or by hand); a container must pull its image. Tell " +
+				"the operator the interface will disconnect for about half a minute.",
+			Mutating: true,
+			Schema:   objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "set_country_rule",
+			Description: "Change the country rules: add or remove a country (two-letter code), switch " +
+				"between block and allow mode, or enable/disable. Adding a country turns the rules on. " +
+				"Blocking a country cuts every device off from every server there, including CDNs and " +
+				"game servers, so say what it will affect before doing it.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"code":   strProp("Two-letter country code, e.g. CN (not needed for mode or enable actions)"),
+				"action": enumProp("add, remove, mode_block, mode_allow, enable, disable", []string{"add", "remove", "mode_block", "mode_allow", "enable", "disable"}),
+			}, []string{"action"}),
+		},
+		{
+			Name: "configure_wifi",
+			Description: "Turn the access point on or off, or change its network name, passphrase or " +
+				"band (auto, 2.4, 5). Turning it on with no passphrase set generates one; tell the " +
+				"operator to read it on the Cables & Wi-Fi page rather than repeating it here.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"enabled":    boolProp("true to broadcast, false to stop"),
+				"ssid":       strProp("Network name, 1 to 32 characters"),
+				"passphrase": strProp("8 to 63 characters; leave empty to keep or generate"),
+				"band":       enumProp("auto, 2.4 or 5", []string{"auto", "2.4", "5"}),
+			}, nil),
+		},
+		{
+			Name: "ban_address",
+			Description: "Ban an internet address or range for a number of hours (0 = permanent). " +
+				"Connections to and from it are dropped at the gateway where this node enforces, and " +
+				"recorded everywhere. Local and reserved addresses are refused: to cut a device off, " +
+				"use set_client_blocked.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"value":  strProp("An IP address or a CIDR range"),
+				"hours":  numProp("How long, in hours (default 24; 0 = permanent)"),
+				"reason": strProp("Why, in a few words"),
+			}, []string{"value"}),
+		},
+		{
+			Name: "unban_address",
+			Description: "Lift a ban by its id (from threat_status) or by the address. Bans that came " +
+				"from a CrowdSec engine are lifted there, not here.",
+			Mutating: true,
+			Schema:   objSchema(map[string]any{"value": strProp("Ban id or the address")}, []string{"value"}),
 		},
 		{
 			Name: "decide_recommendation",
@@ -359,7 +560,7 @@ func Tools(allowWrite bool) []ToolDef {
 			Schema: objSchema(map[string]any{
 				"domain":   strProp("The domain to block"),
 				"wildcard": boolProp("Also block all subdomains (default true)"),
-				"note":     strProp("Why this was blocked — shown in the UI and audit log"),
+				"note":     strProp("Why this was blocked, shown in the UI and audit log"),
 			}, []string{"domain"}),
 		},
 		{
@@ -491,6 +692,11 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"flush_dns_cache": true, "refresh_blocklists": true,
 		"decide_recommendation": true, "report_problem": true,
 		"add_shortcut": true, "remove_shortcut": true,
+		"ban_address": true, "unban_address": true,
+		"forward_port": true, "remove_forward": true,
+		"configure_wifi":   true,
+		"set_country_rule": true,
+		"apply_update":     true, "run_threat_intel": true, "decide_ai_action": true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -698,6 +904,100 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 
 	case "list_shortcuts":
 		return jsonOf(map[string]any{"shortcuts": b.Shortcuts()}, nil)
+
+	case "list_hosted":
+		return jsonOf(b.HostedOverview(ctx))
+
+	case "forward_port":
+		req := discover.ForwardRequest{
+			Host: strArg(args, "host"), Port: intArg(args, "port", 0, 65535), ExtPort: intArg(args, "ext_port", 0, 65535),
+			Proto: strArg(args, "proto"), Name: strArg(args, "name"),
+		}
+		if v, ok := args["confirm"].(bool); ok {
+			req.Confirm = v
+		}
+		fw, err := b.ForwardPort(ctx, req, actor)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Forwarded internet port %d/%s to %s:%d (%s) via %s.", fw.ExtPort, fw.Proto, fw.Host, fw.Port, fw.Name,
+			map[string]string{"nft": "this node's firewall", "upnp": "the router (UPnP)"}[fw.Method]), nil
+
+	case "remove_forward":
+		if err := b.RemoveForward(ctx, strArg(args, "id"), actor); err != nil {
+			return "", err
+		}
+		return "Forward removed.", nil
+
+	case "threat_intel":
+		return jsonOf(b.IntelStatus(intArg(args, "limit", 3, 60)), nil)
+
+	case "run_threat_intel":
+		return jsonOf(b.RunIntel(ctx, intArg(args, "hours", 0, 168)))
+
+	case "decide_ai_action":
+		return jsonOf(b.DecideAIAction(strArg(args, "id"), strArg(args, "decision"), actor))
+
+	case "explain":
+		return jsonOf(b.Explain(ctx, strArg(args, "kind"), strArg(args, "key")))
+
+	case "check_update":
+		if v, ok := args["refresh"].(bool); ok && v {
+			return jsonOf(b.CheckUpdate(ctx))
+		}
+		return jsonOf(b.UpdateStatus(), nil)
+
+	case "apply_update":
+		return jsonOf(b.ApplyUpdate(ctx, actor))
+
+	case "intrusion_status":
+		return jsonOf(b.IntrusionStatus(hoursAgo(args, "hours", 24, 720), intArg(args, "limit", 50, 500)))
+
+	case "country_rules":
+		return jsonOf(b.CountryRules())
+
+	case "set_country_rule":
+		return jsonOf(b.SetCountryRule(strArg(args, "code"), strArg(args, "action"), actor))
+
+	case "network_links":
+		return jsonOf(b.NetworkLinks(ctx))
+
+	case "configure_wifi":
+		var enabled *bool
+		if v, ok := args["enabled"].(bool); ok {
+			enabled = &v
+		}
+		st, err := b.ConfigureWiFi(ctx, enabled, strArg(args, "ssid"), strArg(args, "passphrase"), strArg(args, "band"), actor)
+		if err != nil {
+			return "", err
+		}
+		delete(st, "passphrase")
+		delete(st, "hostapd_log")
+		return jsonOf(st, nil)
+
+	case "threat_status":
+		return jsonOf(b.ThreatStatus(hoursAgo(args, "hours", 24, 720), intArg(args, "limit", 50, 500)))
+
+	case "ban_address":
+		hours := 24
+		if v, ok := args["hours"].(float64); ok {
+			hours = int(v)
+		}
+		dec, err := b.BanAddress(strArg(args, "value"), hours, strArg(args, "reason"), actor)
+		if err != nil {
+			return "", err
+		}
+		if dec.Until == nil {
+			return fmt.Sprintf("Banned %s permanently.", dec.Value), nil
+		}
+		return fmt.Sprintf("Banned %s until %s.", dec.Value, dec.Until.Format(time.RFC1123)), nil
+
+	case "unban_address":
+		n, err := b.UnbanAddress(strArg(args, "value"), actor)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Lifted %d ban(s).", n), nil
 
 	case "add_shortcut":
 		sc, err := b.SaveShortcut(config.DNSShortcut{
@@ -1010,7 +1310,7 @@ func jsonOf(v any, err error) (string, error) {
 	// one; the model can always narrow its query and ask again.
 	const maxResult = 60000
 	if len(out) > maxResult {
-		return string(out[:maxResult]) + `… [truncated — narrow the query with a filter or a smaller limit]`, nil
+		return string(out[:maxResult]) + `… [truncated: narrow the query with a filter or a smaller limit]`, nil
 	}
 	return string(out), nil
 }
@@ -1020,7 +1320,7 @@ func noteWithActor(args map[string]any, actor string) string {
 	if note == "" {
 		return "via assistant (" + actor + ")"
 	}
-	return note + " — via assistant (" + actor + ")"
+	return note + " (via assistant: " + actor + ")"
 }
 
 func wildcardPrefix(w bool) string {

@@ -1,3 +1,4 @@
+import { flowWeights } from './scene'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import landRings from '../data/land.json'
 import countryShapes from '../data/countries.json'
@@ -265,37 +266,46 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
           // is visible without reading a legend.
           const phase = hashPhase(a.id)
           const speed = 0.2 + Math.min(0.3, a.bytes / 5_000_000)
-          const inbound = a.direction === 'in'
           const head = ((t * speed + phase) % 1 + 1) % 1
-          const crest = inbound ? COLORS.flowIn : COLORS.flowOut
+          // Two crest trains, as on the globe: cool for bytes leaving the
+          // network (home to remote), warm for bytes arriving, each as bright
+          // as its share of the traffic. Traffic goes both ways on nearly
+          // every connection, so both are drawn.
+          const w = flowWeights(a.bytes_in ?? 0, a.bytes_out ?? 0, a.direction ?? 'out')
+          const trains = [
+            { inbound: false, weight: w.out, crest: COLORS.flowOut, offset: 0 },
+            { inbound: true, weight: w.in, crest: COLORS.flowIn, offset: 0.5 },
+          ]
 
           // Canvas has no shader, so the comet is drawn as a short run of
-          // segments whose alpha falls off behind the crest. Twelve is enough
-          // to read as continuous without costing a full re-stroke per arc.
-          // A train of pulses, matching the globe. One crest per arc spends
-          // most of its life off the part of the line you are looking at, and
-          // teleports when it laps; several make direction readable anywhere.
+          // segments whose alpha falls off behind the crest. A train of
+          // pulses, matching the globe: one crest per arc spends most of its
+          // life off the part of the line you are looking at, and teleports
+          // when it laps; several make direction readable anywhere.
           const steps = 40
           const repeat = 3
           ctx.lineWidth = 0.9 + weight * 1.5
-          for (let i = 0; i < steps; i++) {
-            const t0 = i / steps
-            const t1 = (i + 1) / steps
-            const phase = t0 * repeat - (inbound ? -1 : 1) * head * repeat
-            const f = phase - Math.floor(phase)
-            // Distance behind the crest, measured against travel direction, so
-            // the tail trails the crest rather than leading it.
-            const behind = inbound ? f : 1 - f
-            const tail = Math.pow(1 - Math.min(behind / 0.55, 1), 3)
-            if (tail < 0.02) continue
-            const pt0 = quadPoint(hx, hy, cx, cy, ex, ey, t0)
-            const pt1 = quadPoint(hx, hy, cx, cy, ex, ey, t1)
-            ctx.strokeStyle = crest
-            ctx.globalAlpha = Math.min(0.95, tail * (0.4 + weight * 0.55))
-            ctx.beginPath()
-            ctx.moveTo(pt0[0], pt0[1])
-            ctx.lineTo(pt1[0], pt1[1])
-            ctx.stroke()
+          for (const train of trains) {
+            if (train.weight <= 0) continue
+            for (let i = 0; i < steps; i++) {
+              const t0 = i / steps
+              const t1 = (i + 1) / steps
+              const phase = t0 * repeat - (train.inbound ? -1 : 1) * head * repeat + train.offset
+              const f = phase - Math.floor(phase)
+              // Distance behind the crest, measured against travel direction, so
+              // the tail trails the crest rather than leading it.
+              const behind = train.inbound ? f : 1 - f
+              const tail = Math.pow(1 - Math.min(behind / 0.55, 1), 3) * train.weight
+              if (tail < 0.02) continue
+              const pt0 = quadPoint(hx, hy, cx, cy, ex, ey, t0)
+              const pt1 = quadPoint(hx, hy, cx, cy, ex, ey, t1)
+              ctx.strokeStyle = train.crest
+              ctx.globalAlpha = Math.min(0.95, tail * (0.4 + weight * 0.55))
+              ctx.beginPath()
+              ctx.moveTo(pt0[0], pt0[1])
+              ctx.lineTo(pt1[0], pt1[1])
+              ctx.stroke()
+            }
           }
         }
       }

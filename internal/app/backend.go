@@ -6,12 +6,14 @@ import (
 	"net"
 	"net/netip"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
+	"github.com/Neoo-Blue/orbis/internal/discover"
 	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
 	"github.com/Neoo-Blue/orbis/internal/dpi"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
@@ -20,6 +22,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/issues"
 	"github.com/Neoo-Blue/orbis/internal/report"
 	"github.com/Neoo-Blue/orbis/internal/store"
+	"github.com/Neoo-Blue/orbis/internal/wifi"
 	"github.com/google/uuid"
 )
 
@@ -97,6 +100,9 @@ func (a *App) LookupIP(ip string) (map[string]any, error) {
 		out["network"] = loc.ASOrg
 		out["anycast"] = loc.Anycast
 		out["accuracy"] = loc.Accuracy
+		if a.Threat != nil {
+			out["threat"] = a.Threat.Describe(addr)
+		}
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Second)
 	defer cancel()
@@ -155,6 +161,7 @@ func (a *App) SystemStatus() map[string]any {
 		"node":       cfg.Node.Name,
 		"version":    orDefaultStr(a.build, "dev"),
 		"uptime_sec": int(a.Uptime().Seconds()),
+		"resources":  a.Resources(),
 		"capture":    a.captureStatus(),
 		"dns":        a.DNS.Stats(),
 		"dhcp":       a.DHCP.Stats(),
@@ -614,6 +621,15 @@ func (a *App) Health() map[string]any {
 	if !cfg.AdBlock.Enabled {
 		add("attention", "Ad and tracker blocking is switched off.")
 	}
+	if a.Threat != nil && cfg.Threat.Enabled {
+		if total, dropped := a.Threat.HitCount(time.Now().Add(-24 * time.Hour)); total > 0 {
+			if dropped == total {
+				add("attention", fmt.Sprintf("%d connection%s to known-bad addresses were blocked in the last day. Check which device in Threats.", total, pluralS(total)))
+			} else {
+				add("problem", fmt.Sprintf("%d connection%s to known-bad addresses in the last day, %d not blocked because this node is not in that device's path. Check Threats.", total, pluralS(total), total-dropped))
+			}
+		}
+	}
 	if events, err := a.Store.Events(time.Now().Add(-24*time.Hour), store.SevWarning, true, 20); err == nil && len(events) > 0 {
 		n := len(events)
 		word := "warnings"
@@ -655,6 +671,7 @@ func (a *App) Health() map[string]any {
 	}
 	out := map[string]any{
 		"level": level, "headline": headline, "points": points,
+		"resources":      a.Resources(),
 		"devices_online": online, "devices_total": len(clients), "devices_paused": blocked,
 		"blocked_today": blockedToday, "protection_on": cfg.AdBlock.Enabled,
 		"youtube_tv": cfg.YouTube.Lounge.Enabled, "mode": string(cfg.Mode),
@@ -980,6 +997,14 @@ func (a *App) SyncIntercept() error {
 		}
 	}
 
+	threatCfg := a.Cfg.Snapshot().Threat
+	var threat4 []string
+	if a.Threat != nil {
+		threat4, _ = a.Threat.Elements()
+	}
+	countryCfg := a.Cfg.Snapshot().Country
+	geo4, _, geoEx := a.geoSets()
+	geoOn := countryCfg.Enabled && countryCfg.Mode != "allow"
 	return a.Intercept.Apply(a.ctx, intercept.Config{
 		Enabled:      cfg.Enabled,
 		LANInterface: lan,
@@ -992,6 +1017,13 @@ func (a *App) SyncIntercept() error {
 		HTTPSPort:    portOfAddr(mitmCfg.ListenTLS),
 		HTTPScoped:   scoped,
 		HTTPClients:  webClients,
+		Threat4:      threat4,
+		ThreatOut:    threatCfg.Enabled && threatCfg.BlockOutbound,
+		ThreatIn:     threatCfg.Enabled && threatCfg.BlockInbound,
+		Geo4:         geo4,
+		GeoExempt4:   geoEx,
+		GeoOut:       geoOn && countryCfg.BlockOutbound,
+		GeoIn:        geoOn && countryCfg.BlockInbound,
 	})
 }
 
@@ -1235,4 +1267,376 @@ func (a *App) maybeSendReport(now time.Time) {
 	rep := a.BuildReport(window, now.Add(-time.Duration(hours)*time.Hour))
 	a.Notifier.SendReport("Orbis "+window+" report", rep.TextSummary())
 	a.log("report: sent %s summary", window)
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// ThreatStatus is the assistant's view: summary, enforcement, feeds, bans
+// and recent hits in one call.
+func (a *App) ThreatStatus(since time.Time, limit int) (map[string]any, error) {
+	if a.Threat == nil {
+		return map[string]any{"enabled": false}, nil
+	}
+	out := a.Threat.Status()
+	out["enforcement"] = a.ThreatEnforcement()
+	out["feeds"] = a.Threat.Feeds()
+	out["bans"] = a.Threat.Decisions()
+	hits, err := a.Threat.Hits(since, limit)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]string{}
+	for _, c := range a.Registry.All() {
+		n := c.Label
+		if n == "" {
+			n = c.Hostname
+		}
+		if n == "" {
+			n = c.IP
+		}
+		names[c.ID] = n
+	}
+	rows := make([]map[string]any, 0, len(hits))
+	for _, h := range hits {
+		rows = append(rows, map[string]any{
+			"ts": h.TS, "device": names[h.ClientID], "local_ip": h.LocalIP, "remote_ip": h.RemoteIP,
+			"prefix": h.Prefix, "source": h.Source, "reason": h.Reason, "direction": h.Direction,
+			"port": h.Port, "proto": h.Proto, "dropped": h.Enforced, "country": h.Country, "network": h.ASOrg,
+		})
+	}
+	out["hits"] = rows
+	return out, nil
+}
+
+// BanAddress records a timed ban from the assistant (or the API on its behalf).
+func (a *App) BanAddress(value string, hours int, reason, actor string) (*store.ThreatDecision, error) {
+	if a.Threat == nil {
+		return nil, fmt.Errorf("threat intelligence is not available")
+	}
+	var d time.Duration
+	if hours > 0 {
+		d = time.Duration(hours) * time.Hour
+	}
+	source := "manual"
+	if strings.Contains(actor, "assistant") {
+		source = "assistant"
+	}
+	dec, err := a.Threat.Ban(value, d, reason, source, actor)
+	if err != nil {
+		a.Store.Audit(actor, "threat.ban", value, "", "", "error: "+err.Error())
+		return nil, err
+	}
+	a.Store.Audit(actor, "threat.ban", dec.Value, "", reason, "ok")
+	return dec, nil
+}
+
+// UnbanAddress lifts bans by id or value.
+func (a *App) UnbanAddress(value, actor string) (int, error) {
+	if a.Threat == nil {
+		return 0, fmt.Errorf("threat intelligence is not available")
+	}
+	n, err := a.Threat.Unban(value)
+	if err != nil {
+		return 0, err
+	}
+	a.Store.Audit(actor, "threat.unban", value, "", "", "ok")
+	return n, nil
+}
+
+// HostedOverview is the assistant's view of what the network hosts: devices
+// with their services, storage with its protocols and users, and the port
+// forwards this node made.
+func (a *App) HostedOverview(ctx context.Context) (map[string]any, error) {
+	if a.Discover == nil {
+		return map[string]any{"enabled": false}, nil
+	}
+	hosts, err := a.Discover.Hosts()
+	if err != nil {
+		return nil, err
+	}
+	storage, err := a.Discover.Storage()
+	if err != nil {
+		return nil, err
+	}
+	forwards, _ := a.Discover.Forwards()
+	out := a.Discover.Status()
+	out["hosts"] = hosts
+	out["storage"] = storage
+	out["forwards"] = forwards
+	out["router"] = a.Discover.Router(ctx)
+	inline, _ := a.Cfg.Snapshot().Mode == config.ModeInline && a.Cfg.Snapshot().Firewall.Enabled, ""
+	out["forwarding"] = map[string]any{"inline": inline, "upnp": a.Cfg.Snapshot().Discover.UPnP}
+	return out, nil
+}
+
+// ForwardPort creates a port forward on behalf of the assistant or the API.
+func (a *App) ForwardPort(ctx context.Context, req discover.ForwardRequest, actor string) (*store.PortForward, error) {
+	if a.Discover == nil {
+		return nil, fmt.Errorf("discovery is not available")
+	}
+	fw, err := a.Discover.Forward(ctx, req, actor)
+	if err != nil {
+		return nil, err
+	}
+	a.Store.Audit(actor, "forward.create", fmt.Sprintf("%d/%s", fw.ExtPort, fw.Proto), "", fmt.Sprintf("%s:%d %s", fw.Host, fw.Port, fw.Method), "ok")
+	return fw, nil
+}
+
+// RemoveForward undoes a forward by id.
+func (a *App) RemoveForward(ctx context.Context, id, actor string) error {
+	if a.Discover == nil {
+		return fmt.Errorf("discovery is not available")
+	}
+	if err := a.Discover.Remove(ctx, id); err != nil {
+		return err
+	}
+	a.Store.Audit(actor, "forward.delete", id, "", "", "ok")
+	return nil
+}
+
+// NetworkLinks is the assistant's view of the cables and the access point.
+func (a *App) NetworkLinks(ctx context.Context) (map[string]any, error) {
+	if a.Links == nil {
+		return map[string]any{}, nil
+	}
+	links, sug := a.Links.Refresh()
+	out := map[string]any{
+		"links": links, "suggestion": sug,
+		"auto_assign": a.Cfg.Snapshot().Network.Links.AutoAssign,
+		"mode":        string(a.Cfg.Snapshot().Mode), "wan_interface": a.Cfg.Snapshot().Firewall.WANInterface,
+	}
+	if a.WiFi != nil {
+		st := a.WiFi.Status(ctx)
+		delete(st, "hostapd_log")
+		out["wifi"] = st
+	}
+	return out, nil
+}
+
+// ConfigureWiFi switches the access point on or off and changes its name,
+// passphrase or band. A passphrase is generated when none is set.
+func (a *App) ConfigureWiFi(ctx context.Context, enabled *bool, ssid, passphrase, band, actor string) (map[string]any, error) {
+	if a.WiFi == nil {
+		return nil, fmt.Errorf("wi-fi is not available")
+	}
+	if enabled != nil && *enabled && len(wifi.Adapters()) == 0 && a.Cfg.Snapshot().WiFi.Interface == "" {
+		return nil, fmt.Errorf("this node has no wireless adapter")
+	}
+	err := a.Cfg.Update(func(c *config.Config) {
+		if enabled != nil {
+			c.WiFi.Enabled = *enabled
+		}
+		if ssid != "" {
+			c.WiFi.SSID = ssid
+		}
+		if passphrase != "" {
+			c.WiFi.Passphrase = passphrase
+		}
+		if band != "" {
+			c.WiFi.Band = band
+		}
+		if c.WiFi.Enabled && len(c.WiFi.Passphrase) < 8 {
+			c.WiFi.Passphrase = wifi.GeneratePassphrase()
+		}
+		if c.WiFi.SSID == "" {
+			c.WiFi.SSID = "Orbis"
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.Store.Audit(actor, "wifi.configure", a.Cfg.Snapshot().WiFi.SSID, "", fmt.Sprintf("enabled=%v", a.Cfg.Snapshot().WiFi.Enabled), "ok")
+	if err := a.WiFi.Reconcile(ctx); err != nil {
+		return nil, err
+	}
+	a.Links.Refresh()
+	st := a.WiFi.Status(ctx)
+	st["passphrase"] = a.Cfg.Snapshot().WiFi.Passphrase
+	return st, nil
+}
+
+// CountryRules is the assistant's and the page's view of the country rules,
+// with the countries seen in the last week so a list can be built from
+// what actually happens rather than from memory.
+func (a *App) CountryRules() (map[string]any, error) {
+	if a.Country == nil {
+		return map[string]any{"enabled": false}, nil
+	}
+	out := a.Country.Status()
+	out["enforcement"] = a.ThreatEnforcement()
+	if seen, err := a.Store.CountryTotals(time.Now().Add(-7 * 24 * time.Hour)); err == nil {
+		out["seen"] = seen
+	}
+	return out, nil
+}
+
+// SetCountryRule adds or removes a country from the list, or switches the
+// mode, and rebuilds the sets.
+func (a *App) SetCountryRule(code, action, actor string) (map[string]any, error) {
+	if a.Country == nil {
+		return nil, fmt.Errorf("country rules are not available")
+	}
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if len(code) != 2 && action != "mode_block" && action != "mode_allow" && action != "enable" && action != "disable" {
+		return nil, fmt.Errorf("country must be a two-letter code such as CN or RU")
+	}
+	err := a.Cfg.Update(func(c *config.Config) {
+		switch action {
+		case "add", "block", "allow":
+			for _, x := range c.Country.Countries {
+				if x == code {
+					return
+				}
+			}
+			c.Country.Countries = append(c.Country.Countries, code)
+			c.Country.Enabled = true
+		case "remove":
+			out := c.Country.Countries[:0]
+			for _, x := range c.Country.Countries {
+				if x != code {
+					out = append(out, x)
+				}
+			}
+			c.Country.Countries = out
+			if len(out) == 0 {
+				// The last country gone means no rule; leaving it enabled in
+				// allow mode would refuse everything.
+				c.Country.Enabled = false
+			}
+		case "mode_block":
+			c.Country.Mode = "block"
+		case "mode_allow":
+			c.Country.Mode = "allow"
+		case "enable":
+			c.Country.Enabled = true
+		case "disable":
+			c.Country.Enabled = false
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	target := code
+	if target == "" {
+		target = "mode"
+	}
+	a.Store.Audit(actor, "country.rule", target, "", action+" -> mode="+a.Cfg.Snapshot().Country.Mode+" enabled="+strconv.FormatBool(a.Cfg.Snapshot().Country.Enabled)+" countries="+strings.Join(a.Cfg.Snapshot().Country.Countries, ","), "ok")
+	a.Country.Reconfigure()
+	go a.ReapplyThreatEnforcement()
+	return a.CountryRules()
+}
+
+// IntrusionStatus is the assistant's and the page's view of the detector:
+// sources, rules, recent alerts and the addresses behind them.
+func (a *App) IntrusionStatus(since time.Time, limit int) (map[string]any, error) {
+	if a.IDS == nil {
+		return map[string]any{"enabled": false}, nil
+	}
+	out := a.IDS.Status()
+	alerts, err := a.IDS.Alerts(since, limit)
+	if err != nil {
+		return nil, err
+	}
+	out["alerts"] = alerts
+	out["offenders"] = a.IDS.TopOffenders(since)
+	out["enforcement"] = a.ThreatEnforcement()
+	return out, nil
+}
+
+// UpdateStatus is the updater's view: running version, latest release,
+// whether this node can install it, and progress.
+func (a *App) UpdateStatus() map[string]any {
+	if a.Update == nil {
+		return map[string]any{"current": a.build, "available": false, "can_apply": false}
+	}
+	return a.Update.Status()
+}
+
+// CheckUpdate asks GitHub now.
+func (a *App) CheckUpdate(ctx context.Context) (map[string]any, error) {
+	if a.Update == nil {
+		return nil, fmt.Errorf("updates are not available in this build")
+	}
+	if _, err := a.Update.Check(ctx); err != nil {
+		return nil, err
+	}
+	return a.Update.Status(), nil
+}
+
+// ApplyUpdate installs the latest release and restarts.
+func (a *App) ApplyUpdate(ctx context.Context, actor string) (map[string]any, error) {
+	if a.Update == nil {
+		return nil, fmt.Errorf("updates are not available in this build")
+	}
+	if err := a.Update.Apply(ctx); err != nil {
+		a.Store.Audit(actor, "update.apply", "", "", "", "error: "+err.Error())
+		return nil, err
+	}
+	a.Store.Audit(actor, "update.apply", "", a.build, "latest", "started")
+	return a.Update.Status(), nil
+}
+
+// UnblockDomain removes the operator's own block on a name.
+func (a *App) UnblockDomain(domain string) error {
+	domain = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(domain, "*.")))
+	if domain == "" {
+		return fmt.Errorf("domain is required")
+	}
+	if err := a.Store.DeleteLocalRule(domain); err != nil {
+		return err
+	}
+	return a.Lists.Rebuild()
+}
+
+// IntelStatus is the threat-intelligence page's view.
+func (a *App) IntelStatus(limit int) map[string]any {
+	if a.Intel == nil {
+		return map[string]any{"enabled": false, "configured": false}
+	}
+	return a.Intel.Status(limit)
+}
+
+// RunIntel assesses the last hours now.
+func (a *App) RunIntel(ctx context.Context, hours int) (map[string]any, error) {
+	if a.Intel == nil {
+		return nil, fmt.Errorf("the assistant is not available")
+	}
+	in, actions, err := a.Intel.Assess(ctx, hours)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"assessment": in, "actions": actions}, nil
+}
+
+// DecideAIAction applies, dismisses or undoes a proposed action.
+func (a *App) DecideAIAction(id, decision, actor string) (*store.AIAction, error) {
+	if a.Intel == nil {
+		return nil, fmt.Errorf("the assistant is not available")
+	}
+	return a.Intel.Decide(id, decision, actor)
+}
+
+// Explain answers "what is this" for an event, alert, address or hostname.
+func (a *App) Explain(ctx context.Context, kind, key string) (map[string]any, error) {
+	if a.Explainer == nil {
+		return nil, fmt.Errorf("the assistant is not available")
+	}
+	e, err := a.Explainer.Explain(ctx, kind, key)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"explanation": e}, nil
+}
+
+// JudgeDomain asks the classifier about one hostname.
+func (a *App) JudgeDomain(ctx context.Context, domain string) (map[string]any, error) {
+	if a.Explainer == nil {
+		return nil, fmt.Errorf("the assistant is not available")
+	}
+	return a.Explainer.JudgeDomain(ctx, domain)
 }

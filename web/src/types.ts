@@ -134,6 +134,7 @@ export interface LocalRule {
   domain: string
   action: 'block' | 'allow'
   wildcard: boolean
+  regex?: boolean
   origin: string
   note?: string
   created_at: string
@@ -144,6 +145,8 @@ export interface BlockList {
   url: string
   category: string
   enabled: boolean
+  action?: 'block' | 'allow'
+  format?: string
   entries: number
   last_updated?: string
   last_error?: string
@@ -233,6 +236,7 @@ export interface Policy {
 // ---- simple interface ----
 
 export interface Health {
+  resources?: NodeResources
   level: 'ok' | 'attention' | 'problem'
   headline: string
   points: Array<{ level: 'ok' | 'attention' | 'problem'; text: string }>
@@ -282,11 +286,55 @@ export interface SysctlStatus {
   error?: string
 }
 
+export interface UpdateRelease {
+  tag: string
+  version: string
+  name: string
+  notes: string
+  url: string
+  published_at: string
+  assets: { name: string; url: string; size: number }[]
+}
+
+export interface UpdateStatus {
+  current: string
+  method: 'systemd' | 'binary' | 'docker' | 'dev' | 'unknown'
+  can_apply: boolean
+  state: 'idle' | 'checking' | 'downloading' | 'verifying' | 'installing' | 'restarting' | 'installed' | 'error'
+  progress: number
+  error?: string
+  check_error?: string
+  checked_at?: string
+  arch: string
+  available: boolean
+  latest?: UpdateRelease
+}
+
+export interface NodeResources {
+  sampled_at: string
+  process_cpu_percent: number
+  host_cpu_percent: number
+  cores: number
+  rss_bytes: number
+  heap_bytes: number
+  go_sys_bytes: number
+  goroutines: number
+  mem_total_bytes: number
+  mem_available_bytes: number
+  load1: number
+  load5: number
+  load15: number
+  temp_c?: number
+  throttled?: string
+  uptime_seconds: number
+}
+
 export interface SystemStatus {
   mode: Mode
   node: string
   version?: string
   uptime_sec: number
+  resources?: NodeResources
   capture: Record<string, number | boolean>
   dns: Record<string, unknown>
   dhcp: Record<string, unknown>
@@ -626,6 +674,10 @@ export interface AppConfig {
     probe_interval_hours: number; free_daily_budget: number
     brief: { enabled: boolean; interval_hours: number; notify: boolean }
     review: { enabled: boolean; interval_hours: number; max_suggestions: number }
+    intel: {
+      enabled: boolean; interval_hours: number; active_blocking: boolean; min_confidence: number
+      max_actions_per_run: number; max_ban_hours: number; ban_addresses: boolean; block_domains: boolean; notify: boolean
+    }
   }
   issues: {
     enabled: boolean; auto_capture: boolean; redact_extra: string[]
@@ -635,6 +687,300 @@ export interface AppConfig {
     }
   }
   geoip: { city_db: string; asn_db: string }
+  threat: {
+    enabled: boolean; feeds: ThreatFeedConfig[]; update_interval_hours: number
+    block_outbound: boolean; block_inbound: boolean; allow: string[]; auto_ban_scanners: boolean
+    crowdsec: { enabled: boolean; url: string; api_key: string; poll_seconds: number }
+  }
+  discover: {
+    enabled: boolean; interval_hours: number; extra_ports: number[]
+    docker: Array<{ name: string; url: string; enabled: boolean }>; upnp: boolean
+  }
+  wifi: {
+    enabled: boolean; interface: string; ssid: string; passphrase: string; band: string; channel: number
+    country: string; hidden: boolean; isolate_clients: boolean; mode: string; bridge: string; subnet: string
+    lan_access: boolean; wpa3: boolean
+  }
+  country: {
+    enabled: boolean; mode: 'block' | 'allow'; countries: string[]; block_outbound: boolean; block_inbound: boolean
+    dns: boolean; exempt_clients: string[]; exempt_domains: string[]; exempt_ips: string[]
+  }
+  ids: { enabled: boolean; journal: boolean; syslog_listen: string; flows: boolean; ignore: string[]; ban_multiplier: number }
+}
+
+// ---- hosted apps, storage, port forwards ----
+
+export interface LANService {
+  host: string
+  port: number
+  proto: string
+  name: string
+  kind: 'app' | 'admin' | 'storage' | 'infra' | 'web' | 'other'
+  category?: string
+  title?: string
+  server?: string
+  scheme?: string
+  source: 'scan' | 'docker'
+  container?: string
+  image?: string
+  sensitive: boolean
+  first_seen: string
+  last_seen: string
+  online: boolean
+}
+
+export interface HostedHost {
+  ID: string
+  IP: string
+  Name: string
+  Vendor?: string
+  DeviceType?: string
+  MAC?: string
+  Online: boolean
+  LastSeen: string
+  services: LANService[]
+  docker: boolean
+  storage: boolean
+}
+
+export interface StorageDevice {
+  ID: string
+  IP: string
+  Name: string
+  Vendor?: string
+  DeviceType?: string
+  Online: boolean
+  protocols: Array<{ name: string; port: number }>
+  web_ui?: string
+  users: Array<{ ip: string; connections: number; bytes_in: number; bytes_out: number }>
+  bytes_in: number
+  bytes_out: number
+  exposed: string[]
+}
+
+export interface PortForward {
+  id: string
+  name: string
+  proto: string
+  ext_port: number
+  host: string
+  port: number
+  method: 'nft' | 'upnp'
+  rule_id?: string
+  lease_until?: string
+  created: string
+  actor?: string
+}
+
+export interface RouterInfo {
+  upnp_enabled: boolean
+  found?: boolean
+  error?: string
+  model?: string
+  name?: string
+  external_ip?: string
+  mappings?: Array<{ ext_port: number; proto: string; host: string; port: number; description: string; enabled: boolean; lease_seconds: number; ours: boolean }>
+  mappings_error?: string
+}
+
+export interface HostedResponse {
+  scanning: boolean
+  last_scan?: string
+  last_error?: string
+  enabled: boolean
+  interval_hours: number
+  hosts: HostedHost[]
+  docker: Array<{ name: string; url: string; enabled: boolean }>
+  forwarding: { inline: boolean; upnp: boolean }
+}
+
+// ---- cables, wi-fi, countries ----
+
+export interface NetLink {
+  name: string
+  mac: string
+  wireless: boolean
+  carrier: boolean
+  up: boolean
+  speed_mbps?: number
+  addresses: string[]
+  default_route: boolean
+  neighbours: number
+  clients: number
+  role: 'wan' | 'lan' | 'wifi' | 'unplugged' | 'single' | ''
+  configured: 'wan' | 'lan' | 'none'
+  confidence: 'high' | 'low' | ''
+  evidence: string[]
+}
+
+export interface LinkSuggestion {
+  wan: string
+  lan: string[]
+  wifi: string[]
+  confidence: 'high' | 'low'
+  changes: string[]
+  reason: string
+}
+
+export interface LinksResponse {
+  links: NetLink[]
+  suggestion: LinkSuggestion
+  auto_assign: boolean
+  mode: string
+  wan_interface: string
+}
+
+export interface WiFiClient {
+  mac: string
+  name?: string
+  ip?: string
+  signal_dbm?: number
+  rx_bytes: number
+  tx_bytes: number
+  connected_seconds: number
+}
+
+export interface WiFiStatus {
+  enabled: boolean
+  running: boolean
+  interface: string
+  ssid: string
+  mode: string
+  subnet: string
+  error: string
+  restarts: number
+  hostapd_available: boolean
+  iw_available: boolean
+  adapters: string[]
+  hostapd_log?: string
+  since?: string
+  clients?: WiFiClient[]
+  channel?: number
+  channel_info?: string
+  type?: string
+  passphrase?: string
+  config?: { band: string; channel: number; country: string; hidden: boolean; isolate_clients: boolean; bridge: string; lan_access: boolean; wpa3: boolean; interface: string }
+}
+
+export interface CountryStatus {
+  enabled: boolean
+  mode: 'block' | 'allow'
+  countries: string[]
+  block_outbound: boolean
+  block_inbound: boolean
+  dns: boolean
+  exempt_clients: string[]
+  exempt_domains: string[]
+  exempt_ips: string[]
+  set_sizes: Record<string, number>
+  set_total: number
+  building: boolean
+  error: string
+  counters: Record<string, number>
+  packet_sets: boolean
+  last_build?: string
+  enforcement: { mode: string; inline: boolean; nft_available: boolean; intercepted_clients: number; detect_only: boolean }
+  seen?: Array<{ country: string; connections: number; bytes: number; blocked: number }>
+}
+
+// ---- intrusion detection ----
+
+export interface IDSAlert {
+  id: number
+  ts: string
+  ip: string
+  scenario: string
+  count: number
+  source: string
+  host?: string
+  sample?: string
+  action: 'ban' | 'reported' | 'ban-failed'
+  ban_until?: string
+  country?: string
+  as_org?: string
+}
+
+export interface IDSStatus {
+  enabled: boolean
+  journal: boolean
+  auth_log: string
+  flows: boolean
+  lines: number
+  hits: number
+  bans_since_start: number
+  ignore: string[]
+  ban_multiplier: number
+  last_line?: string
+  syslog: { listen: string; running: boolean; error?: string; received?: number; hosts?: string[] }
+  rules: Array<{ kind: string; title: string; threshold: number; window_seconds: number; ban_seconds: number }>
+  alerts_24h?: Record<string, number>
+  bans_24h?: number
+  alerts: IDSAlert[]
+  offenders: Array<{ ip: string; country?: string; as_org?: string; alerts: number; bans: number; last: string; scenarios: string[] }>
+  enforcement: { mode: string; inline: boolean; nft_available: boolean; intercepted_clients: number; detect_only: boolean }
+}
+
+// ---- threat intelligence ----
+
+export interface ThreatFeedConfig { name: string; url: string; enabled: boolean; category: string }
+
+export interface ThreatFeed extends ThreatFeedConfig {
+  entries: number
+  skipped: number
+  fetched_at?: string
+  last_error?: string
+}
+
+export interface ThreatDecision {
+  id: string
+  value: string
+  source: string
+  reason?: string
+  origin?: string
+  external_id?: number
+  actor?: string
+  created: string
+  until?: string
+}
+
+export interface ThreatHit {
+  id: number
+  ts: string
+  client_id?: string
+  local_ip?: string
+  remote_ip: string
+  prefix?: string
+  source: string
+  reason?: string
+  direction: 'in' | 'out'
+  port?: number
+  proto?: string
+  enforced: boolean
+  flow_id?: string
+  country?: string
+  as_org?: string
+}
+
+export interface ThreatStatus {
+  enabled: boolean
+  block_outbound: boolean
+  block_inbound: boolean
+  entries: number
+  excluded_by_allow: number
+  decisions: number
+  decisions_by_source: Record<string, number>
+  hits_24h: number
+  dropped_24h: number
+  hits_since_start: number
+  auto_ban_scanners: boolean
+  update_interval_hours: number
+  allow: string[]
+  last_build?: string
+  crowdsec: {
+    enabled: boolean; url: string; configured: boolean; poll_seconds: number
+    decisions: number; ignored: number; last_error: string; last_pull?: string
+  }
+  enforcement: { mode: string; inline: boolean; nft_available: boolean; intercepted_clients: number; detect_only: boolean }
 }
 
 // ---- YouTube (Lounge engine) ----
@@ -834,11 +1180,17 @@ export interface Diagnosis {
 }
 
 export interface ImportResult {
-  exact: number
-  wildcard: number
+  lists: { name: string; url: string; category: string; enabled: boolean; action?: string }[]
+  block: number
+  allow: number
+  regex: number
   total: number
   sample: string[]
   risky: string[] | null
+  skipped: Record<string, number>
+  detected: string
+  notes?: string[]
+  lists_added: number
   action: string
   dry_run: boolean
   imported: number
@@ -854,6 +1206,7 @@ export interface PlacementCheck {
 }
 
 export interface OnboardingState {
+  links?: { links: NetLink[]; suggestion: LinkSuggestion } | null
   onboarded: boolean
   mode: string
   password_set: boolean
@@ -988,4 +1341,84 @@ export interface BuiltinList {
   category: string
   key: string
   description: string
+}
+
+export interface Preset {
+  id: string
+  name: string
+  url: string
+  category: string
+  format?: string
+  action?: string
+  description: string
+  recommended: boolean
+  installed: boolean
+}
+
+export interface IntelFinding {
+  title: string
+  severity: 'info' | 'notice' | 'warning' | 'critical'
+  detail: string
+  indicators: string[]
+  recommendation: string
+  action: { kind: 'ban_ip' | 'block_domain' | 'none'; value: string; hours: number; confidence: number }
+}
+
+export interface AIIntel {
+  id: string
+  ts: string
+  hours: number
+  model: string
+  risk: 'low' | 'guarded' | 'elevated' | 'high'
+  headline: string
+  summary: string
+  findings: IntelFinding[]
+}
+
+export interface AIAction {
+  id: string
+  intel_id: string
+  ts: string
+  kind: 'ban_ip' | 'block_domain'
+  value: string
+  hours: number
+  reason: string
+  confidence: number
+  status: 'suggested' | 'applied' | 'dismissed' | 'undone' | 'failed' | 'refused'
+  ref?: string
+  decided_at?: string
+  decided_by?: string
+}
+
+export interface IntelStatus {
+  enabled: boolean
+  configured: boolean
+  running: boolean
+  interval_hours: number
+  active_blocking: boolean
+  min_confidence: number
+  max_actions_per_run: number
+  max_ban_hours: number
+  last_error?: string
+  last?: string
+  next?: string
+  assessments: AIIntel[]
+  actions: AIAction[]
+}
+
+export interface Explanation {
+  kind: string
+  key: string
+  title: string
+  danger: 'none' | 'low' | 'medium' | 'high'
+  explanation: string
+  steps: string[]
+  model: string
+  ts: string
+}
+
+export interface DomainJudgement {
+  domain: string
+  verdict: { domain: string; is_ad_or_tracking: boolean; confidence: number; reason: string; breakage_risk: string }
+  protected?: string
 }

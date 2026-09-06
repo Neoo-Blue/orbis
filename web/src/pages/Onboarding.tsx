@@ -23,6 +23,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [nodeName, setNodeName] = useState('')
   const [placement, setPlacement] = useState<'observe' | 'inline'>('observe')
   const [wanIface, setWanIface] = useState('')
+  useEffect(() => {
+    if (!wanIface && state?.links?.suggestion?.wan) setWanIface(state.links.suggestion.wan)
+  }, [state?.links?.suggestion?.wan]) // eslint-disable-line react-hooks/exhaustive-deps
   const [dns, setDns] = useState(true)
   const [adblock, setAdblock] = useState(true)
   const [dhcp, setDhcp] = useState(false)
@@ -147,7 +150,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 ))}
               </select>
               <div className="hint">
-                Required for gateway mode: it is the interface NAT translates towards.
+                {state.links?.suggestion?.wan
+                  ? `Orbis thinks ${state.links.suggestion.wan} is the internet: ${state.links.suggestion.reason}`
+                  : 'Required for gateway mode: it is the interface NAT translates towards.'}
               </div>
             </label>
           </div>

@@ -291,6 +291,35 @@ CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);
 // the table, so a field added there alone would silently never appear on a
 // node that has been running.
 var migrations = []string{
+	`ALTER TABLE block_domains ADD COLUMN important INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE local_rules ADD COLUMN regex INTEGER NOT NULL DEFAULT 0`,
+	// AI threat-intelligence assessments and the actions they proposed or took.
+	`CREATE TABLE IF NOT EXISTS ai_intel (
+		id        TEXT PRIMARY KEY,
+		ts        INTEGER NOT NULL,
+		hours     INTEGER NOT NULL,
+		model     TEXT NOT NULL DEFAULT '',
+		risk      TEXT NOT NULL DEFAULT 'low',
+		headline  TEXT NOT NULL,
+		summary   TEXT NOT NULL DEFAULT '',
+		findings  TEXT NOT NULL DEFAULT '[]'
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ai_intel_ts ON ai_intel(ts)`,
+	`CREATE TABLE IF NOT EXISTS ai_actions (
+		id          TEXT PRIMARY KEY,
+		intel_id    TEXT NOT NULL DEFAULT '',
+		ts          INTEGER NOT NULL,
+		kind        TEXT NOT NULL,
+		value       TEXT NOT NULL,
+		hours       INTEGER NOT NULL DEFAULT 0,
+		reason      TEXT NOT NULL DEFAULT '',
+		confidence  REAL NOT NULL DEFAULT 0,
+		status      TEXT NOT NULL DEFAULT 'suggested',
+		ref         TEXT NOT NULL DEFAULT '',
+		decided_at  INTEGER NOT NULL DEFAULT 0,
+		decided_by  TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ai_actions_ts ON ai_actions(ts)`,
 	`ALTER TABLE policies ADD COLUMN blocked_services TEXT NOT NULL DEFAULT '[]'`,
 	`ALTER TABLE policies ADD COLUMN unfiltered INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE dns_queries ADD COLUMN policy TEXT`,
@@ -414,5 +443,117 @@ var migrations = []string{
 		ts      INTEGER NOT NULL,
 		note    TEXT NOT NULL,
 		source  TEXT NOT NULL DEFAULT 'operator'
+	)`,
+	// IP threat intelligence: feed metadata, the parsed entries (so a restart
+	// without network still enforces), timed ban decisions, and every
+	// connection that touched a listed address.
+	`CREATE TABLE IF NOT EXISTS threat_feeds (
+		name       TEXT PRIMARY KEY,
+		url        TEXT NOT NULL,
+		category   TEXT NOT NULL DEFAULT '',
+		enabled    INTEGER NOT NULL DEFAULT 1,
+		entries    INTEGER NOT NULL DEFAULT 0,
+		skipped    INTEGER NOT NULL DEFAULT 0,
+		fetched_at INTEGER,
+		last_error TEXT NOT NULL DEFAULT '',
+		etag       TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE TABLE IF NOT EXISTS threat_entries (
+		feed   TEXT NOT NULL,
+		prefix TEXT NOT NULL,
+		PRIMARY KEY (feed, prefix)
+	)`,
+	`CREATE TABLE IF NOT EXISTS threat_decisions (
+		id          TEXT PRIMARY KEY,
+		value       TEXT NOT NULL,
+		source      TEXT NOT NULL,
+		reason      TEXT NOT NULL DEFAULT '',
+		origin      TEXT NOT NULL DEFAULT '',
+		external_id INTEGER NOT NULL DEFAULT 0,
+		actor       TEXT NOT NULL DEFAULT '',
+		created     INTEGER NOT NULL,
+		until       INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_threat_decisions_value ON threat_decisions(value)`,
+	`CREATE TABLE IF NOT EXISTS threat_hits (
+		id        INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts        INTEGER NOT NULL,
+		client_id TEXT NOT NULL DEFAULT '',
+		local_ip  TEXT NOT NULL DEFAULT '',
+		remote_ip TEXT NOT NULL,
+		prefix    TEXT NOT NULL DEFAULT '',
+		source    TEXT NOT NULL,
+		reason    TEXT NOT NULL DEFAULT '',
+		direction TEXT NOT NULL,
+		port      INTEGER NOT NULL DEFAULT 0,
+		proto     TEXT NOT NULL DEFAULT '',
+		enforced  INTEGER NOT NULL DEFAULT 0,
+		flow_id   TEXT NOT NULL DEFAULT '',
+		country   TEXT NOT NULL DEFAULT '',
+		as_org    TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_threat_hits_ts ON threat_hits(ts)`,
+	// What is hosted on the network: one row per listening service found by
+	// scanning or reported by a Docker host, and the port forwards this node
+	// created (in its own ruleset or on the upstream router).
+	`CREATE TABLE IF NOT EXISTS lan_services (
+		host       TEXT NOT NULL,
+		port       INTEGER NOT NULL,
+		proto      TEXT NOT NULL DEFAULT 'tcp',
+		name       TEXT NOT NULL DEFAULT '',
+		kind       TEXT NOT NULL DEFAULT '',
+		category   TEXT NOT NULL DEFAULT '',
+		title      TEXT NOT NULL DEFAULT '',
+		server     TEXT NOT NULL DEFAULT '',
+		scheme     TEXT NOT NULL DEFAULT '',
+		source     TEXT NOT NULL DEFAULT 'scan',
+		container  TEXT NOT NULL DEFAULT '',
+		image      TEXT NOT NULL DEFAULT '',
+		sensitive  INTEGER NOT NULL DEFAULT 0,
+		first_seen INTEGER NOT NULL,
+		last_seen  INTEGER NOT NULL,
+		online     INTEGER NOT NULL DEFAULT 1,
+		PRIMARY KEY (host, port, proto)
+	)`,
+	// Address ranges per country, extracted from the GeoIP database once and
+	// kept so a restart loads the packet-filter sets without a minute of
+	// iteration.
+	`CREATE TABLE IF NOT EXISTS geo_sets (
+		country  TEXT PRIMARY KEY,
+		v4       TEXT NOT NULL DEFAULT '',
+		v6       TEXT NOT NULL DEFAULT '',
+		built    INTEGER NOT NULL,
+		db_size  INTEGER NOT NULL DEFAULT 0
+	)`,
+	// Intrusion detection alerts: one row each time a scenario fires for an
+	// address, with what was seen and what was done about it.
+	`CREATE TABLE IF NOT EXISTS ids_alerts (
+		id        INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts        INTEGER NOT NULL,
+		ip        TEXT NOT NULL,
+		scenario  TEXT NOT NULL,
+		count     INTEGER NOT NULL DEFAULT 0,
+		source    TEXT NOT NULL DEFAULT '',
+		host      TEXT NOT NULL DEFAULT '',
+		sample    TEXT NOT NULL DEFAULT '',
+		action    TEXT NOT NULL DEFAULT '',
+		ban_until INTEGER NOT NULL DEFAULT 0,
+		country   TEXT NOT NULL DEFAULT '',
+		as_org    TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ids_alerts_ts ON ids_alerts(ts)`,
+	`CREATE INDEX IF NOT EXISTS idx_ids_alerts_ip ON ids_alerts(ip, ts)`,
+	`CREATE TABLE IF NOT EXISTS port_forwards (
+		id          TEXT PRIMARY KEY,
+		name        TEXT NOT NULL DEFAULT '',
+		proto       TEXT NOT NULL,
+		ext_port    INTEGER NOT NULL,
+		host        TEXT NOT NULL,
+		port        INTEGER NOT NULL,
+		method      TEXT NOT NULL,
+		rule_id     TEXT NOT NULL DEFAULT '',
+		lease_until INTEGER NOT NULL DEFAULT 0,
+		created     INTEGER NOT NULL,
+		actor       TEXT NOT NULL DEFAULT ''
 	)`,
 }

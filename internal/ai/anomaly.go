@@ -29,6 +29,10 @@ type Analyzer struct {
 	// raised keys off a finding's identity so the same beacon is not
 	// reported every ten minutes forever.
 	raised map[string]time.Time
+
+	// OnScan, when set, is told the source address of every scan finding so
+	// the threat manager can turn an outside scanner into a timed ban.
+	OnScan func(src string)
 }
 
 func NewAnalyzer(cfg *config.Config, client *Client, st *store.Store, log func(string, ...any)) *Analyzer {
@@ -358,6 +362,9 @@ func (a *Analyzer) detectPortScans(since time.Time) ([]Finding, error) {
 		if portSweep {
 			kind = "port sweep"
 		}
+		if a.OnScan != nil {
+			a.OnScan(src)
+		}
 		out = append(out, Finding{
 			Kind: "scanning", Severity: store.SevWarning,
 			Title:     fmt.Sprintf("Possible %s from %s", kind, src),
@@ -436,7 +443,7 @@ const triagePrompt = `You triage anomaly detections from a network monitoring ap
 produced by a statistical detector, so each is a lead rather than a conclusion.
 
 For each finding, judge whether it warrants the operator's attention and say why in one or two
-sentences. Most findings on a normal network have a mundane explanation — software update checks
+sentences. Most findings on a normal network have a mundane explanation, software update checks
 beacon on a schedule, cloud backups upload a lot, a smart TV phones home constantly, a phone that
 just joined is a family member's. Say so plainly when that is the likely story; a triage layer
 that escalates everything is worse than none.

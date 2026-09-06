@@ -142,7 +142,7 @@ func (t *Tailscale) Up(ctx context.Context) error {
 	acceptRoutes := c.AcceptRoutes
 	if acceptRoutes {
 		if overlap := t.OverlappingRoutes(ctx); len(overlap) > 0 {
-			t.log("tailscale: NOT accepting routes — a peer advertises %s, which covers this "+
+			t.log("tailscale: NOT accepting routes, a peer advertises %s, which covers this "+
 				"node's own network and would take it off the LAN", strings.Join(overlap, ", "))
 			acceptRoutes = false
 		}
@@ -251,7 +251,7 @@ func (t *Tailscale) SetAdvertiseExitNode(ctx context.Context, on bool) error {
 	}
 	t.invalidate()
 	if on {
-		t.log("tailscale: advertising as exit node — approve it in the Tailscale admin console before it can carry traffic")
+		t.log("tailscale: advertising as exit node, approve it in the Tailscale admin console before it can carry traffic")
 	}
 	return nil
 }
@@ -556,7 +556,7 @@ func (t *Tailscale) SetAcceptRoutes(ctx context.Context, on bool) error {
 	if on {
 		if overlap := t.OverlappingRoutes(ctx); len(overlap) > 0 {
 			return fmt.Errorf(
-				"a tailnet peer advertises %s, which covers this node's own network — "+
+				"a tailnet peer advertises %s, which covers this node's own network, "+
 					"accepting it would route local traffic into the tunnel and take this node "+
 					"off the LAN. Stop advertising that route, or leave route acceptance off",
 				strings.Join(overlap, ", "))

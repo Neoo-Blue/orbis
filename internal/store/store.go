@@ -29,6 +29,8 @@ type Store struct {
 	// busy_timeout instead of simply queueing. Downloads stay parallel —
 	// only the disk-bound commit is serialised.
 	writeMu sync.Mutex
+	// aggregates memoises the page-polled scans; see memo.go.
+	aggregates memo
 
 	// flowBuf batches flow upserts; drained on a ticker or when full.
 	mu      sync.Mutex
@@ -481,6 +483,16 @@ func (s *Store) TopDestinations(since time.Time, clientID string, limit int) ([]
 
 // CountryTotals feeds the globe's choropleth / heat layer.
 func (s *Store) CountryTotals(since time.Time) ([]map[string]any, error) {
+	v, err := s.aggregates.get("countries|"+bucket(since, time.Minute), time.Minute, func() (any, error) {
+		return s.countryTotals(since)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]map[string]any), nil
+}
+
+func (s *Store) countryTotals(since time.Time) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT country, COUNT(*) c, SUM(bytes_in+bytes_out) b,
 		SUM(CASE WHEN verdict='block' THEN 1 ELSE 0 END) blk, AVG(lat), AVG(lon)
 		FROM flows WHERE started_at >= ? AND country != '' GROUP BY country ORDER BY b DESC`, since.Unix())
@@ -516,6 +528,20 @@ func (s *Store) AddEvent(e Event) error {
 	return err
 }
 
+// EventByID fetches one event.
+func (s *Store) EventByID(id string) (*Event, error) {
+	rows, err := s.db.Query("SELECT id, ts, severity, category, title, COALESCE(detail,''), COALESCE(client_id,''), COALESCE(flow_id,''), acknowledged, COALESCE(data,'{}') FROM events WHERE id = ?", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list, err := scanEvents(rows)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
 func (s *Store) Events(since time.Time, severity string, unackOnly bool, limit int) ([]Event, error) {
 	q := "SELECT id, ts, severity, category, title, COALESCE(detail,''), COALESCE(client_id,''), COALESCE(flow_id,''), acknowledged, COALESCE(data,'{}') FROM events WHERE ts >= ?"
 	args := []any{since.Unix()}
@@ -532,6 +558,10 @@ func (s *Store) Events(since time.Time, severity string, unackOnly bool, limit i
 		return nil, err
 	}
 	defer rows.Close()
+	return scanEvents(rows)
+}
+
+func scanEvents(rows *sql.Rows) ([]Event, error) {
 	out := []Event{}
 	for rows.Next() {
 		var e Event

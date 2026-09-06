@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { ExplainButton } from './ai/Explain'
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Card, Empty, Icons, Loading, Search, Segmented, useToast } from '../ui'
@@ -137,11 +138,14 @@ function EventRow({ event, expanded, onToggle, onAck }: {
             }}>{JSON.stringify(event.data, null, 2)}</pre>
           )}
         </div>
-        {!event.acknowledged && (
-          <button className="btn sm" onClick={(ev) => { ev.stopPropagation(); onAck() }}>
-            <Icons.check size={12} /> Ack
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 6, flexDirection: 'column', alignItems: 'flex-end' }}>
+          <ExplainButton kind="event" id={event.id} />
+          {!event.acknowledged && (
+            <button className="btn sm" onClick={(ev) => { ev.stopPropagation(); onAck() }}>
+              <Icons.check size={12} /> Ack
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

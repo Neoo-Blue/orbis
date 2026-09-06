@@ -143,3 +143,16 @@ export function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void]
   )
   return [value, set]
 }
+
+/** useMediaQuery tracks a CSS media query, for the few places where markup
+ *  (not only style) has to differ on a phone. */
+export function useMediaQuery(q: string): boolean {
+  const [match, setMatch] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
+  useEffect(() => {
+    const m = window.matchMedia(q)
+    const on = () => setMatch(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [q])
+  return match
+}

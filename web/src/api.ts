@@ -9,7 +9,10 @@ import type {
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
   OnboardingState, PlacementCheck, TopoGraph, InterceptStatus, DNSRecord,
   AlertRule, ReportData, BuiltinList,
-} from './types'
+  ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
+  HostedResponse, StorageDevice, PortForward, RouterInfo,
+  LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus, IDSStatus,
+ UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -150,6 +153,8 @@ export const api = {
     decide: (domain: string, decision: 'block' | 'allow' | 'dismiss') =>
       post<{ ok: boolean }>(`/adblock/candidates/${encodeURIComponent(domain)}`, { decision }),
     scan: () => post<{ started: boolean }>('/adblock/scan'),
+    presets: () => get<{ presets: Preset[] }>('/adblock/presets'),
+    addPreset: (id: string) => post<{ ok: boolean }>(`/adblock/presets/${id}`, {}),
     check: (domain: string) =>
       get<{
         domain: string; blocked: boolean; allowed: boolean; source?: string
@@ -313,6 +318,13 @@ export const api = {
     notes: () => get<{ notes: AINote[] }>('/ai/notes'),
     addNote: (note: string) => post<{ note: AINote }>('/ai/notes', { note }),
     deleteNote: (id: string) => del<{ ok: boolean }>(`/ai/notes/${id}`),
+    intel: (limit = 5) => get<IntelStatus>(`/ai/intel${qs({ limit })}`),
+    runIntel: (hours?: number) => post<{ assessment: AIIntel; actions: AIAction[] }>('/ai/intel/run', hours ? { hours } : {}),
+    decideAction: (id: string, decision: 'apply' | 'dismiss' | 'undo') =>
+      post<{ action: AIAction }>(`/ai/actions/${id}`, { decision }),
+    explain: (kind: 'event' | 'alert' | 'ip' | 'domain', key: string) =>
+      post<{ explanation: Explanation }>('/ai/explain', { kind, key }),
+    judge: (domain: string) => post<DomainJudgement>('/ai/judge', { domain }),
   },
 
   shortcuts: {
@@ -329,6 +341,57 @@ export const api = {
     pauses: () => get<{ pauses: Record<string, string> }>('/pauses'),
   },
 
+  links: {
+    get: () => get<LinksResponse>('/links'),
+    apply: (body?: { wan: string; lan: string[]; wifi: string[] }) => post<{ applied: LinkSuggestion }>('/links/apply', body ?? {}),
+  },
+  wifi: {
+    status: () => get<WiFiStatus>('/wifi/status'),
+    enable: (body: { ssid?: string; passphrase?: string; band?: string }) => post<WiFiStatus>('/wifi/enable', body),
+    disable: () => post<WiFiStatus>('/wifi/disable'),
+    passphrase: (passphrase?: string) => post<WiFiStatus>('/wifi/passphrase', { passphrase: passphrase ?? '' }),
+  },
+  update: {
+    get: () => get<UpdateStatus>('/update'),
+    check: () => post<UpdateStatus>('/update/check', {}),
+    apply: () => post<UpdateStatus>('/update/apply', {}),
+  },
+  ids: {
+    get: (hours = 24, limit = 200) => get<IDSStatus>(`/ids${qs({ hours, limit })}`),
+    test: (line: string) => post<{ matched: boolean; scenario?: string; title?: string; ip?: string; host?: string; program?: string; threshold?: number; window_seconds?: number }>('/ids/test', { line }),
+  },
+  country: {
+    get: () => get<CountryStatus>('/country'),
+    rule: (code: string, action: 'add' | 'remove' | 'mode_block' | 'mode_allow' | 'enable' | 'disable') =>
+      post<CountryStatus>('/country/rules', { code, action }),
+  },
+  hosted: {
+    overview: () => get<HostedResponse>('/hosted'),
+    scan: () => post<{ started: boolean }>('/hosted/scan'),
+    storage: () => get<{ storage: StorageDevice[] }>('/hosted/storage'),
+    forwards: () => get<{ forwards: PortForward[]; router: RouterInfo; forwarding: { inline: boolean; upnp: boolean } }>('/hosted/forwards'),
+    forward: (body: { host: string; port: number; proto?: string; ext_port?: number; name?: string; confirm?: boolean }) =>
+      post<{ forward: PortForward }>('/hosted/forwards', body),
+    removeForward: (id: string) => del<{ ok: boolean }>(`/hosted/forwards/${encodeURIComponent(id)}`),
+    removeRouterMapping: (proto: string, port: number) => del<{ ok: boolean }>(`/hosted/router/${proto}/${port}`),
+    saveDocker: (body: { name: string; url: string; enabled: boolean }) => post<{ ok: boolean }>('/hosted/docker', body),
+    deleteDocker: (name: string) => del<{ ok: boolean }>(`/hosted/docker/${encodeURIComponent(name)}`),
+    testDocker: (url: string) => post<{ ok: boolean; version: string; api_version: string; containers: number }>('/hosted/docker/test', { url }),
+  },
+  threat: {
+    status: () => get<ThreatStatus>('/threat/status'),
+    feeds: () => get<{ feeds: ThreatFeed[] }>('/threat/feeds'),
+    saveFeed: (feed: ThreatFeedConfig) => post<{ ok: boolean }>('/threat/feeds', feed),
+    deleteFeed: (name: string) => del<{ ok: boolean }>(`/threat/feeds/${encodeURIComponent(name)}`),
+    refresh: () => post<{ started: boolean }>('/threat/refresh'),
+    decisions: () => get<{ decisions: ThreatDecision[] }>('/threat/decisions'),
+    ban: (body: { value: string; hours: number; reason: string }) => post<{ decision: ThreatDecision }>('/threat/decisions', body),
+    unban: (id: string) => del<{ lifted: number }>(`/threat/decisions/${encodeURIComponent(id)}`),
+    hits: (hours = 24, limit = 200) =>
+      get<{ since: string; hits: ThreatHit[]; devices: Record<string, { id: string; name: string; ip: string }> }>(`/threat/hits${qs({ hours, limit })}`),
+    lookup: (ip: string) => get<{ ip: string; listed: boolean; prefix?: string; source?: string; reason?: string; country?: string; network?: string }>(`/threat/lookup${qs({ ip })}`),
+    testCrowdSec: (body: { url: string; api_key: string }) => post<{ ok: boolean; decisions: number; bans: number }>('/threat/crowdsec/test', body),
+  },
   services: {
     list: (hours = 24, client_id = '') => get<ServicesResponse>(`/services${qs({ hours, client_id })}`),
     detail: (service: string, hours = 24, client_id = '') =>
@@ -437,8 +500,8 @@ export const api = {
     block: (domain: string, wildcard = false, note?: string) =>
       post<{ ok: boolean }>('/dnstools/block', { domain, wildcard, note }),
     unblock: (domain: string) => post<{ ok: boolean }>('/dnstools/unblock', { domain }),
-    importList: (text: string, opts: { action?: 'block' | 'allow'; dry_run?: boolean; note?: string } = {}) =>
-      post<ImportResult>('/dnstools/import', { text, ...opts }),
+    importList: (source: { text?: string; file?: string; filename?: string }, opts: { action?: 'block' | 'allow'; dry_run?: boolean; note?: string } = {}) =>
+      post<ImportResult>('/dnstools/import', { ...source, ...opts }),
   },
 
   onboarding: {

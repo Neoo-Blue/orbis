@@ -119,7 +119,7 @@ func generateCA(dir string, ca *CA) (*CA, error) {
 			OrganizationalUnit: []string{
 				// Spelling out what this key can do in the subject means an
 				// operator who finds it in a trust store knows immediately.
-				"Local network content filter — installed by the network owner",
+				"Local network content filter, installed by the network owner",
 			},
 		},
 		NotBefore:             time.Now().Add(-time.Hour),

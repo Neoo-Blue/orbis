@@ -149,7 +149,10 @@
      internal scrolling, so the shell must not add a second scrollbar around
      them. min-height:0 is what lets a flex child actually shrink instead of
      being floored at its content height. */
-  .page.flush { padding: 0; overflow: hidden; min-height: 0; }
+  .page.flush { padding: 0; overflow: hidden; min-height: 0; display: flex; flex-direction: column; }
+  /* Banners above a full-height view take their own space; the view gets the rest,
+     so the chat composer or the globe controls stay on screen. */
+  .page.flush > .chat, .page.flush > .globe-stage { flex: 1 1 0; min-height: 0; height: auto; }
 
   /* ---------- primitives ---------- */
   .card {
@@ -544,9 +547,11 @@
   box-shadow: 0 6px 18px -8px rgba(78,232,192,.5);
 }
 
-/* Denser grid options for enterprise pages. */
-.grid.c4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-@media (max-width: 900px) { .grid.c4 { grid-template-columns: repeat(2, 1fr); } }
+/* Denser grid options for enterprise pages. minmax(0, 1fr) so a long label
+   cannot widen a column past the viewport. */
+.grid.c4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .grid.c4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .grid.c4, .grid.c3, .grid.c2 { grid-template-columns: minmax(0, 1fr); } }
 
 /* Nav gets a faint glass depth and an active accent bar. */
 .nav { backdrop-filter: blur(8px); }
@@ -630,16 +635,85 @@ tr:hover td, .row:hover { background: color-mix(in srgb, var(--accent) 4%, trans
 .alert-row .title { font-size: 14px; }
 .alert-row .detail { color: var(--text-dim); font-size: 12.5px; margin-top: 3px; line-height: 1.55; white-space: pre-wrap; }
 
+/* Settings: side navigation on wide screens, a scrolling chip row on phones. */
+.settings-layout { display: grid; grid-template-columns: 218px minmax(0, 1fr); gap: 18px; align-items: start; }
+.settings-nav { position: sticky; top: 0; display: grid; gap: 2px; }
+
+/* Controls in the top bar must never be squeezed to a sliver. */
+.topbar .segmented, .topbar .btn { flex: none; }
+
 @media (max-width: 880px) {
-  .shell.simple { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
-  .shell.simple .nav { order: 2; flex-direction: row; justify-content: space-around; border-right: 0; border-top: 1px solid var(--line-soft); padding: 6px 4px; gap: 0; overflow: visible; }
-  .shell.simple .nav-item { flex-direction: column; gap: 3px; font-size: 10.5px; padding: 6px 4px; justify-content: center; }
-  .shell.simple .nav-item span { display: block; }
-  .shell.simple .nav-item[aria-current='page']::before { display: none; }
-  .shell.simple .brand, .shell.simple .nav-group, .shell.simple .nav-foot, .shell.simple .nav-badge { display: none; }
-  .shell.simple .main { order: 1; }
+  .shell { height: 100dvh; }
+  .topbar { gap: 8px; padding: 0 12px; }
+  .topbar h1 { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar .tag { display: none; }
+  .brand-mode { display: none; }
+  .settings-layout { grid-template-columns: 1fr; gap: 12px; }
+  .settings-nav { position: static; display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 6px; }
+  .settings-nav > div { display: contents; }
+  .settings-nav .nav-group { display: none !important; }
+  .settings-nav .nav-item { width: auto !important; white-space: nowrap; flex: none; border: 1px solid var(--line-soft); border-radius: 999px; padding: 6px 12px; }
+  .settings-nav .nav-item[aria-current='page']::before { display: none; }
+  .settings-nav .nav-item[aria-current='page'] { border-color: var(--accent); }
+  .settings-nav > div:first-child { display: block; flex: 1 0 100%; }
+  .drawer { width: 100vw; left: 0; border-left: 0; }
+  /* Tab strips scroll sideways instead of wrapping their labels or overflowing the page. */
+  .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .segmented::-webkit-scrollbar { display: none; }
+  .segmented button { white-space: nowrap; flex: none; }
+  .page > div > .card, .card { min-width: 0; }
+
+  /* A bottom tab bar for both interfaces on phones. The nav wraps items in a
+     section div, so that wrapper is flattened and the items share the row. */
+  .shell.tabs { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  .shell.tabs .main { order: 1; min-height: 0; }
+  .shell.tabs .nav { order: 2; flex-direction: row; align-items: stretch; border-right: 0; border-top: 1px solid var(--line-soft); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); gap: 0; overflow: visible; background: rgba(8,11,18,.96); }
+  .shell.tabs > .nav .nav-section { display: contents; }
+  .shell.tabs > .nav .nav-item { flex: 1 1 0; width: auto; min-width: 0; flex-direction: column; gap: 3px; font-size: 10.5px; padding: 6px 2px; justify-content: center; text-align: center; }
+  .shell.tabs > .nav .nav-item span { display: block; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .shell.tabs > .nav .nav-item svg { width: 19px; height: 19px; }
+  .shell.tabs > .nav .nav-item[aria-current='page']::before { display: none; }
+  .shell.tabs > .nav .brand, .shell.tabs > .nav .nav-group, .shell.tabs > .nav .nav-foot, .shell.tabs > .nav .nav-badge { display: none; }
+  /* The All-pages sheet: icon above label, one tile per page. */
+  .more-grid .nav-item { width: auto; flex-direction: column; gap: 6px; justify-content: center; text-align: center; border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; }
+  .more-grid .nav-item[aria-current='page']::before { display: none; }
+  .more-grid .nav-item[aria-current='page'] { border-color: var(--accent); }
+  .shell.tabs .page { padding: 12px; }
+  .shell.tabs .page.flush { padding: 0; }
+  /* On a phone the legend sits at the foot of the globe, out of the way of the
+     view controls; the country panel moves up to make room and the ticker is
+     hidden, since the phone has no spare corner for it. */
+  .globe-overlay { padding: 10px; }
+  .globe-legend-row { margin-top: auto; width: 100%; }
+  .globe-legend-row .globe-legend { width: 100%; flex-wrap: wrap; gap: 4px 10px; font-size: 10px; padding: 5px 9px; justify-content: center; }
+  .globe-hud { right: 10px; top: 10px; max-height: 52%; }
+  .globe-country-panel { right: 10px; bottom: 66px; width: 200px; max-height: 32%; }
+  .globe-ticker { display: none; }
+  .chat-log { padding: 14px 12px; }
+  .chat-input { padding: 10px 12px; }
+  /* Content must never be wider than the phone. Pages stack their sections in
+     inline-styled grids whose single implicit column is auto-sized, so one
+     unwrapped tab strip would widen every sibling. Pin that column to the
+     available width and let children shrink or scroll inside it. */
+  .page [style*="display: grid"]:not([style*="grid-template-columns"]) { grid-auto-columns: minmax(0, 1fr); }
+  .page [style*="display: grid"] > * { min-width: 0; }
+  .page [style*="display: flex"] > .truncate { min-width: 0; }
+  .banner { min-width: 0; overflow-wrap: anywhere; }
+  .banner code, .banner .mono { white-space: normal; word-break: break-all; }
+  .toolbar { flex-wrap: wrap; }
+  .toolbar > * { min-width: 0; max-width: 100%; }
+  .card-head { flex-wrap: wrap; gap: 8px; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.t td, table.t th { white-space: nowrap; }
+  .stat-value { font-size: 24px; }
+  .kv { grid-template-columns: 1fr; }
+  .simple .page { padding: 14px; }
+  .hero { padding: 18px; }
+  .hero-title { font-size: 19px; }
   .device-card { grid-template-columns: 40px 1fr; }
   .device-card .actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .bigswitch { padding: 12px 14px; gap: 12px; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* Toasts can carry one action (undo). */

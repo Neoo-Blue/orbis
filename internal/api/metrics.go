@@ -107,6 +107,27 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		m.counter("orbis_adblock_misses_total", "Lookups that matched nothing.", float64(misses))
 	}
 
+	// The node itself.
+	if r := app.Resources(); !r.SampledAt.IsZero() {
+		m.gauge("orbis_process_cpu_percent", "Daemon CPU use, percent of one core, over the last sample.", r.ProcessCPU)
+		m.gauge("orbis_process_rss_bytes", "Daemon resident memory.", float64(r.RSSBytes))
+		m.gauge("orbis_process_heap_bytes", "Go heap in use.", float64(r.HeapBytes))
+		m.gauge("orbis_host_cpu_percent", "Host CPU use, percent of all cores.", r.HostCPU)
+		m.gauge("orbis_host_mem_available_bytes", "Host memory available.", float64(r.MemAvailable))
+		m.gauge("orbis_host_load1", "Host one-minute load average.", r.Load1)
+		if r.TempC > 0 {
+			m.gauge("orbis_host_temp_celsius", "SoC or CPU temperature.", r.TempC)
+		}
+	}
+
+	// Threat intelligence.
+	if app.Threat != nil {
+		entries, decisions := app.Threat.Counts()
+		m.gauge("orbis_threat_entries", "Listed addresses and ranges in the threat table.", float64(entries))
+		m.gauge("orbis_threat_decisions", "Active ban decisions (manual, assistant, scan, crowdsec).", float64(decisions))
+		m.counter("orbis_threat_hits_total", "Connections that touched a listed address since start.", float64(app.Threat.HitsSinceStart()))
+	}
+
 	// Flows.
 	if app.Tracker != nil {
 		t := app.Tracker.Stats()

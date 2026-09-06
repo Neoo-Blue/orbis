@@ -112,7 +112,8 @@ export function AssistantPage({ initialQuestion, onConsumed }: { initialQuestion
     })
   }, [])
 
-  useEffect(scrollToBottom, [bubbles, scrollToBottom])
+  // Follow the conversation, but leave the empty state at its top so the intro is read first.
+  useEffect(() => { if (bubbles.length) scrollToBottom() }, [bubbles, scrollToBottom])
 
   // A question handed over from another page (the simple home's ask box) is
   // sent once, as soon as we know the assistant is configured.
@@ -441,7 +442,7 @@ export function AssistantPage({ initialQuestion, onConsumed }: { initialQuestion
             </span>
           )}
           {canWrite && (
-            <span>Write access is on — changes land in the audit log.</span>
+            <span>Write access is on, changes land in the audit log.</span>
           )}
         </div>
       </div>

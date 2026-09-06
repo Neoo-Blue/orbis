@@ -70,8 +70,8 @@ export function VPNOutPage() {
       }>
         {data.tunnels.length === 0 ? (
           <Empty title="No outbound tunnels">
-            Paste a WireGuard config from any provider — Mullvad, Proton, AirVPN, your own
-            server — and then choose which devices go through it.
+            Paste a WireGuard config from any provider (Mullvad, Proton, AirVPN, your own
+            server) and then choose which devices go through it.
           </Empty>
         ) : (
           <div style={{ display: 'grid', gap: 11 }}>
@@ -245,7 +245,7 @@ function ImportTunnel({ onClose, onDone }: { onClose: () => void; onDone: () => 
       }>
       <div style={{ display: 'grid', gap: 13 }}>
         <Field label="Name" hint="What this connection is, so you can tell two providers apart.">
-          <input className="input" value={name} autoFocus placeholder="Mullvad — Amsterdam"
+          <input className="input" value={name} autoFocus placeholder="Mullvad Amsterdam"
             onChange={(e) => setName(e.target.value)} />
         </Field>
 
@@ -267,7 +267,7 @@ function ImportTunnel({ onClose, onDone }: { onClose: () => void; onDone: () => 
 
         <Banner tone="info">
           <code>PostUp</code> and <code>PostDown</code> hooks in a provider's file are ignored
-          rather than executed — they are arbitrary shell from a third party, and everything they
+          rather than executed, they are arbitrary shell from a third party, and everything they
           normally do (NAT, kill switch, DNS) Orbis does itself.
         </Banner>
       </div>

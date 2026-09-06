@@ -122,26 +122,26 @@ type Rule struct {
 }
 
 type Policy struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	Categories  []string  `json:"categories"`
-	Allowlist   []string  `json:"allowlist"`
-	Denylist    []string  `json:"denylist"`
-	SafeSearch  bool      `json:"safe_search"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Categories  []string `json:"categories"`
+	Allowlist   []string `json:"allowlist"`
+	Denylist    []string `json:"denylist"`
+	SafeSearch  bool     `json:"safe_search"`
 	// BlockedServices are BlockedService ids (tiktok, roblox, ...) refused
 	// for clients on this policy.
 	BlockedServices []string `json:"blocked_services"`
-	BlockDoH    bool      `json:"block_doh"`
+	BlockDoH        bool     `json:"block_doh"`
 	// Unfiltered exempts clients on this policy from the blocklists (the
 	// global matcher and CNAME uncloaking). The policy's own denylist,
 	// blocked services and DoH rule still apply: those are the operator's
 	// decisions about this device, not a subscription. This is what AdGuard
 	// Home calls a client with filtering disabled.
-	Unfiltered  bool      `json:"unfiltered"`
-	Schedule    string    `json:"schedule,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Unfiltered bool      `json:"unfiltered"`
+	Schedule   string    `json:"schedule,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 const (
@@ -162,6 +162,27 @@ type Event struct {
 	FlowID   string         `json:"flow_id,omitempty"`
 	Ack      bool           `json:"acknowledged"`
 	Data     map[string]any `json:"data,omitempty"`
+}
+
+// List entry kinds, stored in block_domains.wildcard.
+const (
+	EntryExact         = 0
+	EntryWildcard      = 1
+	EntryRegex         = 2
+	EntryAllowExact    = 3
+	EntryAllowWildcard = 4
+	EntryAllowRegex    = 5
+)
+
+// ListEntries is a parsed list ready to store.
+type ListEntries struct {
+	Exact, Wildcard, Regex                []string
+	AllowExact, AllowWildcard, AllowRegex []string
+	Important                             map[string]bool
+}
+
+func (e ListEntries) Count() int {
+	return len(e.Exact) + len(e.Wildcard) + len(e.Regex) + len(e.AllowExact) + len(e.AllowWildcard) + len(e.AllowRegex)
 }
 
 type ListMeta struct {
@@ -201,9 +222,11 @@ type AdCandidate struct {
 }
 
 type LocalRule struct {
-	Domain    string    `json:"domain"`
-	Action    string    `json:"action"` // block | allow
-	Wildcard  bool      `json:"wildcard"`
+	Domain   string `json:"domain"`
+	Action   string `json:"action"` // block | allow
+	Wildcard bool   `json:"wildcard"`
+	// Regex means Domain is a pattern, not a name.
+	Regex     bool      `json:"regex,omitempty"`
 	Origin    string    `json:"origin"` // user | smart | ai | import
 	Note      string    `json:"note,omitempty"`
 	CreatedAt time.Time `json:"created_at"`

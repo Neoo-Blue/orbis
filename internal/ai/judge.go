@@ -34,14 +34,14 @@ You are given behavioural evidence gathered by the network itself, not a descrip
 - name_keywords are suggestive but not decisive on their own. Plenty of legitimate services have
   "metrics" or "analytics" in the name, and plenty of ad servers have neutral names.
 - High label entropy with deep subdomains suggests generated hostnames, which ad networks use to
-  evade static lists — but CDN shards look identical, so do not over-weight it.
+  evade static lists, but CDN shards look identical, so do not over-weight it.
 
 Blocking the wrong thing is worse than missing an ad. Set breakage_risk to "high" when blocking
 would plausibly break something the user cares about: a CDN that also serves site assets, a
 push-notification endpoint, an auth or payment provider, an OS update or time service, a
 certificate/OCSP responder, or a first-party API for a service the user is actively using.
 Consent-management and session-replay hosts are tracking, but blocking them sometimes blocks the
-page too — mark those "medium".
+page too, mark those "medium".
 
 Answer with a JSON array and nothing else. One object per domain you were given:
 [{"domain":"...","is_ad_or_tracking":true,"confidence":0.0-1.0,"reason":"one sentence","breakage_risk":"low|medium|high"}]

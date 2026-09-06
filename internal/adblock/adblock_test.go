@@ -179,7 +179,7 @@ func TestHeuristicSeparatesAdsFromServices(t *testing.T) {
 	}
 	cdn := DomainEvidence{
 		Domain: "d3abc123xyz.cloudfront.net", Observations: 90, DistinctClients: 5,
-		ReferringSites:  []string{"shop.example", "news.example", "blog.example"},
+		ReferringSites: []string{"shop.example", "news.example", "blog.example"},
 		ThirdPartyRatio: 1.0, AvgResponseBytes: 180_000, SubdomainDepth: 2, LabelEntropy: 3.9,
 	}
 
@@ -220,11 +220,11 @@ func TestHeuristicNeverFlagsInfrastructure(t *testing.T) {
 
 func TestRegistrableHandlesMultiLabelSuffixes(t *testing.T) {
 	cases := map[string]string{
-		"ads.example.co.uk":       "example.co.uk",
-		"a.b.example.com":         "example.com",
-		"example.com":             "example.com",
+		"ads.example.co.uk":     "example.co.uk",
+		"a.b.example.com":       "example.com",
+		"example.com":           "example.com",
 		"deep.sub.example.com.au": "example.com.au",
-		"single":                  "single",
+		"single":                "single",
 	}
 	for in, want := range cases {
 		if got := registrable(in); got != want {

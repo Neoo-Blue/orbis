@@ -5,6 +5,7 @@ import { Banner, Field, Loading, Spinner, useToast } from '../ui'
 import type { AppConfig } from '../types'
 import { BigSwitch, Section } from './common'
 import { ShortcutsCard } from '../Shortcuts'
+import { IntelTab } from '../pages/ai/IntelTab'
 
 /**
  * Protection: every filtering feature as a sentence and a switch. The
@@ -76,8 +77,30 @@ export function SimpleProtection({ config, save, onNavigate }: {
           <BigSwitch icon="🧠" title="Learn new ad hosts automatically" checked={config.adblock.smart_capture.enabled}
             desc="Watches for hosts that behave like ad servers before any list knows them, and asks the assistant to judge."
             onChange={(v) => save({ 'adblock.smart_capture.enabled': v })} />
+          <BigSwitch icon="🌍" title="Block countries" checked={config.country?.enabled ?? false} disabled={(config.country?.countries ?? []).length === 0}
+            desc={(config.country?.countries ?? []).length > 0
+              ? `${config.country.mode === 'allow' ? 'Only allowing' : 'Blocking'} ${config.country.countries.join(', ')}. Pick countries on the Threats page.`
+              : 'No countries chosen yet. Pick them on the Threats page under Countries.'}
+            onChange={(v) => save({ 'country.enabled': v })} />
+          <BigSwitch icon="🚫" title="Block known-bad internet addresses" checked={config.threat?.enabled ?? false}
+            desc="Hijacked networks, botnet control servers and known attackers, from published security feeds. Catches a device that never asks the DNS filter."
+            onChange={(v) => save({ 'threat.enabled': v })} />
         </div>
       </Section>
+
+      {config.ai.enabled && (
+        <Section title="AI threat check" hint="The assistant reads attacks, hits and anomalies and says what they mean.">
+          <div style={{ display: 'grid', gap: 10 }}>
+            <BigSwitch icon="🤖" title="Let the assistant block threats on its own" checked={config.ai.intel.active_blocking}
+              desc="When it is confident, it bans an attacking address or blocks a malicious host at once. Limited, logged, and undoable below."
+              onChange={async (v) => {
+                if (v && !confirm('The assistant will ban addresses and block hosts on its own when it is confident. Continue?')) return
+                await save({ 'ai.intel.active_blocking': v })
+              }} />
+            <IntelTab compact onToggleActive={async (v) => { await save({ 'ai.intel.active_blocking': v }) }} />
+          </div>
+        </Section>
+      )}
 
       <Section title="YouTube on the TV">
         <div style={{ display: 'grid', gap: 10 }}>

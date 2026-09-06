@@ -326,7 +326,7 @@ function LocalRules() {
                 {rules.map((r) => (
                   <tr key={r.domain}>
                     <td className="mono" style={{ fontSize: 12 }}>
-                      {r.wildcard && <span style={{ color: 'var(--text-faint)' }}>*.</span>}{r.domain}
+                      {r.regex ? <span className="mono" title="regular expression">/{r.domain}/</span> : <>{r.wildcard && <span style={{ color: 'var(--text-faint)' }}>*.</span>}{r.domain}</>}
                     </td>
                     <td><span className={`tag ${r.action === 'block' ? 'block' : 'allow'}`}>{r.action}</span></td>
                     <td style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{r.origin}</td>
@@ -354,8 +354,10 @@ function LocalRules() {
 function Lists() {
   const { data, refresh } = usePoll(() => api.adblock.lists(), 20000)
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState({ name: '', url: '', category: 'ads' })
+  const [form, setForm] = useState({ name: '', url: '', category: 'ads', action: 'block', format: '' })
   const toast = useToast()
+  const { data: presetData, refresh: refreshPresets } = usePoll(() => api.adblock.presets(), 30000)
+  const [presetBusy, setPresetBusy] = useState<string | null>(null)
 
   return (
     <>
@@ -395,16 +397,33 @@ function Lists() {
                 <option value="bypass">DNS bypass</option>
               </select>
             </div>
+            <div className="grid c2">
+              <div className="field">
+                <label>Kind</label>
+                <select className="select" value={form.action} onChange={(e) => setForm({ ...form, action: e.target.value })}>
+                  <option value="block">Blocklist</option>
+                  <option value="allow">Allowlist (every entry is an exception)</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Format</label>
+                <select className="select" value={form.format} onChange={(e) => setForm({ ...form, format: e.target.value })}>
+                  <option value="">Detect per line</option>
+                  <option value="regex">Regular expressions, one per line (Pi-hole regex list)</option>
+                </select>
+              </div>
+            </div>
             <div className="hint">
-              Hosts files, plain domain lists, AdBlock-syntax network rules and dnsmasq
-              address= lines are all understood. Cosmetic rules are skipped.
+              Any list AdGuard Home or Pi-hole takes works here: hosts files, plain domains, AdGuard rules with
+              exceptions, $important and wildcards, regex lists, dnsmasq, unbound and RPZ. Cosmetic rules and
+              per-client or record-type modifiers are skipped, because DNS cannot honour them.
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn primary" disabled={!form.name || !form.url} onClick={async () => {
                 try {
                   await api.adblock.addList({ ...form, enabled: true })
                   toast('List added, downloading now', 'ok')
-                  setForm({ name: '', url: '', category: 'ads' })
+                  setForm({ name: '', url: '', category: 'ads', action: 'block', format: '' })
                   setAdding(false)
                   setTimeout(refresh, 1500)
                 } catch (e) {
@@ -413,6 +432,39 @@ function Lists() {
               }}>Add</button>
               <button className="btn" onClick={() => setAdding(false)}>Cancel</button>
             </div>
+          </div>
+        </Card>
+      )}
+
+      {presetData && presetData.presets.some((p) => !p.installed) && (
+        <Card title="Popular lists" actions={<span className="hint">One click to subscribe. The same lists Pi-hole and AdGuard Home users start with.</span>}>
+          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+            {presetData.presets.filter((p) => !p.installed).map((p) => (
+              <div key={p.id} style={{ border: '1px solid var(--line-soft)', borderRadius: 8, padding: '9px 11px', display: 'grid', gap: 5 }}>
+                <div style={{ display: 'flex', gap: 7, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</span>
+                  <span className="tag">{p.category}</span>
+                  {p.recommended && <span className="tag ok">recommended</span>}
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.55, flex: 1 }}>{p.description}</div>
+                <div>
+                  <button className="btn sm" disabled={presetBusy === p.id} onClick={async () => {
+                    setPresetBusy(p.id)
+                    try {
+                      await api.adblock.addPreset(p.id)
+                      toast(`${p.name} added, downloading now`, 'ok')
+                      refreshPresets(); setTimeout(refresh, 1500)
+                    } catch (e) {
+                      toast(e instanceof Error ? e.message : 'Could not add', 'err')
+                    } finally { setPresetBusy(null) }
+                  }}><Icons.plus size={12} /> Add</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hint" style={{ marginTop: 10 }}>
+            Moving from Pi-hole or AdGuard Home? Import your whole setup, including a Teleporter backup or AdGuardHome.yaml,
+            from <a href="#/dnstools">Domain tester, Import a list</a>.
           </div>
         </Card>
       )}
@@ -460,7 +512,7 @@ function Lists() {
                       <div className="truncate mono" style={{ fontSize: 10.5, color: 'var(--text-faint)', maxWidth: 380 }}
                         title={l.url}>{l.url}</div>
                     </td>
-                    <td><span className="tag">{l.category || '—'}</span></td>
+                    <td><span className="tag">{l.category || '—'}</span>{l.action === 'allow' && <span className="tag allow" style={{ marginLeft: 4 }}>allowlist</span>}{l.format === 'regex' && <span className="tag" style={{ marginLeft: 4 }}>regex</span>}</td>
                     <td className="num">{compact(l.entries)}</td>
                     <td style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{ago(l.last_updated)}</td>
                     <td>
@@ -516,7 +568,7 @@ function InStream() {
         </strong>
         YouTube serves its ads from the same hosts as its video, over the same connection. There is
         no name to block, so DNS filtering cannot touch it. Removing those ads means terminating
-        TLS on this node and editing the player response in flight — which requires installing the
+        TLS on this node and editing the player response in flight, which requires installing the
         certificate below on every device you want filtered.
       </Banner>
 
@@ -666,7 +718,7 @@ function InStream() {
           <div>
             <strong style={{ color: 'var(--text)' }}>Does not work:</strong> server-side stitched ads,
             where the ad frames are muxed into the same video stream as the content. Nothing on the
-            network can separate those — the ad and the video are literally the same bytes.
+            network can separate those, the ad and the video are literally the same bytes.
           </div>
           <div>
             <strong style={{ color: 'var(--text)' }}>Will not be intercepted:</strong> apps that pin

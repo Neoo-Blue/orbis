@@ -68,6 +68,7 @@ export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, clas
       endLat: a.end_lat, endLng: a.end_lng,
       verdict: a.verdict, bytes: a.bytes, risk: a.risk, active: a.active,
       label: a.label, direction: a.direction ?? 'out', meta: {},
+      bytesIn: a.bytes_in ?? 0, bytesOut: a.bytes_out ?? 0,
     }))
     scene.setArcs(specs)
 

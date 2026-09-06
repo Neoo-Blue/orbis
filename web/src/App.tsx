@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { api, setUnauthorizedHandler } from './api'
-import { usePoll, useLive, useLocalStorage, type LiveEvent } from './hooks'
-import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast } from './ui'
+import { usePoll, useLive, useLocalStorage, useMediaQuery, type LiveEvent } from './hooks'
+import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast, Drawer } from './ui'
 import type { AppConfig, SystemStatus, Summary } from './types'
 import { Dashboard } from './pages/Dashboard'
+import { UpdateBanner } from './pages/UpdateCard'
 import { GlobePage } from './pages/GlobePage'
 import { AnalyticsPage } from './pages/Analytics'
 import { AlertsPage } from './pages/Alerts'
@@ -23,6 +24,9 @@ import { NetworkPage } from './pages/Network'
 import { VPNPage } from './pages/VPN'
 import { AssistantPage } from './pages/Assistant'
 import { ProblemsPage } from './pages/Problems'
+import { ThreatsPage } from './pages/Threats'
+import { HostedPage } from './pages/Hosted'
+import { LinksPage } from './pages/Links'
 import { ServicesPage } from './pages/Services'
 import { ProfilesPage } from './pages/Profiles'
 import { SimpleHome } from './simple/Home'
@@ -40,10 +44,11 @@ import { GlossaryButton } from './Glossary'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services' | 'threats' | 'hosted' | 'links'
   | 'profiles' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
 
-const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
+type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; group?: string; short?: string }
+const ROUTES: NavRoute[] = [
   { id: 'dashboard', label: 'Overview', icon: 'grid' },
   { id: 'globe', label: 'Globe', icon: 'globe' },
   { id: 'flows', label: 'Connections', icon: 'activity' },
@@ -58,6 +63,9 @@ const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?
   { id: 'youtube', label: 'YouTube', icon: 'tv' },
   { id: 'consent', label: 'Ask first', icon: 'shield' },
   { id: 'firewall', label: 'Firewall', icon: 'shield', group: 'Network' },
+  { id: 'threats', label: 'Threats', icon: 'alert' },
+  { id: 'hosted', label: 'Hosted apps', icon: 'spark' },
+  { id: 'links', label: 'Cables & Wi-Fi', icon: 'route' },
   { id: 'network', label: 'DHCP & LAN', icon: 'route' },
   { id: 'gateway', label: 'Gateway', icon: 'activity' },
   { id: 'intercept', label: 'Interception', icon: 'route' },
@@ -71,16 +79,18 @@ const ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?
 ]
 
 /** The simple interface: seven plain words, one screen each. */
-const SIMPLE_ROUTES: Array<{ id: Route; label: string; icon: keyof typeof Icons; group?: string }> = [
+const SIMPLE_ROUTES: NavRoute[] = [
   { id: 's-home', label: 'Home', icon: 'grid' },
   { id: 's-devices', label: 'Devices', icon: 'devices' },
-  { id: 's-protection', label: 'Protection', icon: 'shield' },
+  { id: 's-protection', label: 'Protection', icon: 'shield', short: 'Protect' },
   { id: 's-usage', label: 'Usage', icon: 'tv' },
   { id: 'assistant', label: 'Ask', icon: 'chat' },
   { id: 's-alerts', label: 'Alerts', icon: 'bell' },
   { id: 's-settings', label: 'Settings', icon: 'gear' },
 ]
 const ALL_ROUTES = [...ROUTES, ...SIMPLE_ROUTES]
+/** On a phone the advanced interface shows these four and a "More" sheet. */
+const MOBILE_PRIMARY: Route[] = ['dashboard', 'flows', 'clients', 'assistant']
 
 function routeFromHash(): Route {
   const raw = location.hash.replace(/^#\/?/, '').split('/')[0]
@@ -211,10 +221,15 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   }, [status?.version])
   const candidates = summary?.ad_candidates ?? 0
 
-  const navRoutes = ui === 'simple' ? SIMPLE_ROUTES : ROUTES
+  const narrow = useMediaQuery('(max-width: 880px)')
+  const [moreOpen, setMoreOpen] = useState(false)
+  // The sheet is a navigation aid, so any route change (a tap inside it, the
+  // palette, a link in a page) closes it, as does growing past phone width.
+  useEffect(() => { setMoreOpen(false) }, [route, narrow])
+  const navRoutes = ui === 'simple' ? SIMPLE_ROUTES : narrow ? ROUTES.filter((r) => MOBILE_PRIMARY.includes(r.id)) : ROUTES
   const grouped = useMemo(() => {
-    const out: Array<{ group?: string; items: typeof ROUTES }> = []
-    let current: { group?: string; items: typeof ROUTES } | null = null
+    const out: Array<{ group?: string; items: NavRoute[] }> = []
+    let current: { group?: string; items: NavRoute[] } | null = null
     for (const r of navRoutes) {
       if (r.group || !current) {
         current = { group: r.group, items: [] }
@@ -231,8 +246,11 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   const go = (r: string) => navigate(r as Route)
   const onAsk = (q: string) => { setPendingQuestion(q); navigate('assistant') }
 
+  const tabs = ui === 'simple' || narrow
+  const inPrimary = ui === 'simple' || MOBILE_PRIMARY.includes(shown)
+
   return (
-    <div className={`shell${ui === 'simple' ? ' simple' : ''}`}>
+    <div className={`shell${ui === 'simple' ? ' simple' : ''}${tabs ? ' tabs' : ''}`}>
       <CommandPalette pages={ROUTES} onNavigate={(r) => navigate(r as Route)} />
       <nav className="nav">
         <div className="brand">
@@ -244,13 +262,13 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           </svg>
           <div>
             <div className="brand-name">Orbis</div>
-            <span className={`brand-mode ${mode}`}>{mode}</span>
+            <span className={`brand-mode ${mode}`} title={`${mode} mode`}>{mode}</span>
           </div>
         </div>
 
         {grouped.map((g, gi) => (
-          <div key={gi}>
-            {g.group && <div className="nav-group">{g.group}</div>}
+          <div key={gi} className="nav-section">
+            {g.group && !(narrow && ui === 'advanced') && <div className="nav-group">{g.group}</div>}
             {g.items.map((r) => {
               const Icon = Icons[r.icon]
               const badge =
@@ -261,13 +279,20 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
                 <button key={r.id} className="nav-item" onClick={() => navigate(r.id)} title={r.label}
                   aria-current={shown === r.id ? 'page' : undefined}>
                   <Icon />
-                  <span>{r.label}</span>
+                  <span>{narrow && r.short ? r.short : r.label}</span>
                   {badge}
                 </button>
               )
             })}
           </div>
         ))}
+        {narrow && ui === 'advanced' && (
+          <button className="nav-item" onClick={() => setMoreOpen(true)} title="All pages"
+            aria-current={!inPrimary ? 'page' : undefined}>
+            <Icons.grid />
+            <span>More</span>
+          </button>
+        )}
 
         <div className="nav-foot">
           <div>{connected ? '● live' : '○ reconnecting'}</div>
@@ -280,6 +305,10 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
         <header className="topbar">
           <h1>{title}</h1>
           <div className="spacer" />
+          {narrow && ui === 'advanced' && (
+            <button className="btn sm" title="Search pages, devices and settings" aria-label="Search"
+              onClick={() => window.dispatchEvent(new Event('orbis:palette'))}><Icons.search size={14} /></button>
+          )}
           <Segmented value={ui} onChange={(v) => setUIPref(v)}
             options={[{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Advanced' }]} />
           <GlossaryButton />
@@ -293,6 +322,38 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           </span>
         </header>
 
+        {moreOpen && (
+          <Drawer title="All pages" onClose={() => setMoreOpen(false)}>
+            <div style={{ display: 'grid', gap: 14 }}>
+              {(() => {
+                const out: Array<{ group: string; items: NavRoute[] }> = []
+                for (const r of ROUTES) {
+                  const g = r.group ?? (out.length ? out[out.length - 1].group : 'Observe')
+                  let b = out.find((x) => x.group === g)
+                  if (!b) { b = { group: g, items: [] }; out.push(b) }
+                  b.items.push(r)
+                }
+                return out
+              })().map((g) => (
+                <div key={g.group}>
+                  <div className="nav-group" style={{ display: 'block', padding: '0 0 6px' }}>{g.group}</div>
+                  <div className="more-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+                    {g.items.map((r) => {
+                      const Icon = Icons[r.icon]
+                      return (
+                        <button key={r.id} className="nav-item"
+                          aria-current={shown === r.id ? 'page' : undefined}
+                          onClick={() => { setMoreOpen(false); navigate(r.id) }}>
+                          <Icon /><span>{r.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Drawer>
+        )}
         <div className={`page${shown === 'globe' || shown === 'assistant' ? ' flush' : ''}`}>
           {updated && (
             <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
@@ -301,6 +362,11 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
               }>
                 Orbis was updated to {updated} while this page was open. Reload to pick up the new interface.
               </Banner>
+            </div>
+          )}
+          {!updated && route !== 'settings' && route !== 's-settings' && (
+            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
+              <UpdateBanner onSettings={() => navigate('settings')} />
             </div>
           )}
           {setupRequired && route !== 'settings' && (
@@ -348,6 +414,9 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {shown === 's-alerts' && <SimpleAlerts onNavigate={go} />}
           {shown === 's-settings' && (config ? <SimpleSettings config={config} status={status} save={saveConfig} uiMode={ui} setUIMode={(m) => setUIPref(m)} onNavigate={go} /> : <Spinner />)}
           {route === 'problems' && <ProblemsPage />}
+          {route === 'threats' && <ThreatsPage />}
+          {route === 'hosted' && <HostedPage />}
+          {route === 'links' && <LinksPage />}
           {route === 'services' && <ServicesPage onNavigate={(r) => setRoute(r)} />}
           {route === 'events' && <EventsPage />}
           {route === 'alerts' && <AlertsPage />}

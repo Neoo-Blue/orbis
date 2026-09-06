@@ -30,6 +30,9 @@ type Hooks struct {
 	LocalRecords func(name string, qtype uint16) []dns.RR
 	// Publish streams a query to live subscribers.
 	Publish func(store.DNSQuery)
+	// CountryCheck refuses an answer whose addresses land in a blocked
+	// country for this client; it returns the country that decided.
+	CountryCheck func(client netip.Addr, name string, addrs []netip.Addr) (bool, string)
 }
 
 type Server struct {
@@ -44,9 +47,9 @@ type Server struct {
 	upstreams []*Upstream
 	// zoneUps holds pre-parsed upstreams for conditional-forward zones, keyed
 	// by zone domain. Parsing a spec per query would be wasteful.
-	zoneUps   map[string][]*Upstream
-	servers   []*dns.Server
-	running   bool
+	zoneUps map[string][]*Upstream
+	servers []*dns.Server
+	running bool
 
 	// inflight collapses duplicate concurrent queries for the same name, so
 	// a page load with 30 parallel requests for one host makes one upstream
@@ -61,12 +64,12 @@ type Server struct {
 }
 
 type Stats struct {
-	Queries   int64 `json:"queries"`
-	Blocked   int64 `json:"blocked"`
-	Cached    int64 `json:"cached"`
-	Errors    int64 `json:"errors"`
-	Collapsed  int64 `json:"collapsed"`
-	Local      int64 `json:"local"`
+	Queries     int64 `json:"queries"`
+	Blocked     int64 `json:"blocked"`
+	Cached      int64 `json:"cached"`
+	Errors      int64 `json:"errors"`
+	Collapsed   int64 `json:"collapsed"`
+	Local       int64 `json:"local"`
 	RateLimited int64 `json:"rate_limited"`
 	Rebind      int64 `json:"rebind_blocked"`
 	Rewritten   int64 `json:"rewritten"`
@@ -355,6 +358,13 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		logEntry.LatencyMS = msSince(start)
 		logEntry.Answer = answerStrings(cached)
 		s.stats.Cached++
+		if m, code := s.countryBlocked(r, q, cfg, clientAddr, name, cached); m != nil {
+			logEntry.Blocked, logEntry.BlockSource, logEntry.Answer = true, "country:"+code, answerStrings(m)
+			logEntry.RCode = dns.RcodeToString[m.Rcode]
+			s.stats.Blocked++
+			s.finish(w, m, logEntry, cfg)
+			return
+		}
 		s.noteAnswers(cached, name)
 		s.finish(w, cached, logEntry, cfg)
 		return
@@ -418,8 +428,45 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	logEntry.Upstream = upstream
 	logEntry.LatencyMS = msSince(start)
 	logEntry.Answer = answerStrings(resp)
+	if m, code := s.countryBlocked(r, q, cfg, clientAddr, name, resp); m != nil {
+		logEntry.Blocked, logEntry.BlockSource, logEntry.Answer = true, "country:"+code, answerStrings(m)
+		logEntry.RCode = dns.RcodeToString[m.Rcode]
+		s.stats.Blocked++
+		s.finish(w, m, logEntry, cfg)
+		return
+	}
 	s.noteAnswers(resp, name)
 	s.finish(w, resp, logEntry, cfg)
+}
+
+// countryBlocked applies the country rules to an answer. The upstream reply
+// is cached as it came, so a rule change takes effect on the next lookup
+// without a flush; only what the client sees is replaced.
+func (s *Server) countryBlocked(r *dns.Msg, q dns.Question, cfg config.Config, client netip.Addr, name string, m *dns.Msg) (*dns.Msg, string) {
+	if s.hooks.CountryCheck == nil || m == nil || len(m.Answer) == 0 {
+		return nil, ""
+	}
+	var addrs []netip.Addr
+	for _, rr := range m.Answer {
+		switch v := rr.(type) {
+		case *dns.A:
+			if a, ok := netip.AddrFromSlice(v.A.To4()); ok {
+				addrs = append(addrs, a)
+			}
+		case *dns.AAAA:
+			if a, ok := netip.AddrFromSlice(v.AAAA.To16()); ok {
+				addrs = append(addrs, a)
+			}
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, ""
+	}
+	blocked, code := s.hooks.CountryCheck(client, name, addrs)
+	if !blocked {
+		return nil, ""
+	}
+	return s.blockedReply(r, q, cfg, adblock.Match{Blocked: true, Source: "country:" + code, Rule: code}), code
 }
 
 // evaluateBlock applies the global matcher and then any per-client policy.

@@ -50,6 +50,11 @@ type Config struct {
 	Tailscale TailscaleConfig `yaml:"tailscale" json:"tailscale"`
 	AI        AIConfig        `yaml:"ai" json:"ai"`
 	Issues    IssuesConfig    `yaml:"issues" json:"issues"`
+	Threat    ThreatConfig    `yaml:"threat" json:"threat"`
+	Discover  DiscoverConfig  `yaml:"discover" json:"discover"`
+	WiFi      WiFiConfig      `yaml:"wifi" json:"wifi"`
+	Country   CountryConfig   `yaml:"country" json:"country"`
+	IDS       IDSConfig       `yaml:"ids" json:"ids"`
 	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
 	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
 
@@ -62,6 +67,9 @@ type Config struct {
 	// lock; snapshots set it to nil and are read-only by construction.
 	path string
 	mu   *sync.RWMutex
+	// gen counts mutations; snap caches the last snapshot for that gen.
+	gen  uint64
+	snap *snapshotCache
 }
 
 // lock/unlock tolerate a nil mutex so the same methods work on a snapshot.
@@ -110,6 +118,16 @@ type NetworkConfig struct {
 	// Intercept inserts Orbis into selected devices' path by ARP, without
 	// becoming the network's gateway or DHCP server.
 	Intercept InterceptConfig `yaml:"intercept" json:"intercept"`
+	// Links is how physical interfaces are told apart: which cable is the
+	// internet and which is the network, and whether to act on that alone.
+	Links LinksConfig `yaml:"links" json:"links"`
+}
+
+// LinksConfig controls automatic WAN/LAN assignment. With AutoAssign the
+// node applies an unambiguous classification when a cable is plugged in;
+// without it, the classification is proposed and waits for a click.
+type LinksConfig struct {
+	AutoAssign bool `yaml:"auto_assign" json:"auto_assign"`
 }
 
 // InterceptConfig is ARP interception: Orbis answers ARP for the real gateway
@@ -147,9 +165,9 @@ type NodeConfig struct {
 	// UIMode is the default interface for new browsers: "simple" shows the
 	// plain-language surface (protection, devices, usage, assistant),
 	// "advanced" shows every page and setting. Each browser can override it.
-	UIMode string `yaml:"ui_mode" json:"ui_mode"`
-	DataDir       string `yaml:"data_dir" json:"data_dir"`
-	Timezone      string `yaml:"timezone" json:"timezone"`
+	UIMode   string `yaml:"ui_mode" json:"ui_mode"`
+	DataDir  string `yaml:"data_dir" json:"data_dir"`
+	Timezone string `yaml:"timezone" json:"timezone"`
 	// Latitude/Longitude pin this node on the globe. When both are zero the
 	// node discovers its own public address and geolocates it locally.
 	Latitude  float64 `yaml:"latitude" json:"latitude"`
@@ -360,6 +378,12 @@ type BlockList struct {
 	// Category tags the list for per-client policy ("ads", "malware",
 	// "tracking", "adult", "social").
 	Category string `yaml:"category" json:"category"`
+	// Action "allow" makes every entry an exception (AdGuard Home's
+	// allowlist filters); empty or "block" is a blocklist.
+	Action string `yaml:"action,omitempty" json:"action,omitempty"`
+	// Format "regex" treats every line as a regular expression (Pi-hole's
+	// regex lists); empty detects per line.
+	Format string `yaml:"format,omitempty" json:"format,omitempty"`
 }
 
 type SmartCaptureConfig struct {
@@ -499,6 +523,153 @@ type FirewallConfig struct {
 	// AntiLockout keeps a permanent accept for the management address so a
 	// bad ruleset cannot orphan the box.
 	AntiLockout bool `yaml:"anti_lockout" json:"anti_lockout"`
+}
+
+// ThreatConfig is IP-level threat intelligence: address feeds, timed ban
+// decisions and an optional CrowdSec bouncer. Where a DNS blocklist stops a
+// name from resolving, these stop a connection to or from an address, which
+// is what catches a device that never asked the resolver.
+type ThreatConfig struct {
+	Enabled bool         `yaml:"enabled" json:"enabled"`
+	Feeds   []ThreatFeed `yaml:"feeds" json:"feeds"`
+	// UpdateIntervalHours is how often each feed is fetched again.
+	UpdateIntervalHours int `yaml:"update_interval_hours" json:"update_interval_hours"`
+	// BlockOutbound drops connections from the network to listed addresses
+	// (a device beaconing to a command server). BlockInbound drops
+	// connections from listed addresses into the network (scanners, brute
+	// force against a forwarded port).
+	BlockOutbound bool `yaml:"block_outbound" json:"block_outbound"`
+	BlockInbound  bool `yaml:"block_inbound" json:"block_inbound"`
+	// Allow lists addresses and prefixes that are never blocked whatever a
+	// feed says: your own servers, a VPN endpoint, a provider that landed on
+	// a list by accident. A listed range that overlaps an allowed one is
+	// dropped from the set entirely.
+	Allow []string `yaml:"allow" json:"allow"`
+	// AutoBanScanners turns the anomaly detector's port-scan findings from
+	// outside the network into one-hour bans.
+	AutoBanScanners bool           `yaml:"auto_ban_scanners" json:"auto_ban_scanners"`
+	CrowdSec        CrowdSecConfig `yaml:"crowdsec" json:"crowdsec"`
+}
+
+// ThreatFeed is one address list: plain IPs, CIDRs, or either with comments
+// after # or ;, one per line.
+type ThreatFeed struct {
+	Name    string `yaml:"name" json:"name"`
+	URL     string `yaml:"url" json:"url"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	// Category is a short label for the UI: c2, attackers, compromised, spam.
+	Category string `yaml:"category" json:"category"`
+}
+
+// CrowdSecConfig makes this node a CrowdSec bouncer: it pulls the decision
+// stream from a Local API and enforces bans at the gateway. The key comes
+// from `cscli bouncers add orbis` on the machine running the engine.
+type CrowdSecConfig struct {
+	Enabled     bool   `yaml:"enabled" json:"enabled"`
+	URL         string `yaml:"url" json:"url"`
+	APIKey      string `yaml:"api_key" json:"api_key"`
+	PollSeconds int    `yaml:"poll_seconds" json:"poll_seconds"`
+}
+
+// DiscoverConfig finds what is hosted on the network: services behind open
+// ports on each device (with HTTP fingerprinting to name them), containers
+// on hosts whose Docker Engine API is reachable, and storage (NAS and SAN)
+// by vendor and protocol. It also holds the port-forwarding preferences.
+type DiscoverConfig struct {
+	Enabled       bool `yaml:"enabled" json:"enabled"`
+	IntervalHours int  `yaml:"interval_hours" json:"interval_hours"`
+	// ExtraPorts are probed in addition to the built-in catalogue.
+	ExtraPorts []int `yaml:"extra_ports" json:"extra_ports"`
+	// Docker hosts whose Engine API this node may read: tcp://host:2375 or
+	// unix:///var/run/docker.sock when Orbis runs on the Docker host.
+	Docker []DockerHost `yaml:"docker" json:"docker"`
+	// UPnP lets this node ask the upstream router for a port mapping when it
+	// is not the gateway itself. Off means forwards need inline mode.
+	UPnP bool `yaml:"upnp" json:"upnp"`
+}
+
+// DockerHost is one Docker Engine API endpoint.
+type DockerHost struct {
+	Name    string `yaml:"name" json:"name"`
+	URL     string `yaml:"url" json:"url"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+}
+
+// WiFiConfig runs an access point on a wireless adapter. In routed mode the
+// Wi-Fi network gets its own subnet with this node as its gateway, DHCP and
+// resolver, translated out through the wired side, which works whether or
+// not this node is the network's gateway. In bridge mode hostapd attaches the
+// adapter to an existing bridge and the wired network's DHCP serves it.
+type WiFiConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Interface is the wireless adapter; empty picks the first one found.
+	Interface  string `yaml:"interface" json:"interface"`
+	SSID       string `yaml:"ssid" json:"ssid"`
+	Passphrase string `yaml:"passphrase" json:"passphrase"`
+	// Band is auto, 2.4 or 5. Auto prefers 5 GHz when the adapter and the
+	// country code allow it.
+	Band    string `yaml:"band" json:"band"`
+	Channel int    `yaml:"channel" json:"channel"`
+	// Country is the ISO 3166-1 alpha-2 regulatory domain; 5 GHz needs it.
+	Country        string `yaml:"country" json:"country"`
+	Hidden         bool   `yaml:"hidden" json:"hidden"`
+	IsolateClients bool   `yaml:"isolate_clients" json:"isolate_clients"`
+	// Mode is routed or bridge.
+	Mode   string `yaml:"mode" json:"mode"`
+	Bridge string `yaml:"bridge" json:"bridge"`
+	// Subnet is this node's address on the Wi-Fi network with its prefix,
+	// e.g. 192.168.60.1/24; DHCP hands out the rest of it.
+	Subnet string `yaml:"subnet" json:"subnet"`
+	// LANAccess lets Wi-Fi clients reach the wired network (routed mode).
+	LANAccess bool `yaml:"lan_access" json:"lan_access"`
+	// WPA3 offers SAE alongside WPA2 for clients that support it.
+	WPA3 bool `yaml:"wpa3" json:"wpa3"`
+}
+
+// CountryConfig blocks or allows traffic by the country an address belongs
+// to. Block mode drops what is listed; allow mode drops everything that is
+// not listed (addresses with no known country are left alone). It acts at
+// three places: the resolver refuses names whose answers land in a blocked
+// country, new connections are marked and killed where this node enforces,
+// and in block mode the countries' address ranges become packet-filter sets.
+type CountryConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Mode is block or allow.
+	Mode      string   `yaml:"mode" json:"mode"`
+	Countries []string `yaml:"countries" json:"countries"`
+	// BlockOutbound stops devices reaching those countries; BlockInbound
+	// stops those countries reaching in.
+	BlockOutbound bool `yaml:"block_outbound" json:"block_outbound"`
+	BlockInbound  bool `yaml:"block_inbound" json:"block_inbound"`
+	// DNS refuses names whose addresses are in a blocked country, which is
+	// what protects devices this node only serves DNS to.
+	DNS bool `yaml:"dns" json:"dns"`
+	// Exemptions: device ids, domain suffixes and addresses or ranges the
+	// rule does not apply to.
+	ExemptClients []string `yaml:"exempt_clients" json:"exempt_clients"`
+	ExemptDomains []string `yaml:"exempt_domains" json:"exempt_domains"`
+	ExemptIPs     []string `yaml:"exempt_ips" json:"exempt_ips"`
+}
+
+// IDSConfig is the built-in intrusion detection: it reads this node's own
+// authentication log, receives syslog from other hosts, and watches the
+// flow table for scans and floods, turning repeated failures from one
+// address into a timed ban at the gateway.
+type IDSConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Journal reads sshd and login failures from journald (or auth.log)
+	// on this node.
+	Journal bool `yaml:"journal" json:"journal"`
+	// SyslogListen receives log lines from other hosts (rsyslog "*.* @host:514",
+	// a NAS's log forwarding). Empty disables the receiver.
+	SyslogListen string `yaml:"syslog_listen" json:"syslog_listen"`
+	// Flows enables scan, sweep and flood detection from the flow table.
+	Flows bool `yaml:"flows" json:"flows"`
+	// Ignore lists addresses and ranges never acted on (a monitoring host,
+	// a scanner you run yourself).
+	Ignore []string `yaml:"ignore" json:"ignore"`
+	// BanHours scales every scenario's ban; 1 is the built-in duration.
+	BanMultiplier float64 `yaml:"ban_multiplier" json:"ban_multiplier"`
 }
 
 type DHCPConfig struct {
@@ -692,6 +863,33 @@ type AIConfig struct {
 	// Review is the scheduled blocklist review: allow/block suggestions with
 	// the operator's decisions remembered.
 	Review ReviewConfig `yaml:"review" json:"review"`
+	// Intel is the scheduled threat-intelligence assessment, and the active
+	// blocking that lets it act on its own findings.
+	Intel IntelConfig `yaml:"intel" json:"intel"`
+}
+
+// IntelConfig schedules the threat-intelligence assessment. The assessment
+// reads attacks, threat-feed hits, anomalies, bans and unusual traffic and
+// returns a risk level, findings and proposed actions. With ActiveBlocking
+// on, proposed bans and domain blocks that clear MinConfidence are applied
+// at once, bounded by MaxActionsPerRun and MaxBanHours, and every one can be
+// undone from the Threats page.
+type IntelConfig struct {
+	Enabled       bool `yaml:"enabled" json:"enabled"`
+	IntervalHours int  `yaml:"interval_hours" json:"interval_hours"`
+	// ActiveBlocking applies the assessment's actions without a click.
+	ActiveBlocking bool `yaml:"active_blocking" json:"active_blocking"`
+	// MinConfidence an action needs before active blocking applies it.
+	MinConfidence float64 `yaml:"min_confidence" json:"min_confidence"`
+	// MaxActionsPerRun caps how many actions one assessment may apply.
+	MaxActionsPerRun int `yaml:"max_actions_per_run" json:"max_actions_per_run"`
+	// MaxBanHours bounds the length of any ban the assessment applies.
+	MaxBanHours int `yaml:"max_ban_hours" json:"max_ban_hours"`
+	// BanAddresses / BlockDomains choose which kinds active blocking may take.
+	BanAddresses bool `yaml:"ban_addresses" json:"ban_addresses"`
+	BlockDomains bool `yaml:"block_domains" json:"block_domains"`
+	// Notify sends each assessment through the notification sinks.
+	Notify bool `yaml:"notify" json:"notify"`
 }
 
 // ReviewConfig schedules the ad-blocking specialist.
@@ -969,6 +1167,18 @@ func Default() *Config {
 			ExitNodeAllowLAN: true,
 			RouteTable:       52,
 		},
+		Threat: ThreatConfig{
+			Enabled:             true,
+			Feeds:               DefaultThreatFeeds(),
+			UpdateIntervalHours: 6,
+			BlockOutbound:       true,
+			BlockInbound:        true,
+			CrowdSec:            CrowdSecConfig{PollSeconds: 30},
+		},
+		Discover: DiscoverConfig{Enabled: true, IntervalHours: 6, UPnP: true},
+		WiFi:     WiFiConfig{SSID: "Orbis", Band: "auto", Mode: "routed", Subnet: "192.168.60.1/24", LANAccess: true},
+		Country:  CountryConfig{Mode: "block", BlockOutbound: true, BlockInbound: true, DNS: true},
+		IDS:      IDSConfig{Enabled: true, Journal: true, SyslogListen: "0.0.0.0:514", Flows: true, BanMultiplier: 1},
 		Issues: IssuesConfig{
 			Enabled:     true,
 			AutoCapture: true,
@@ -1010,12 +1220,41 @@ func Default() *Config {
 				IntervalHours:  24,
 				MaxSuggestions: 8,
 			},
+			Intel: IntelConfig{
+				Enabled:          true,
+				IntervalHours:    6,
+				ActiveBlocking:   false,
+				MinConfidence:    0.85,
+				MaxActionsPerRun: 5,
+				MaxBanHours:      24,
+				BanAddresses:     true,
+				BlockDomains:     true,
+			},
 		},
 	}
 }
 
 // DefaultLists is the out-of-the-box subscription set. Every entry is a
 // widely mirrored, permissively licensed list.
+// DefaultThreatFeeds are small, well-maintained address lists that are safe
+// to drop in both directions: hijacked and criminal netblocks, live botnet
+// command servers, and addresses seen attacking. The larger aggregates are
+// present but off, since a few thousand more entries on a small board is a
+// choice the operator should make.
+func DefaultThreatFeeds() []ThreatFeed {
+	return []ThreatFeed{
+		{Name: "Spamhaus DROP", URL: "https://www.spamhaus.org/drop/drop.txt", Enabled: true, Category: "hijacked"},
+		{Name: "Spamhaus DROP v6", URL: "https://www.spamhaus.org/drop/dropv6.txt", Enabled: true, Category: "hijacked"},
+		{Name: "Feodo Tracker C2", URL: "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt", Enabled: true, Category: "c2"},
+		{Name: "Binary Defense banlist", URL: "https://www.binarydefense.com/banlist.txt", Enabled: true, Category: "attackers"},
+		{Name: "Emerging Threats compromised", URL: "https://rules.emergingthreats.net/blockrules/compromised-ips.txt", Enabled: true, Category: "compromised"},
+		{Name: "Firehol level 1", URL: "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset", Enabled: false, Category: "attackers"},
+		{Name: "CINS Army", URL: "https://cinsscore.com/list/ci-badguys.txt", Enabled: false, Category: "attackers"},
+		{Name: "GreenSnow", URL: "https://blocklist.greensnow.co/greensnow.txt", Enabled: false, Category: "attackers"},
+		{Name: "blocklist.de (all)", URL: "https://lists.blocklist.de/lists/all.txt", Enabled: false, Category: "attackers"},
+	}
+}
+
 func DefaultLists() []BlockList {
 	return []BlockList{
 		{Name: "StevenBlack unified", URL: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", Enabled: true, Category: "ads"},
@@ -1249,14 +1488,46 @@ func (c *Config) Update(fn func(*Config)) error {
 		c.unlock()
 		return fmt.Errorf("inline mode not applied: %s", msg)
 	}
+	c.gen++
 	c.unlock()
 	return c.Save()
 }
 
 // Snapshot returns a deep copy safe to hand to a goroutine or serialise.
+// snapshotCache holds the last value copy so the hot paths (every DNS
+// query, every new connection) do not each pay for a YAML round trip of
+// the whole configuration, which costs milliseconds and megabytes on a
+// small board. It is rebuilt only after a mutation bumped gen.
+type snapshotCache struct {
+	mu  sync.Mutex
+	gen uint64
+	val *Config
+}
+
 func (c *Config) Snapshot() Config {
 	c.rlock()
 	defer c.runlock()
+	if c.mu == nil {
+		// A snapshot of a snapshot: no cache, no lock, just copy.
+		return c.deepCopyLocked()
+	}
+	if c.snap == nil {
+		c.snap = &snapshotCache{}
+	}
+	c.snap.mu.Lock()
+	defer c.snap.mu.Unlock()
+	if c.snap.val == nil || c.snap.gen != c.gen {
+		cp := c.deepCopyLocked()
+		c.snap.val, c.snap.gen = &cp, c.gen
+	}
+	// A struct copy: scalars are independent, slices and maps are shared
+	// with the cache and with every other caller. Snapshots are read-only
+	// by contract; a caller that needs to change a list assigns a new one.
+	return *c.snap.val
+}
+
+// deepCopyLocked is the YAML round trip; the caller holds the lock.
+func (c *Config) deepCopyLocked() Config {
 	out, _ := yaml.Marshal(c)
 	var cp Config
 	_ = yaml.Unmarshal(out, &cp)
@@ -1280,6 +1551,12 @@ func (c *Config) Redacted() Config {
 	}
 	if cp.Issues.GitHub.Token != "" {
 		cp.Issues.GitHub.Token = mask
+	}
+	if cp.Threat.CrowdSec.APIKey != "" {
+		cp.Threat.CrowdSec.APIKey = mask
+	}
+	if cp.WiFi.Passphrase != "" {
+		cp.WiFi.Passphrase = mask
 	}
 	if cp.API.SessionKey != "" {
 		cp.API.SessionKey = mask

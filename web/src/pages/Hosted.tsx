@@ -178,8 +178,9 @@ function StorageTab({ storage, onForward }: { storage: StorageDevice[]; onForwar
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {s.protocols.length === 0 && <span className="hint">no file protocol answered; the vendor or identifier says storage</span>}
                 {s.protocols.map((p) => (
-                  <span key={p.port} className="tag" title={`port ${p.port}`}>{p.name} <span className="mono hint">:{p.port}</span>
-                    <button className="btn sm" style={{ marginLeft: 6 }} onClick={() => onForward(s.IP, p.port, `${s.Name} ${p.name}`)} title="Forward this protocol (not recommended)">Forward</button>
+                  <span key={p.port} className="tag" title={`port ${p.port}. Forwarding a file protocol to the internet is not recommended; click to do it anyway.`}
+                    style={{ cursor: 'pointer' }} onClick={() => onForward(s.IP, p.port, `${s.Name} ${p.name}`)}>
+                    {p.name} <span className="mono hint">:{p.port}</span>
                   </span>
                 ))}
               </div>
@@ -297,7 +298,7 @@ function ForwardDialog({ initial, onClose, onDone }: {
       <div className="scrim" onClick={onClose} />
       <div className="drawer" role="dialog" aria-label="Forward a port">
         <div className="drawer-head"><h2 style={{ fontSize: 15 }}>Forward a port</h2><div className="spacer" /><button className="btn sm" onClick={onClose}><Icons.close size={14} /></button></div>
-        <div className="drawer-body" style={{ display: 'grid', gap: 14 }}>
+        <div className="drawer-body" style={{ display: 'grid', gap: 14, alignContent: 'start' }}>
           <div className="hint" style={{ lineHeight: 1.6 }}>
             Opens a port on your internet address and sends it to one device here. Anyone on the internet can then reach that service, so it had better have a login and be kept up to date.
           </div>
@@ -319,7 +320,7 @@ function ForwardDialog({ initial, onClose, onDone }: {
               </label>
             </Banner>
           )}
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button className="btn primary" disabled={busy || !host || !port || (needsConfirm && !confirmed)} onClick={submit}>Create forward</button>
             <button className="btn" onClick={onClose}>Cancel</button>
           </div>

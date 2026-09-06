@@ -10,7 +10,7 @@ import { searchSettings } from '../settingsIndex'
 
 type Section =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
-  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
+  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'hosted' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
 
 const SECTIONS: Array<{ id: Section; label: string; group: string; blurb: string }> = [
   { id: 'general', label: 'Node & mode', group: 'System', blurb: 'Name, timezone, and whether Orbis is inline' },
@@ -28,6 +28,7 @@ const SECTIONS: Array<{ id: Section; label: string; group: string; blurb: string
   { id: 'vpn', label: 'WireGuard', group: 'Network', blurb: 'Server address, port and public endpoint' },
   { id: 'tailscale', label: 'Tailscale', group: 'Network', blurb: 'Exit node, subnet routes, tailnet options' },
   { id: 'threats', label: 'Threat intelligence', group: 'Network', blurb: 'Address feeds, bans, the CrowdSec bouncer' },
+  { id: 'hosted', label: 'Hosted apps & forwarding', group: 'Network', blurb: 'Service discovery, Docker hosts, UPnP port forwarding' },
 
   { id: 'assistant', label: 'Assistant', group: 'Intelligence', blurb: 'Provider, model, write access, anomaly detection' },
   { id: 'problems', label: 'Problem reports', group: 'Intelligence', blurb: 'Record what goes wrong, scrub it, file it on GitHub' },
@@ -138,6 +139,7 @@ export function SettingsPage({ status, onAuthChange }: {
         {section === 'vpn' && <VPNSection {...props} />}
         {section === 'tailscale' && <TailscaleSection {...props} />}
         {section === 'threats' && <ThreatsSection {...props} />}
+        {section === 'hosted' && <HostedSection {...props} />}
         {section === 'assistant' && <AssistantSection {...props} />}
         {section === 'problems' && <ProblemsSection {...props} />}
         {section === 'about' && <AboutSection {...props} />}
@@ -1753,6 +1755,83 @@ function ThreatsSection({ config, save, toast }: SectionProps) {
           </Field>
           <NumberSetting label="Poll every" value={t.crowdsec.poll_seconds} min={10} max={600} suffix="seconds"
             onSave={(v) => save({ 'threat.crowdsec.poll_seconds': v })} />
+        </div>
+      </Card>
+    </>
+  )
+}
+
+function HostedSection({ config, save, toast }: SectionProps) {
+  const d = config.discover
+  const [name, setName] = useState('')
+  const [url, setUrl] = useState('')
+  const [testing, setTesting] = useState(false)
+  if (!d) return null
+  return (
+    <>
+      <Card title="Discovery">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            Orbis knocks on the well-known ports of every device it has seen recently and reads the page behind
+            each one that answers, so a Plex, a Home Assistant or a Synology is named rather than shown as a
+            number. Results and port forwards live on the <a href="#/hosted">Hosted apps page</a>.
+          </div>
+          <SwitchRow label="Discover hosted apps and storage" checked={d.enabled}
+            onChange={(v) => save({ 'discover.enabled': v })} />
+          <NumberSetting label="Scan every" value={d.interval_hours} min={1} max={168} suffix="hours"
+            onSave={(v) => save({ 'discover.interval_hours': v })} />
+          <TextSetting label="Extra ports to probe" value={(d.extra_ports ?? []).join(', ')} mono placeholder="21198, 21208"
+            hint="Comma-separated. Anything your own apps listen on that the built-in catalogue would miss."
+            onSave={(v) => save({ 'discover.extra_ports': v })} />
+        </div>
+      </Card>
+
+      <Card title="Docker hosts">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            A host that exposes its Docker Engine API lets Orbis name the container and image behind each port
+            instead of guessing. Use <code>tcp://host:2375</code> for a host with the API on the network (a
+            read-only socket proxy is the safe way to do that), or <code>unix:///var/run/docker.sock</code> when
+            Orbis itself runs on the Docker host with the socket mounted.
+          </div>
+          {(d.docker ?? []).map((h) => (
+            <div key={h.name} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <strong style={{ minWidth: 120 }}>{h.name}</strong>
+              <span className="mono hint" style={{ flex: 1, minWidth: 160 }}>{h.url}</span>
+              <Switch checked={h.enabled} onChange={async (v) => {
+                await api.hosted.saveDocker({ ...h, enabled: v }); toast(v ? 'Enabled' : 'Disabled', 'ok'); location.reload()
+              }} />
+              <button className="btn sm" onClick={async () => { await api.hosted.deleteDocker(h.name); toast('Removed', 'ok'); location.reload() }}>Remove</button>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input className="input" style={{ flex: '1 1 120px' }} placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
+            <input className="input mono" style={{ flex: '2 1 220px' }} placeholder="tcp://192.168.1.20:2375" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <button className="btn" disabled={!url || testing} onClick={async () => {
+              setTesting(true)
+              try {
+                const r = await api.hosted.testDocker(url)
+                toast(`Docker ${r.version}: ${r.containers} running container${r.containers === 1 ? '' : 's'}`, 'ok')
+              } catch (e) { toast(e instanceof Error ? e.message : 'Could not reach it', 'err') } finally { setTesting(false) }
+            }}>Test</button>
+            <button className="btn primary" disabled={!name || !url} onClick={async () => {
+              try {
+                await api.hosted.saveDocker({ name, url, enabled: true }); toast('Docker host added; scanning', 'ok'); setName(''); setUrl(''); location.reload()
+              } catch (e) { toast(e instanceof Error ? e.message : 'Could not save', 'err') }
+            }}>Add</button>
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Port forwarding">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            When this node is the gateway, a forward is a DNAT rule in its own firewall. When it is not, Orbis can
+            ask the upstream router to add the mapping over UPnP, and it can list and remove what the router
+            already has. Turn this off if you would rather manage the router by hand.
+          </div>
+          <SwitchRow label="Use UPnP on the router when this node is not the gateway" checked={d.upnp}
+            onChange={(v) => save({ 'discover.upnp': v })} />
         </div>
       </Card>
     </>

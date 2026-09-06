@@ -10,6 +10,7 @@ import type {
   OnboardingState, PlacementCheck, TopoGraph, InterceptStatus, DNSRecord,
   AlertRule, ReportData, BuiltinList,
   ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
+  HostedResponse, StorageDevice, PortForward, RouterInfo,
 } from './types'
 
 export class ApiError extends Error {
@@ -330,6 +331,19 @@ export const api = {
     pauses: () => get<{ pauses: Record<string, string> }>('/pauses'),
   },
 
+  hosted: {
+    overview: () => get<HostedResponse>('/hosted'),
+    scan: () => post<{ started: boolean }>('/hosted/scan'),
+    storage: () => get<{ storage: StorageDevice[] }>('/hosted/storage'),
+    forwards: () => get<{ forwards: PortForward[]; router: RouterInfo; forwarding: { inline: boolean; upnp: boolean } }>('/hosted/forwards'),
+    forward: (body: { host: string; port: number; proto?: string; ext_port?: number; name?: string; confirm?: boolean }) =>
+      post<{ forward: PortForward }>('/hosted/forwards', body),
+    removeForward: (id: string) => del<{ ok: boolean }>(`/hosted/forwards/${encodeURIComponent(id)}`),
+    removeRouterMapping: (proto: string, port: number) => del<{ ok: boolean }>(`/hosted/router/${proto}/${port}`),
+    saveDocker: (body: { name: string; url: string; enabled: boolean }) => post<{ ok: boolean }>('/hosted/docker', body),
+    deleteDocker: (name: string) => del<{ ok: boolean }>(`/hosted/docker/${encodeURIComponent(name)}`),
+    testDocker: (url: string) => post<{ ok: boolean; version: string; api_version: string; containers: number }>('/hosted/docker/test', { url }),
+  },
   threat: {
     status: () => get<ThreatStatus>('/threat/status'),
     feeds: () => get<{ feeds: ThreatFeed[] }>('/threat/feeds'),

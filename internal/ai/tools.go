@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/discover"
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/google/uuid"
 )
@@ -66,6 +67,11 @@ type Backend interface {
 	ThreatStatus(since time.Time, limit int) (map[string]any, error)
 	BanAddress(value string, hours int, reason, actor string) (*store.ThreatDecision, error)
 	UnbanAddress(value, actor string) (int, error)
+
+	// Hosted apps: what the network runs, its storage, and port forwards.
+	HostedOverview(ctx context.Context) (map[string]any, error)
+	ForwardPort(ctx context.Context, req discover.ForwardRequest, actor string) (*store.PortForward, error)
+	RemoveForward(ctx context.Context, id, actor string) error
 
 	// Mutating operations.
 	AddRule(r *store.Rule) error
@@ -312,6 +318,15 @@ func Tools(allowWrite bool) []ToolDef {
 			}, []string{"id"}),
 		},
 		{
+			Name: "list_hosted",
+			Description: "What this network hosts: every device with the services found on it (name, " +
+				"port, whether it is a Docker container and which image), the NAS and SAN devices with " +
+				"their file protocols and who is using them right now, the port forwards this node " +
+				"created, and the router's own UPnP mapping table. Use for \"what is running on the " +
+				"NAS\", \"which ports does the server expose\", \"is anything forwarded to the internet\".",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
 			Name: "threat_status",
 			Description: "IP threat intelligence: which address feeds are loaded (hijacked netblocks, " +
 				"botnet command servers, known attackers), the active bans and where each came from " +
@@ -344,6 +359,29 @@ func Tools(allowWrite bool) []ToolDef {
 			Description: "Remove a shortcut by name.",
 			Mutating:    true,
 			Schema:      objSchema(map[string]any{"name": strProp("The shortcut name")}, []string{"name"}),
+		},
+		{
+			Name: "forward_port",
+			Description: "Open an internet port to a service on the network. When this node is the " +
+				"gateway it writes a DNAT rule; otherwise it asks the upstream router over UPnP. " +
+				"Services that should not face the internet (storage, admin panels, databases, remote " +
+				"desktop) are refused unless confirm=true; warn the operator and suggest a VPN or a " +
+				"tunnel before confirming.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"host":     strProp("LAN address of the service"),
+				"port":     numProp("The service's port on that host"),
+				"ext_port": numProp("Internet-facing port (default: same as port)"),
+				"proto":    enumProp("tcp (default) or udp", []string{"tcp", "udp"}),
+				"name":     strProp("A label, e.g. Plex"),
+				"confirm":  boolProp("Set true only after the operator accepted the exposure warning"),
+			}, []string{"host", "port"}),
+		},
+		{
+			Name:        "remove_forward",
+			Description: "Remove a port forward this node created, by its id (from list_hosted).",
+			Mutating:    true,
+			Schema:      objSchema(map[string]any{"id": strProp("The forward id")}, []string{"id"}),
 		},
 		{
 			Name: "ban_address",
@@ -529,6 +567,7 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"decide_recommendation": true, "report_problem": true,
 		"add_shortcut": true, "remove_shortcut": true,
 		"ban_address": true, "unban_address": true,
+		"forward_port": true, "remove_forward": true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -736,6 +775,30 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 
 	case "list_shortcuts":
 		return jsonOf(map[string]any{"shortcuts": b.Shortcuts()}, nil)
+
+	case "list_hosted":
+		return jsonOf(b.HostedOverview(ctx))
+
+	case "forward_port":
+		req := discover.ForwardRequest{
+			Host: strArg(args, "host"), Port: intArg(args, "port", 0, 65535), ExtPort: intArg(args, "ext_port", 0, 65535),
+			Proto: strArg(args, "proto"), Name: strArg(args, "name"),
+		}
+		if v, ok := args["confirm"].(bool); ok {
+			req.Confirm = v
+		}
+		fw, err := b.ForwardPort(ctx, req, actor)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Forwarded internet port %d/%s to %s:%d (%s) via %s.", fw.ExtPort, fw.Proto, fw.Host, fw.Port, fw.Name,
+			map[string]string{"nft": "this node's firewall", "upnp": "the router (UPnP)"}[fw.Method]), nil
+
+	case "remove_forward":
+		if err := b.RemoveForward(ctx, strArg(args, "id"), actor); err != nil {
+			return "", err
+		}
+		return "Forward removed.", nil
 
 	case "threat_status":
 		return jsonOf(b.ThreatStatus(hoursAgo(args, "hours", 24, 720), intArg(args, "limit", 50, 500)))

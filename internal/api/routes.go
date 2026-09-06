@@ -141,6 +141,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountIssues(r)
 	s.mountServices(r)
 	s.mountThreat(r)
+	s.mountHosted(r)
 	s.mountSimple(r)
 
 	r.Route("/chat", func(r chi.Router) {
@@ -1252,6 +1253,8 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			// Anything that changes which interfaces carry tunnel traffic,
 			// or where it egresses, invalidates the tunnel ruleset.
 			s.app.SyncTunnelRules()
+		case key == "discover.enabled", key == "discover.extra_ports":
+			s.app.Discover.RequestScan()
 		case strings.HasPrefix(key, "threat."):
 			s.app.Threat.Reconfigure()
 			if key == "threat.enabled" || key == "threat.block_inbound" || key == "threat.block_outbound" {

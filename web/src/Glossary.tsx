@@ -32,6 +32,9 @@ const TERMS: Array<{ term: string; plain: string }> = [
   { term: 'Brief', plain: 'The assistant’s periodic note on what happened and whether anything needs you.' },
   { term: 'Threat feed', plain: 'A published list of internet addresses known to be bad: hijacked networks, botnet control servers, machines seen attacking. Orbis drops connections to and from them where it is in the path, and records them everywhere.' },
   { term: 'CrowdSec', plain: 'An open-source intrusion detection system that reads server logs and shares attacker addresses. Orbis can act as its bouncer: it pulls the ban list and enforces it at the gateway.' },
+  { term: 'Port forward', plain: 'Opens one port on your internet address and sends it to one device inside. Needed for a game server or a service you want to reach from outside; a VPN or a tunnel is the safer way for anything private.' },
+  { term: 'UPnP', plain: 'A way for devices to ask the router to open ports for them. Orbis uses it to create port forwards on your router when Orbis itself is not the gateway.' },
+  { term: 'Docker Engine API', plain: 'How Docker is controlled. When a host exposes it (read-only is enough), Orbis can name the containers behind the ports it finds instead of guessing from a web page.' },
 ]
 
 export function GlossaryButton() {

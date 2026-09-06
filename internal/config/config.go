@@ -51,6 +51,7 @@ type Config struct {
 	AI        AIConfig        `yaml:"ai" json:"ai"`
 	Issues    IssuesConfig    `yaml:"issues" json:"issues"`
 	Threat    ThreatConfig    `yaml:"threat" json:"threat"`
+	Discover  DiscoverConfig  `yaml:"discover" json:"discover"`
 	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
 	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
 
@@ -548,6 +549,30 @@ type CrowdSecConfig struct {
 	PollSeconds int    `yaml:"poll_seconds" json:"poll_seconds"`
 }
 
+// DiscoverConfig finds what is hosted on the network: services behind open
+// ports on each device (with HTTP fingerprinting to name them), containers
+// on hosts whose Docker Engine API is reachable, and storage (NAS and SAN)
+// by vendor and protocol. It also holds the port-forwarding preferences.
+type DiscoverConfig struct {
+	Enabled       bool `yaml:"enabled" json:"enabled"`
+	IntervalHours int  `yaml:"interval_hours" json:"interval_hours"`
+	// ExtraPorts are probed in addition to the built-in catalogue.
+	ExtraPorts []int `yaml:"extra_ports" json:"extra_ports"`
+	// Docker hosts whose Engine API this node may read: tcp://host:2375 or
+	// unix:///var/run/docker.sock when Orbis runs on the Docker host.
+	Docker []DockerHost `yaml:"docker" json:"docker"`
+	// UPnP lets this node ask the upstream router for a port mapping when it
+	// is not the gateway itself. Off means forwards need inline mode.
+	UPnP bool `yaml:"upnp" json:"upnp"`
+}
+
+// DockerHost is one Docker Engine API endpoint.
+type DockerHost struct {
+	Name    string `yaml:"name" json:"name"`
+	URL     string `yaml:"url" json:"url"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+}
+
 type DHCPConfig struct {
 	Enabled bool         `yaml:"enabled" json:"enabled"`
 	Scopes  []DHCPScope  `yaml:"scopes" json:"scopes"`
@@ -1024,6 +1049,7 @@ func Default() *Config {
 			BlockInbound:        true,
 			CrowdSec:            CrowdSecConfig{PollSeconds: 30},
 		},
+		Discover: DiscoverConfig{Enabled: true, IntervalHours: 6, UPnP: true},
 		Issues: IssuesConfig{
 			Enabled:     true,
 			AutoCapture: true,

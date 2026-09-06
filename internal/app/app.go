@@ -20,6 +20,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
+	"github.com/Neoo-Blue/orbis/internal/discover"
 	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
 	"github.com/Neoo-Blue/orbis/internal/dpi"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
@@ -82,6 +83,8 @@ type App struct {
 	Issues *issues.Recorder
 	// Threat is IP threat intelligence: feeds, bans, the CrowdSec bouncer.
 	Threat *threat.Manager
+	// Discover finds what is hosted on the network and owns port forwards.
+	Discover *discover.Manager
 	// Usage rolls the live flow table and the query log into per-device,
 	// per-service counters.
 	Usage *usage.Meter
@@ -249,6 +252,46 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		return ""
 	})
 	a.Threat.SetEmit(a.emit)
+
+	// Hosted apps, storage and port forwards.
+	a.Discover = discover.NewManager(cfg, st, discover.Hooks{
+		Hosts: func() []discover.Host {
+			clients := a.Registry.All()
+			out := make([]discover.Host, 0, len(clients))
+			for _, c := range clients {
+				name := c.Label
+				if name == "" {
+					name = c.Hostname
+				}
+				if name == "" {
+					name = c.IP
+				}
+				out = append(out, discover.Host{
+					ID: c.ID, IP: c.IP, Name: name, Vendor: c.Vendor, DeviceType: c.DeviceType, MAC: c.MAC,
+					Online: c.Online, LastSeen: c.LastSeen,
+				})
+			}
+			return out
+		},
+		ActiveFlows:   func() []store.Flow { return a.Tracker.Active(0) },
+		Emit:          a.emit,
+		AddRule:       a.AddRule,
+		DeleteRule:    a.DeleteRule,
+		ApplyFirewall: a.Firewall.Apply,
+		Inline: func() (bool, string) {
+			c := a.Cfg.Snapshot()
+			if c.Mode != config.ModeInline || !c.Firewall.Enabled || !a.Firewall.Available() {
+				return false, ""
+			}
+			for _, z := range c.Firewall.Zones {
+				if z.Trust == "wan" {
+					return true, z.Name
+				}
+			}
+			return true, ""
+		},
+		NodeAddr: nodeLANAddr,
+	}, logf)
 	a.VPN = vpn.New(cfg, st, logf)
 	a.Tailscale = vpn.NewTailscale(cfg, logf)
 	a.Egress = vpn.NewEgressManager(logf)
@@ -415,6 +458,8 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.Lists.Run(a.ctx) }()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.Threat.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Discover.Run(a.ctx) }()
 
 	if cfg.AdBlock.SmartCapture.Enabled {
 		a.wg.Add(1)

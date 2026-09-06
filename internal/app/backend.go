@@ -12,6 +12,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/consent"
+	"github.com/Neoo-Blue/orbis/internal/discover"
 	"github.com/Neoo-Blue/orbis/internal/dnsproxy"
 	"github.com/Neoo-Blue/orbis/internal/dpi"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
@@ -1334,4 +1335,55 @@ func (a *App) UnbanAddress(value, actor string) (int, error) {
 	}
 	a.Store.Audit(actor, "threat.unban", value, "", "", "ok")
 	return n, nil
+}
+
+// HostedOverview is the assistant's view of what the network hosts: devices
+// with their services, storage with its protocols and users, and the port
+// forwards this node made.
+func (a *App) HostedOverview(ctx context.Context) (map[string]any, error) {
+	if a.Discover == nil {
+		return map[string]any{"enabled": false}, nil
+	}
+	hosts, err := a.Discover.Hosts()
+	if err != nil {
+		return nil, err
+	}
+	storage, err := a.Discover.Storage()
+	if err != nil {
+		return nil, err
+	}
+	forwards, _ := a.Discover.Forwards()
+	out := a.Discover.Status()
+	out["hosts"] = hosts
+	out["storage"] = storage
+	out["forwards"] = forwards
+	out["router"] = a.Discover.Router(ctx)
+	inline, _ := a.Cfg.Snapshot().Mode == config.ModeInline && a.Cfg.Snapshot().Firewall.Enabled, ""
+	out["forwarding"] = map[string]any{"inline": inline, "upnp": a.Cfg.Snapshot().Discover.UPnP}
+	return out, nil
+}
+
+// ForwardPort creates a port forward on behalf of the assistant or the API.
+func (a *App) ForwardPort(ctx context.Context, req discover.ForwardRequest, actor string) (*store.PortForward, error) {
+	if a.Discover == nil {
+		return nil, fmt.Errorf("discovery is not available")
+	}
+	fw, err := a.Discover.Forward(ctx, req, actor)
+	if err != nil {
+		return nil, err
+	}
+	a.Store.Audit(actor, "forward.create", fmt.Sprintf("%d/%s", fw.ExtPort, fw.Proto), "", fmt.Sprintf("%s:%d %s", fw.Host, fw.Port, fw.Method), "ok")
+	return fw, nil
+}
+
+// RemoveForward undoes a forward by id.
+func (a *App) RemoveForward(ctx context.Context, id, actor string) error {
+	if a.Discover == nil {
+		return fmt.Errorf("discovery is not available")
+	}
+	if err := a.Discover.Remove(ctx, id); err != nil {
+		return err
+	}
+	a.Store.Audit(actor, "forward.delete", id, "", "", "ok")
+	return nil
 }

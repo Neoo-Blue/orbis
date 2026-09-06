@@ -24,6 +24,7 @@ import { VPNPage } from './pages/VPN'
 import { AssistantPage } from './pages/Assistant'
 import { ProblemsPage } from './pages/Problems'
 import { ThreatsPage } from './pages/Threats'
+import { HostedPage } from './pages/Hosted'
 import { ServicesPage } from './pages/Services'
 import { ProfilesPage } from './pages/Profiles'
 import { SimpleHome } from './simple/Home'
@@ -41,7 +42,7 @@ import { GlossaryButton } from './Glossary'
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
-  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services' | 'threats'
+  | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services' | 'threats' | 'hosted'
   | 'profiles' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
 
 type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; group?: string; short?: string }
@@ -61,6 +62,7 @@ const ROUTES: NavRoute[] = [
   { id: 'consent', label: 'Ask first', icon: 'shield' },
   { id: 'firewall', label: 'Firewall', icon: 'shield', group: 'Network' },
   { id: 'threats', label: 'Threats', icon: 'alert' },
+  { id: 'hosted', label: 'Hosted apps', icon: 'spark' },
   { id: 'network', label: 'DHCP & LAN', icon: 'route' },
   { id: 'gateway', label: 'Gateway', icon: 'activity' },
   { id: 'intercept', label: 'Interception', icon: 'route' },
@@ -405,6 +407,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           {shown === 's-settings' && (config ? <SimpleSettings config={config} status={status} save={saveConfig} uiMode={ui} setUIMode={(m) => setUIPref(m)} onNavigate={go} /> : <Spinner />)}
           {route === 'problems' && <ProblemsPage />}
           {route === 'threats' && <ThreatsPage />}
+          {route === 'hosted' && <HostedPage />}
           {route === 'services' && <ServicesPage onNavigate={(r) => setRoute(r)} />}
           {route === 'events' && <EventsPage />}
           {route === 'alerts' && <AlertsPage />}

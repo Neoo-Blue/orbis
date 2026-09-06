@@ -640,6 +640,96 @@ export interface AppConfig {
     block_outbound: boolean; block_inbound: boolean; allow: string[]; auto_ban_scanners: boolean
     crowdsec: { enabled: boolean; url: string; api_key: string; poll_seconds: number }
   }
+  discover: {
+    enabled: boolean; interval_hours: number; extra_ports: number[]
+    docker: Array<{ name: string; url: string; enabled: boolean }>; upnp: boolean
+  }
+}
+
+// ---- hosted apps, storage, port forwards ----
+
+export interface LANService {
+  host: string
+  port: number
+  proto: string
+  name: string
+  kind: 'app' | 'admin' | 'storage' | 'infra' | 'web' | 'other'
+  category?: string
+  title?: string
+  server?: string
+  scheme?: string
+  source: 'scan' | 'docker'
+  container?: string
+  image?: string
+  sensitive: boolean
+  first_seen: string
+  last_seen: string
+  online: boolean
+}
+
+export interface HostedHost {
+  ID: string
+  IP: string
+  Name: string
+  Vendor?: string
+  DeviceType?: string
+  MAC?: string
+  Online: boolean
+  LastSeen: string
+  services: LANService[]
+  docker: boolean
+  storage: boolean
+}
+
+export interface StorageDevice {
+  ID: string
+  IP: string
+  Name: string
+  Vendor?: string
+  DeviceType?: string
+  Online: boolean
+  protocols: Array<{ name: string; port: number }>
+  web_ui?: string
+  users: Array<{ ip: string; connections: number; bytes_in: number; bytes_out: number }>
+  bytes_in: number
+  bytes_out: number
+  exposed: string[]
+}
+
+export interface PortForward {
+  id: string
+  name: string
+  proto: string
+  ext_port: number
+  host: string
+  port: number
+  method: 'nft' | 'upnp'
+  rule_id?: string
+  lease_until?: string
+  created: string
+  actor?: string
+}
+
+export interface RouterInfo {
+  upnp_enabled: boolean
+  found?: boolean
+  error?: string
+  model?: string
+  name?: string
+  external_ip?: string
+  mappings?: Array<{ ext_port: number; proto: string; host: string; port: number; description: string; enabled: boolean; lease_seconds: number; ours: boolean }>
+  mappings_error?: string
+}
+
+export interface HostedResponse {
+  scanning: boolean
+  last_scan?: string
+  last_error?: string
+  enabled: boolean
+  interval_hours: number
+  hosts: HostedHost[]
+  docker: Array<{ name: string; url: string; enabled: boolean }>
+  forwarding: { inline: boolean; upnp: boolean }
 }
 
 // ---- threat intelligence ----

@@ -464,4 +464,39 @@ var migrations = []string{
 		as_org    TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_threat_hits_ts ON threat_hits(ts)`,
+	// What is hosted on the network: one row per listening service found by
+	// scanning or reported by a Docker host, and the port forwards this node
+	// created (in its own ruleset or on the upstream router).
+	`CREATE TABLE IF NOT EXISTS lan_services (
+		host       TEXT NOT NULL,
+		port       INTEGER NOT NULL,
+		proto      TEXT NOT NULL DEFAULT 'tcp',
+		name       TEXT NOT NULL DEFAULT '',
+		kind       TEXT NOT NULL DEFAULT '',
+		category   TEXT NOT NULL DEFAULT '',
+		title      TEXT NOT NULL DEFAULT '',
+		server     TEXT NOT NULL DEFAULT '',
+		scheme     TEXT NOT NULL DEFAULT '',
+		source     TEXT NOT NULL DEFAULT 'scan',
+		container  TEXT NOT NULL DEFAULT '',
+		image      TEXT NOT NULL DEFAULT '',
+		sensitive  INTEGER NOT NULL DEFAULT 0,
+		first_seen INTEGER NOT NULL,
+		last_seen  INTEGER NOT NULL,
+		online     INTEGER NOT NULL DEFAULT 1,
+		PRIMARY KEY (host, port, proto)
+	)`,
+	`CREATE TABLE IF NOT EXISTS port_forwards (
+		id          TEXT PRIMARY KEY,
+		name        TEXT NOT NULL DEFAULT '',
+		proto       TEXT NOT NULL,
+		ext_port    INTEGER NOT NULL,
+		host        TEXT NOT NULL,
+		port        INTEGER NOT NULL,
+		method      TEXT NOT NULL,
+		rule_id     TEXT NOT NULL DEFAULT '',
+		lease_until INTEGER NOT NULL DEFAULT 0,
+		created     INTEGER NOT NULL,
+		actor       TEXT NOT NULL DEFAULT ''
+	)`,
 }

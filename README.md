@@ -54,6 +54,7 @@ where Orbis keeps going.
 | Every connection identified: host, app, ASN, country | | | | ○ | | | ● |
 | Network map, live globe, anomaly detection | | | | | | | ● |
 | IP threat feeds, timed bans, CrowdSec bouncer | | | | ○ | | | ● |
+| Finds what you host (apps, containers, NAS) and forwards ports for it | | | | ○ | | | ● |
 | Assistant with tools, MCP server | | | | | | | ● |
 
 ● built in · ○ partial or via add-on · blank: not in scope for that product
@@ -118,6 +119,15 @@ them with evidence for a one-click verdict.
 servers, addresses seen attacking) become nftables sets dropped in both directions, so a device
 that never asks your resolver is still caught when it beacons to a listed address. Timed bans
 from you, the assistant, the scan detector or a CrowdSec engine live in the same set.
+
+**Knows what you host.** Every device is knocked on at ninety well-known ports and the page
+behind each answer is read, so a Plex, a Home Assistant, a Portainer or a Synology is named
+rather than numbered; a host that exposes its Docker Engine API names the container and image
+behind each port. NAS and SAN devices are recognised by vendor and by the protocols they serve
+(SMB, NFS, AFP, iSCSI, rsync, WebDAV), with who is using them right now and whether any of it is
+exposed to the internet. Each service has a Forward button: a DNAT rule when this node is the
+gateway, a UPnP mapping on the upstream router when it is not, with a warning before anything
+that has no business on the open internet.
 
 **A real firewall.** Zones with trust levels, an ordered rule table with live hit counters, NAT and
 port forwarding, time-based rules, IPv6, flow offload, an anti-lockout rule, all compiled into one
@@ -329,6 +339,32 @@ from `cscli bouncers add orbis` and it acts as the bouncer: bans arrive within o
 are enforced at the gateway with country and operator shown, and are lifted when CrowdSec
 lifts them.
 
+## Hosted apps, storage and port forwarding
+
+The **Hosted apps** page answers "what is running on my network" without an inventory
+spreadsheet. On a schedule (and on demand) Orbis probes every device it has seen recently at
+about ninety well-known ports, reads the front page of anything that speaks HTTP, and names the
+service from it: Plex, Sonarr, Portainer, Proxmox, Home Assistant, n8n, a Synology's DSM, a
+printer's CUPS page. A port that answered without a page is shown as a guess ("port 3001,
+usually Uptime Kuma"), never as a fact. Where a host exposes its Docker Engine API, Orbis reads
+the container list and puts the container name and image next to each published port, and if
+it finds an Engine API open on the network without authentication it uses it and warns you,
+because that port is root on that machine for anyone on the LAN. Services that should not face
+the internet (storage protocols, admin panels, databases, remote desktop, SSH) are marked
+sensitive.
+
+**Storage** lists the NAS and SAN devices: recognised by vendor (Synology, QNAP, TrueNAS, and
+so on), by the identifier's verdict, or by the protocols they serve, with the admin page, the
+devices talking to them right now and how much, and any port forward that exposes them.
+
+**Port forwarding** is one button per service. When this node is the gateway it writes the DNAT
+rule and the matching forward-chain accept into its own ruleset. When it is not, it asks the
+upstream router over UPnP, renews the lease, and lists the router's whole mapping table so the
+ports a console or an old app opened are visible and removable. A router that announces UPnP but
+does not actually serve it (eero does this) is reported as such rather than as a silent failure.
+Forwarding a sensitive service needs an explicit confirmation, and the assistant will not do it
+without telling you why a VPN or a tunnel is the better answer.
+
 ## Modes and placement
 
 **Observe** (the default) watches whatever traffic reaches it and records what it would have done.
@@ -366,7 +402,7 @@ own traffic and broadcast noise; the onboarding wizard measures this and tells y
                       | netlink        | smart capture    | tailscale    |
                       +-------+--------+------------------+--------------+
                               |
-  topology . intercept . alerts . report . notify . usage . issues . threat . ai + mcp
+topology . intercept . discover . upnp . alerts . report . notify . usage . issues . threat . ai + mcp
                               |
                          SQLite (WAL)
 ```

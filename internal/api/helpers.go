@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
@@ -330,6 +331,14 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 			c.Issues.GitHub.Token = v
 			return true
 		}
+	case "discover.enabled":
+		return setBool(&c.Discover.Enabled, raw)
+	case "discover.interval_hours":
+		return setInt(&c.Discover.IntervalHours, raw)
+	case "discover.upnp":
+		return setBool(&c.Discover.UPnP, raw)
+	case "discover.extra_ports":
+		return setIntSlice(&c.Discover.ExtraPorts, raw)
 	case "threat.enabled":
 		return setBool(&c.Threat.Enabled, raw)
 	case "threat.block_outbound":
@@ -414,6 +423,36 @@ func setFloat(dst *float64, raw any) bool {
 		return true
 	}
 	return false
+}
+
+// setIntSlice accepts a JSON array of numbers or numeric strings, or a
+// comma-separated string, for lists of ports.
+func setIntSlice(dst *[]int, raw any) bool {
+	var out []int
+	add := func(v any) {
+		switch x := v.(type) {
+		case float64:
+			out = append(out, int(x))
+		case string:
+			for _, part := range strings.Split(x, ",") {
+				if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
+					out = append(out, n)
+				}
+			}
+		}
+	}
+	switch x := raw.(type) {
+	case []any:
+		for _, v := range x {
+			add(v)
+		}
+	case string, float64:
+		add(x)
+	default:
+		return false
+	}
+	*dst = out
+	return true
 }
 
 func setStrSlice(dst *[]string, raw any) bool {

@@ -11,6 +11,12 @@ ad-removal engines at three layers, intrusion detection, threat intelligence, co
 its own Wi-Fi network, a map of everything you host, and an assistant that can operate all of
 it. Runs on a Raspberry Pi, an LXC, a VM, or in Docker.
 
+[![CI](https://github.com/Neoo-Blue/orbis/actions/workflows/ci.yml/badge.svg)](https://github.com/Neoo-Blue/orbis/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Neoo-Blue/orbis?display_name=tag)](https://github.com/Neoo-Blue/orbis/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/Neoo-Blue/orbis)](go.mod)
+[![Image](https://img.shields.io/badge/ghcr.io-neoo--blue%2Forbis-2496ED)](https://github.com/Neoo-Blue/orbis/pkgs/container/orbis)
+[![Licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+
 </div>
 
 ---
@@ -32,6 +38,7 @@ it. Runs on a Raspberry Pi, an LXC, a VM, or in Docker.
 - [Architecture](#architecture)
 - [Things learned the hard way](#things-learned-the-hard-way)
 - [Configuration, security, development](#configuration)
+- [Support and contributing](#support-and-contributing)
 
 ## What it is
 
@@ -142,13 +149,13 @@ Settings, and the Hosted apps page names the containers on the host. See
 Orbis needs raw sockets, netfilter and network configuration, so it wants a privileged container:
 
 ```bash
-pct create 115 local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst \
+pct create 200 local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst \
   --hostname orbis --cores 4 --memory 3072 --rootfs local-zfs:16 \
   --net0 name=eth0,bridge=vmbr0,ip=192.168.1.10/24,gw=192.168.1.1 \
   --unprivileged 0 --features nesting=1,keyctl=1
 
 # WireGuard needs the TUN device
-cat >> /etc/pve/lxc/115.conf <<'EOT'
+cat >> /etc/pve/lxc/200.conf <<'EOT'
 lxc.cgroup2.devices.allow: c 10:200 rwm
 lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
 EOT
@@ -259,7 +266,7 @@ disabled.
 it has never reached before, it waits for your verdict, and the answer becomes a rule.
 
 **Shortcuts.** DNS can hold an address but never a port, so `nas:5001` can never be a record.
-A shortcut makes `deep.seek` open `http://192.168.50.223:8080`: the resolver answers the name
+A shortcut makes `nas.lan` open `http://192.168.1.20:5001`: the resolver answers the name
 with the node's own address and the node redirects the browser, or relays so the address bar
 keeps the name. Works for every device that uses Orbis for DNS.
 
@@ -321,7 +328,7 @@ configuration, takes the adapter from NetworkManager, picks 5 GHz when the adapt
 country code allow it, and in routed mode gives the network its own subnet with Orbis as
 gateway, DHCP server and resolver, translated out through the wired side in its own nftables
 table. That table carries the threat and country sets too, so a phone on the Orbis network is
-filtered at every layer even while the Pi it runs on is not the house's router. The passphrase
+filtered at every layer even while the node it runs on is not the network's router. The passphrase
 is generated when you do not set one, shown with a QR code to join behind the admin login, and
 replaceable with your own. Bridge mode hands the adapter to an existing bridge instead.
 
@@ -501,11 +508,13 @@ Each of these cost real time, and each is now a line in the code rather than a s
   into a one-minute DNS outage for the whole house.
 - **Tailscale route acceptance is guarded** against a peer advertising a prefix this node is
   already on, which would route the LAN into the tunnel and strand the node.
-- **A city-level GeoIP database splits a country into a hundred thousand fragments.** China is
-  157,541 ranges before aggregation. Merging siblings and dropping contained prefixes is the
-  difference between a set the Pi loads in a second and one it cannot load.
-- **A router can announce UPnP and never serve it.** eero answers the SSDP search, accepts the
-  TCP connection for its description, and never replies. The failure is named, not swallowed.
+- **A city-level GeoIP database splits a country into a hundred thousand fragments.** A large
+  country is well over a hundred thousand ranges before aggregation. Merging siblings and
+  dropping contained prefixes is the difference between a set a small board loads in a second
+  and one it cannot load.
+- **A router can announce UPnP and never serve it.** Some consumer routers answer the SSDP
+  search, accept the TCP connection for their description, and never reply. The failure is
+  named, not swallowed.
 - **A route moving is not a cable moving.** Tunnels and multi-WAN move the default route at
   runtime; a cable watcher keyed on it raised phantom "cable plugged in" events on every start.
 - **The old hostapd is still letting go of the adapter when the new one starts.** After a
@@ -567,6 +576,17 @@ The competitive audit that drove much of the feature set is in
 design in [docs/UX-AUDIT.md](docs/UX-AUDIT.md); the MCP surface in [docs/MCP.md](docs/MCP.md);
 Docker specifics in [docs/DOCKER.md](docs/DOCKER.md); third-party notices in
 [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
+
+## Support and contributing
+
+- **Bugs and requests** go to [GitHub issues](https://github.com/Neoo-Blue/orbis/issues). A node
+  can file its own scrubbed problem reports from the Problems page, and a scheduled maintainer
+  routine triages the board daily and opens pull requests on `fix/issue-N` branches for clear
+  defects. Humans review and merge; nothing is deployed automatically.
+- **Pull requests** are welcome. Keep `go test -race ./...`, `go vet ./...` and the web build
+  green, format only the files you touch, and describe the failure you saw before the fix.
+- **Security reports** follow [SECURITY.md](SECURITY.md).
+- **Releases** are tagged `vX.Y.Z`; each publishes the binaries and the multi-arch image.
 
 ## Licence
 

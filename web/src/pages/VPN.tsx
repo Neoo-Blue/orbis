@@ -343,14 +343,14 @@ function Tailscale() {
 
       <Card title="Gateway path">
         <div className="hint" style={{ marginBottom: 12, lineHeight: 1.7 }}>
-          Being an approved exit node is not enough on its own — this node also has to forward and
+          Being an approved exit node is not enough on its own, this node also has to forward and
           NAT the traffic. These are the pieces that make it actually work, and they are installed
           whether or not Orbis is inline for the LAN, because for tunnel traffic it <em>is</em> the
           gateway.
         </div>
         <div className="grid c4">
           <GatewayCheck ok={gw.applied} label="Tunnel rules" detail={gw.applied ? `on ${(gw.interfaces || []).join(', ')}` : 'not installed'} />
-          <GatewayCheck ok={gw.ip_forwarding} label="IP forwarding" detail={gw.ip_forwarding ? 'enabled' : 'off — nothing can be routed'} />
+          <GatewayCheck ok={gw.ip_forwarding} label="IP forwarding" detail={gw.ip_forwarding ? 'enabled' : 'off, nothing can be routed'} />
           <GatewayCheck ok={gw.masquerade} label="NAT" detail={gw.masquerade ? `out via ${gw.wan}` : 'no WAN interface set'} />
           <GatewayCheck ok={gw.dns_redirect} label="DNS filtering" detail={gw.dns_redirect ? 'tunnel clients forced onto this resolver' : 'clients keep their own DNS'} />
         </div>
@@ -372,7 +372,7 @@ function Tailscale() {
             />
             <div className="hint">
               Devices anywhere on your tailnet can route their internet traffic through this
-              network. Their connections are captured and filtered here like any LAN device — but
+              network. Their connections are captured and filtered here like any LAN device, but
               their <em>DNS</em> goes through Tailscale's MagicDNS on the client and never reaches
               this resolver. To filter that too, set{' '}
               <code>{st.self?.addresses?.[0] ?? "this node's tailnet address"}</code> as the global
@@ -423,7 +423,7 @@ function Tailscale() {
               <select className="select" value={String(cfg.exit_node ?? '')} disabled={busy}
                 onChange={(e) => run(() => api.tailscale.setExitNode(e.target.value),
                   e.target.value ? `Egress now via ${e.target.value}` : 'Egress restored to the WAN')}>
-                <option value="">None — go out the WAN directly</option>
+                <option value="">None: go out the WAN directly</option>
                 {(st.available_exit_nodes ?? []).map((n) => (
                   <option key={n.id} value={n.dns_name || n.name}>
                     {n.name} {n.online ? '' : '(offline)'}
@@ -451,7 +451,7 @@ function Tailscale() {
               <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginBottom: 8 }}>
                 Steer specific devices through the exit node. Everything else keeps using the WAN.
                 <strong style={{ display: 'block', color: 'var(--text-faint)', marginTop: 4 }}>
-                  Selecting an exit node alone only moves this node's traffic — LAN clients need to
+                  Selecting an exit node alone only moves this node's traffic, LAN clients need to
                   be listed here.
                 </strong>
               </div>

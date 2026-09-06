@@ -94,7 +94,7 @@ func ParseWGQuick(text string) (*WGTunnel, error) {
 		return nil, fmt.Errorf("no PublicKey in the [Peer] section")
 	}
 	if t.Endpoint == "" {
-		return nil, fmt.Errorf("no Endpoint in the [Peer] section — Orbis would not know where to connect")
+		return nil, fmt.Errorf("no Endpoint in the [Peer] section, Orbis would not know where to connect")
 	}
 	if len(t.Addresses) == 0 {
 		return nil, fmt.Errorf("no Address in the [Interface] section")

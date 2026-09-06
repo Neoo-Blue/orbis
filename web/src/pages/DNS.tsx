@@ -79,7 +79,7 @@ export function DNSPage({ events }: { events: LiveEvent[] }) {
       {!stats?.running && (
         <Banner tone="warn">
           The resolver is not listening. Either DNS is disabled in settings, or binding port 53
-          failed — another resolver (systemd-resolved, dnsmasq) is usually the cause.
+          failed, another resolver (systemd-resolved, dnsmasq) is usually the cause.
         </Banner>
       )}
 

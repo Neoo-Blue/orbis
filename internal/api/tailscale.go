@@ -71,7 +71,7 @@ func (s *Server) handleTSStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if cfg.ExitNode != "" && len(cfg.SteerClients) == 0 {
 		warnings = append(warnings,
-			"An exit node is selected, but no LAN clients are steered through it — only this node's own traffic uses it.")
+			"An exit node is selected, but no LAN clients are steered through it, only this node's own traffic uses it.")
 	}
 	if cfg.AcceptDNS {
 		warnings = append(warnings,

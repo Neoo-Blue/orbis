@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import { usePoll, useDebounced } from '../hooks'
+import { useMediaQuery, usePoll, useDebounced } from '../hooks'
 import {
   Bar, Card, CopyButton, Drawer, Empty, Icons, Loading, Search, Segmented, Switch, useToast,
 } from '../ui'
@@ -34,6 +34,7 @@ export function ClientsPage() {
 
   const peak = Math.max(...visible.map((c) => c.rate_in + c.rate_out), 1)
 
+  const narrow = useMediaQuery('(max-width: 880px)')
   return (
     <>
       <div className="toolbar">
@@ -57,6 +58,26 @@ export function ClientsPage() {
             Devices are discovered from ARP, DHCP and traffic. If this list is empty entirely,
             check that packet capture found an interface.
           </Empty>
+        ) : narrow ? (
+          <div style={{ display: 'grid', gap: 8, padding: 10 }}>
+            {visible.map((c) => (
+              <div key={c.id} className="device-card" style={{ cursor: 'pointer' }} onClick={() => setSelected(c.id)}>
+                <div className="glyph" style={{ color: c.online ? 'var(--accent)' : 'var(--text-faint)' }}>{deviceGlyph(c.device_type)}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="name">
+                    <span className={`dot ${c.online ? 'on' : 'off'}`} />
+                    <span className="truncate">{clientName(c)}</span>
+                    {c.blocked && <span className="tag block">blocked</span>}
+                  </div>
+                  <div className="meta">
+                    <span className="mono">{c.ip}</span>
+                    {c.vendor ? ` · ${c.vendor}` : ''}{c.active_flows ? ` · ${c.active_flows} conn` : ''}
+                    {c.rate_in + c.rate_out > 1000 ? ` · ${bits(c.rate_in + c.rate_out)}` : ''} · {ago(c.last_seen)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="table-wrap">
             <table className="t">

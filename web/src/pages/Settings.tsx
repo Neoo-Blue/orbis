@@ -269,7 +269,7 @@ function GeneralSection({ config, status, save, refresh, toast }: SectionProps) 
           </div>
           {inline && (
             <Banner tone="warn">
-              Inline mode is active. Devices depend on this node for connectivity — a bad rule or a
+              Inline mode is active. Devices depend on this node for connectivity, a bad rule or a
               restart will interrupt them.
             </Banner>
           )}
@@ -293,7 +293,7 @@ function GeneralSection({ config, status, save, refresh, toast }: SectionProps) 
           <SwitchRow label="Find my location automatically" checked={config.node.locate_public_ip}
             hint={<>A node behind NAT has no public address on any interface, so the globe cannot
               place it. With this on, Orbis asks a public resolver to echo back the address it sees
-              (one DNS query) and then geolocates that address <em>against the local database</em> —
+              (one DNS query) and then geolocates that address <em>against the local database</em>,
               the node's position is never sent anywhere. Turn it off to make no outbound query at
               all; the map then falls back to the timezone below.</>}
             onChange={(v) => save({ 'node.locate_public_ip': v })} />
@@ -315,7 +315,7 @@ function GeneralSection({ config, status, save, refresh, toast }: SectionProps) 
                 {' · '}{String(selfInfo.public_ip)}
               </span>
             ) : (
-              <span className="tag">not detected — using the timezone fallback</span>
+              <span className="tag">not detected, using the timezone fallback</span>
             )}
           </div>
           {typeof selfInfo?.last_error === 'string' && (
@@ -394,7 +394,7 @@ function CaptureSection({ config, status, save, interfaces }: SectionProps) {
           <dl className="kv">
             <dt>Interfaces open</dt><dd>{String(capture.interfaces ?? 0)}</dd>
             <dt>Kernel filter</dt>
-            <dd>{capture.filter_active ? 'active — only useful packets are copied' : 'not attached'}</dd>
+            <dd>{capture.filter_active ? 'active, only useful packets are copied' : 'not attached'}</dd>
             <dt>Packets seen</dt><dd>{Number(capture.packets ?? 0).toLocaleString()}</dd>
             <dt>Bytes copied</dt><dd>{bytes(Number(capture.bytes ?? 0))}</dd>
             <dt>Kernel drops</dt>
@@ -549,7 +549,7 @@ function SecuritySection({ onAuthChange }: { onAuthChange: () => void }) {
 
       <Card title="Notes on exposure">
         <div className="hint" style={{ lineHeight: 1.75 }}>
-          Orbis has one administrator, not a user model — the interface assumes whoever reaches it
+          Orbis has one administrator, not a user model. The interface assumes whoever reaches it
           is the network owner. Do not expose this port to the internet. If you need remote access,
           reach it over WireGuard or Tailscale rather than a port forward.
         </div>
@@ -575,7 +575,7 @@ function DNSSection({ config, status, save, toast }: SectionProps) {
             onSave={(v) => save({ 'dns.upstreams': v })} />
 
           <Field label="Upstream strategy"
-            hint="Parallel races every healthy upstream and takes the first answer — lower latency, more upstream queries. Sequential tries them in order.">
+            hint="Parallel races every healthy upstream and takes the first answer, lower latency, more upstream queries. Sequential tries them in order.">
             <Segmented value={config.dns.strategy === 'sequential' ? 'sequential' : 'parallel'}
               onChange={(v) => save({ 'dns.strategy': v })}
               options={[{ value: 'parallel', label: 'Parallel (fastest wins)' },
@@ -674,7 +674,7 @@ function AdBlockSection({ config, save }: SectionProps) {
         <div style={{ display: 'grid', gap: 14 }}>
           <div className="hint" style={{ lineHeight: 1.7 }}>
             Watches which hostnames devices reach that no list covers, scores them on how they
-            behave — third-party referrer ratio, response size, request breadth, name shape — and
+            behave, third-party referrer ratio, response size, request breadth, name shape, and
             promotes the confident ones. Anything ambiguous goes to the review queue instead.
           </div>
           <SwitchRow label="Discover new ad domains" checked={sc.enabled}
@@ -757,7 +757,7 @@ function ProxySection({ config, status, save, toast }: SectionProps) {
             onChange={(v) => save({ 'mitm.enabled': v })} />
 
           <ListSetting label="Intercept these hosts" value={config.mitm.intercept_hosts} rows={6}
-            hint="Glob patterns. Narrow by default on purpose — intercepting everything breaks pinned apps and is far more invasive than it needs to be."
+            hint="Glob patterns. Narrow by default on purpose, intercepting everything breaks pinned apps and is far more invasive than it needs to be."
             onSave={(v) => save({ 'mitm.intercept_hosts': v })} />
 
           <ListSetting label="Never intercept" value={config.mitm.bypass_hosts} rows={5}
@@ -789,7 +789,7 @@ function ProxySection({ config, status, save, toast }: SectionProps) {
             hint="Removes common ad keys from JSON responses. Apps render the slot as unfilled, which they all handle."
             onChange={(v) => save({ 'mitm.filters.generic_json_ads': v })} />
           <SwitchRow label="Inject element-hiding CSS" checked={config.mitm.filters.html_cosmetic}
-            hint="Hides ad containers that survive network blocking. Conservative selectors only — broad ones break layouts."
+            hint="Hides ad containers that survive network blocking. Conservative selectors only, broad ones break layouts."
             onChange={(v) => save({ 'mitm.filters.html_cosmetic': v })} />
         </div>
       </Card>
@@ -829,7 +829,7 @@ function FirewallSection({ config, status, save, interfaces, toast }: SectionPro
               <option value="">Not set</option>
               {interfaces.filter((i) => !i.loopback).map((i) => (
                 <option key={i.name} value={i.name}>
-                  {i.name}{i.addresses.length ? ` — ${i.addresses[0]}` : ''}
+                  {i.name}{i.addresses.length ? ` (${i.addresses[0]})` : ''}
                 </option>
               ))}
             </select>
@@ -851,7 +851,7 @@ function FirewallSection({ config, status, save, interfaces, toast }: SectionPro
             hint="Keeps SSH and this web interface permanently reachable. Turning this off means one bad rule can strand you outside your own firewall."
             onChange={(v) => save({ 'firewall.anti_lockout': v })} />
           <SwitchRow label="Hardware/software flow offload" checked={config.firewall.flow_offload}
-            hint="Fast-paths established connections in the kernel. Large throughput win, but offloaded packets skip inspection — the flow table will undercount them."
+            hint="Fast-paths established connections in the kernel. Large throughput win, but offloaded packets skip inspection, the flow table will undercount them."
             onChange={(v) => save({ 'firewall.flow_offload': v })} />
         </div>
       </Card>
@@ -941,12 +941,12 @@ function ZonesSection({ config, save, interfaces, toast }: SectionProps) {
                       next[i] = { ...z, trust: e.target.value }
                       commit(next)
                     }}>
-                    <option value="wan">wan — the internet side</option>
-                    <option value="lan">lan — trusted local</option>
-                    <option value="guest">guest — internet only</option>
-                    <option value="iot">iot — internet only, isolated</option>
-                    <option value="dmz">dmz — exposed services</option>
-                    <option value="vpn">vpn — remote clients</option>
+                    <option value="wan">wan: the internet side</option>
+                    <option value="lan">lan: trusted local</option>
+                    <option value="guest">guest: internet only</option>
+                    <option value="iot">iot: internet only, isolated</option>
+                    <option value="dmz">dmz: exposed services</option>
+                    <option value="vpn">vpn: remote clients</option>
                   </select>
                 </Field>
                 <Field label="Subnets" hint="Comma-separated CIDRs">
@@ -1156,7 +1156,7 @@ function VPNSection({ config, save, toast }: SectionProps) {
 
           <TextSetting label="Public endpoint" value={config.vpn.server.endpoint} mono
             placeholder="vpn.example.com:51820"
-            hint="Where peers connect from outside — a hostname or public IP with the port. Generated configs are useless without it."
+            hint="Where peers connect from outside, a hostname or public IP with the port. Generated configs are useless without it."
             onSave={(v) => save({ 'vpn.server.endpoint': v })} />
 
           <ListSetting label="DNS servers for peers" value={config.vpn.server.dns} rows={2}
@@ -1199,7 +1199,7 @@ function VPNSection({ config, save, toast }: SectionProps) {
         <div className="hint" style={{ lineHeight: 1.7 }}>
           Orbis can also act as a WireGuard <em>client</em>, routing selected LAN devices out
           through a provider with a kill switch. These are configured in
-          <code> /etc/orbis/orbis.yaml</code> under <code>vpn.clients</code> — they need a private
+          <code> /etc/orbis/orbis.yaml</code> under <code>vpn.clients</code>, they need a private
           key and peer details that do not belong in a web form. Once defined they appear on the
           VPN page and can be started and stopped from there.
         </div>
@@ -1264,7 +1264,7 @@ function TailscaleSection({ config, save, refresh, toast }: SectionProps) {
               before it carries any traffic.
               {st?.advertising_exit_node && !st?.exit_node_approved && (
                 <strong style={{ color: 'var(--amber)', display: 'block', marginTop: 5 }}>
-                  Advertised but not approved yet — approve it under Machines in the Tailscale console.
+                  Advertised but not approved yet, approve it under Machines in the Tailscale console.
                 </strong>
               )}</>}
             onChange={(v) => save({ 'tailscale.advertise_exit_node': v })} />
@@ -1285,7 +1285,7 @@ function TailscaleSection({ config, save, refresh, toast }: SectionProps) {
           </Field>
 
           <SwitchRow label="Keep the local network reachable" checked={config.tailscale.exit_node_allow_lan}
-            hint="Without this, selecting an exit node cuts off LAN access — including this interface."
+            hint="Without this, selecting an exit node cuts off LAN access, including this interface."
             onChange={(v) => save({ 'tailscale.exit_node_allow_lan': v })} />
 
           <ListSetting label="Devices to steer through the exit node"
@@ -1309,7 +1309,7 @@ function TailscaleSection({ config, save, refresh, toast }: SectionProps) {
               ? <strong style={{ color: 'var(--amber)' }}>
                   A peer advertises {overlap.join(', ')}, which covers this node's own network.
                   Accepting it would send local traffic into the tunnel and take this node off the
-                  LAN — including this page. Stop advertising that route first.
+                  LAN, including this page. Stop advertising that route first.
                 </strong>
               : "Lets this node reach subnets other machines advertise. Safe unless a peer advertises a prefix covering a network this node is already on."}
             onChange={async (v) => {
@@ -1436,7 +1436,7 @@ function AssistantSection({ config, save, toast }: SectionProps) {
       <Card title="Permissions">
         <div style={{ display: 'grid', gap: 14 }}>
           <SwitchRow label="Let the assistant make changes" checked={config.ai.allow_write}
-            hint="With this off, the mutating tools are not offered to the model at all — it can inspect and propose, but every change needs a click. With it on, it can add firewall rules, block domains and devices, and apply the ruleset. Everything it does lands in the audit log."
+            hint="With this off, the mutating tools are not offered to the model at all, it can inspect and propose, but every change needs a click. With it on, it can add firewall rules, block domains and devices, and apply the ruleset. Everything it does lands in the audit log."
             onChange={async (v) => {
               if (v && !confirm(
                 'The assistant will be able to change firewall rules, blocklists and device ' +

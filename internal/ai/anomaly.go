@@ -436,7 +436,7 @@ const triagePrompt = `You triage anomaly detections from a network monitoring ap
 produced by a statistical detector, so each is a lead rather than a conclusion.
 
 For each finding, judge whether it warrants the operator's attention and say why in one or two
-sentences. Most findings on a normal network have a mundane explanation — software update checks
+sentences. Most findings on a normal network have a mundane explanation, software update checks
 beacon on a schedule, cloud backups upload a lot, a smart TV phones home constantly, a phone that
 just joined is a family member's. Say so plainly when that is the likely story; a triage layer
 that escalates everything is worse than none.

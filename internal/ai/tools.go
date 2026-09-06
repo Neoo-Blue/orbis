@@ -359,7 +359,7 @@ func Tools(allowWrite bool) []ToolDef {
 			Schema: objSchema(map[string]any{
 				"domain":   strProp("The domain to block"),
 				"wildcard": boolProp("Also block all subdomains (default true)"),
-				"note":     strProp("Why this was blocked — shown in the UI and audit log"),
+				"note":     strProp("Why this was blocked, shown in the UI and audit log"),
 			}, []string{"domain"}),
 		},
 		{
@@ -1010,7 +1010,7 @@ func jsonOf(v any, err error) (string, error) {
 	// one; the model can always narrow its query and ask again.
 	const maxResult = 60000
 	if len(out) > maxResult {
-		return string(out[:maxResult]) + `… [truncated — narrow the query with a filter or a smaller limit]`, nil
+		return string(out[:maxResult]) + `… [truncated: narrow the query with a filter or a smaller limit]`, nil
 	}
 	return string(out), nil
 }
@@ -1020,7 +1020,7 @@ func noteWithActor(args map[string]any, actor string) string {
 	if note == "" {
 		return "via assistant (" + actor + ")"
 	}
-	return note + " — via assistant (" + actor + ")"
+	return note + " (via assistant: " + actor + ")"
 }
 
 func wildcardPrefix(w bool) string {

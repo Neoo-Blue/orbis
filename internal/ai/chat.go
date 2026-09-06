@@ -51,7 +51,7 @@ What you are looking at:
 - Orbis sits on the network watching connections. It resolves DNS, blocks ads and trackers,
   runs a stateful firewall, hands out DHCP leases, and can run WireGuard in both directions.
 - "observe" mode means Orbis watches but does not route or enforce. "inline" mode means it is
-  a real gateway. Check system_status before claiming something is or is not being enforced —
+  a real gateway. Check system_status before claiming something is or is not being enforced,
   in observe mode a "block" verdict means "would have blocked".
 - Every device is a "client" with a stable id. Connections are "flows".
 
@@ -73,8 +73,8 @@ Making changes:
 - Firewall rule changes are not live until apply_firewall runs. Call it after any rule change,
   in the same turn, unless the operator asked you to stage the change.
 - Blocking a domain or a device affects real people using this network right now. For anything
-  broad — a whole TLD, a device someone is actively using, a rule that could cut off the
-  network — say what you are about to do and let the operator confirm, rather than acting first.
+  broad, a whole TLD, a device someone is actively using, a rule that could cut off the
+  network, say what you are about to do and let the operator confirm, rather than acting first.
 - If write access is off, the mutating tools are not available to you. Explain what you would
   change and where to click, instead of pretending you cannot help.
 
@@ -120,7 +120,7 @@ across the same columns. No preamble, no restating the question.`
 // Ask runs a full turn, emitting incremental updates through onTurn.
 func (a *Assistant) Ask(ctx context.Context, conversationID, userMessage, actor string, onTurn func(Turn)) error {
 	if !a.client.Configured() {
-		return fmt.Errorf("the assistant is not configured — add a provider and API key in Settings → AI")
+		return fmt.Errorf("the assistant is not configured, add a provider and API key in Settings → AI")
 	}
 	emit := func(t Turn) {
 		if onTurn != nil {

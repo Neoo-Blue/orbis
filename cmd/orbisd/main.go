@@ -117,7 +117,7 @@ func main() {
 		logger.Fatalf("api: %v", err)
 	}
 
-	logf("orbis %s ready — open http://%s", versionString(), cfg.API.Listen)
+	logf("orbis %s ready, open http://%s", versionString(), cfg.API.Listen)
 	if cfg.Mode == config.ModeObserve {
 		logf("running in OBSERVE mode: nothing is routed through this node and no " +
 			"ruleset is installed. Switch to inline mode when you are ready to enforce.")

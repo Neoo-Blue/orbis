@@ -50,7 +50,7 @@ export class ErrorBoundary extends Component<Props, State> {
               The {this.props.name} page could not be displayed
             </strong>
             <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginBottom: 10 }}>
-              Everything else still works — pick another page from the sidebar. The details below
+              Everything else still works, pick another page from the sidebar. The details below
               are also in the browser console.
             </div>
             <pre style={{

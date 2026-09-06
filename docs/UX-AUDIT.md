@@ -48,6 +48,16 @@ Findings are grouped by what was done about them.
   from an unlayered desktop rule; tab strips wrapped their labels; drawers were
   wider than the screen. All addressed. The advanced icon rail now has tooltips.
   Tables still scroll horizontally by design.
+  Second pass, same day, for the advanced interface on phones: a five-slot
+  bottom bar (Overview, Connections, Devices, Assistant, More) with an
+  all-pages sheet behind More and a search button in the top bar; Devices
+  renders as cards; pages stack their sections in inline grids whose single
+  auto column grew to the widest unwrapped tab strip and stretched every
+  banner and card past the screen, fixed with one rule that pins that column
+  to the available width; Settings chips were inheriting the tab-bar rules;
+  the Assistant composer and Globe controls were pushed below the fold by
+  banners above a full-height view; the Globe legend collided with its view
+  controls. Verified on every route with iPhone-size screenshots.
 - **Empty states** vary in tone. Some explain what to do next, some do not.
 - **Destructive actions** use `confirm()`; a consistent in-app confirmation
   with an undo toast would be better, particularly for block and delete.

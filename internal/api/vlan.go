@@ -154,7 +154,7 @@ func (s *Server) handleProxyReadiness(w http.ResponseWriter, r *http.Request) {
 				itoa(intercepted)+" connections decrypted",
 				"connections arrive but none are being decrypted"),
 			Fix: "The device has to trust the Orbis CA. Until it does, its connections are passed " +
-				"through untouched rather than broken — which is why nothing changes.",
+				"through untouched rather than broken, which is why nothing changes.",
 		},
 		{
 			Name: "Ads being stripped", OK: stripped > 0,

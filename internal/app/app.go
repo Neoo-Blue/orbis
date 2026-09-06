@@ -679,7 +679,7 @@ func (a *App) SyncTunnelRules() {
 		// leaving it to the operator is the difference between the VPN
 		// working and appearing to connect but moving nothing.
 		if err := enableForwarding(tc.IPv6); err != nil {
-			a.log("firewall: could not enable IP forwarding (%v) — tunnel clients will connect but reach nothing", err)
+			a.log("firewall: could not enable IP forwarding (%v), tunnel clients will connect but reach nothing", err)
 			a.raise(store.SevWarning, "vpn", "IP forwarding is off",
 				"Tunnel clients can connect but cannot reach anything through this node. "+
 					"On a container, set net.ipv4.ip_forward=1 on the host.")

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { api, setUnauthorizedHandler } from './api'
-import { usePoll, useLive, useLocalStorage, type LiveEvent } from './hooks'
-import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast } from './ui'
+import { usePoll, useLive, useLocalStorage, useMediaQuery, type LiveEvent } from './hooks'
+import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast, Drawer } from './ui'
 import type { AppConfig, SystemStatus, Summary } from './types'
 import { Dashboard } from './pages/Dashboard'
 import { GlobePage } from './pages/GlobePage'
@@ -82,19 +82,8 @@ const SIMPLE_ROUTES: NavRoute[] = [
   { id: 's-settings', label: 'Settings', icon: 'gear' },
 ]
 const ALL_ROUTES = [...ROUTES, ...SIMPLE_ROUTES]
-
-/** useMediaQuery tracks a CSS media query, for the few places markup (not
- *  style) has to differ on a phone. */
-function useMediaQuery(q: string): boolean {
-  const [match, setMatch] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches)
-  useEffect(() => {
-    const m = window.matchMedia(q)
-    const on = () => setMatch(m.matches)
-    m.addEventListener('change', on)
-    return () => m.removeEventListener('change', on)
-  }, [q])
-  return match
-}
+/** On a phone the advanced interface shows these four and a "More" sheet. */
+const MOBILE_PRIMARY: Route[] = ['dashboard', 'flows', 'clients', 'assistant']
 
 function routeFromHash(): Route {
   const raw = location.hash.replace(/^#\/?/, '').split('/')[0]
@@ -225,8 +214,12 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   }, [status?.version])
   const candidates = summary?.ad_candidates ?? 0
 
-  const navRoutes = ui === 'simple' ? SIMPLE_ROUTES : ROUTES
   const narrow = useMediaQuery('(max-width: 880px)')
+  const [moreOpen, setMoreOpen] = useState(false)
+  // The sheet is a navigation aid, so any route change (a tap inside it, the
+  // palette, a link in a page) closes it, as does growing past phone width.
+  useEffect(() => { setMoreOpen(false) }, [route, narrow])
+  const navRoutes = ui === 'simple' ? SIMPLE_ROUTES : narrow ? ROUTES.filter((r) => MOBILE_PRIMARY.includes(r.id)) : ROUTES
   const grouped = useMemo(() => {
     const out: Array<{ group?: string; items: NavRoute[] }> = []
     let current: { group?: string; items: NavRoute[] } | null = null
@@ -246,8 +239,11 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   const go = (r: string) => navigate(r as Route)
   const onAsk = (q: string) => { setPendingQuestion(q); navigate('assistant') }
 
+  const tabs = ui === 'simple' || narrow
+  const inPrimary = ui === 'simple' || MOBILE_PRIMARY.includes(shown)
+
   return (
-    <div className={`shell${ui === 'simple' ? ' simple' : ''}`}>
+    <div className={`shell${ui === 'simple' ? ' simple' : ''}${tabs ? ' tabs' : ''}`}>
       <CommandPalette pages={ROUTES} onNavigate={(r) => navigate(r as Route)} />
       <nav className="nav">
         <div className="brand">
@@ -265,7 +261,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
 
         {grouped.map((g, gi) => (
           <div key={gi} className="nav-section">
-            {g.group && <div className="nav-group">{g.group}</div>}
+            {g.group && !(narrow && ui === 'advanced') && <div className="nav-group">{g.group}</div>}
             {g.items.map((r) => {
               const Icon = Icons[r.icon]
               const badge =
@@ -283,6 +279,13 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
             })}
           </div>
         ))}
+        {narrow && ui === 'advanced' && (
+          <button className="nav-item" onClick={() => setMoreOpen(true)} title="All pages"
+            aria-current={!inPrimary ? 'page' : undefined}>
+            <Icons.grid />
+            <span>More</span>
+          </button>
+        )}
 
         <div className="nav-foot">
           <div>{connected ? '● live' : '○ reconnecting'}</div>
@@ -295,6 +298,10 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
         <header className="topbar">
           <h1>{title}</h1>
           <div className="spacer" />
+          {narrow && ui === 'advanced' && (
+            <button className="btn sm" title="Search pages, devices and settings" aria-label="Search"
+              onClick={() => window.dispatchEvent(new Event('orbis:palette'))}><Icons.search size={14} /></button>
+          )}
           <Segmented value={ui} onChange={(v) => setUIPref(v)}
             options={[{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Advanced' }]} />
           <GlossaryButton />
@@ -308,6 +315,38 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           </span>
         </header>
 
+        {moreOpen && (
+          <Drawer title="All pages" onClose={() => setMoreOpen(false)}>
+            <div style={{ display: 'grid', gap: 14 }}>
+              {(() => {
+                const out: Array<{ group: string; items: NavRoute[] }> = []
+                for (const r of ROUTES) {
+                  const g = r.group ?? (out.length ? out[out.length - 1].group : 'Observe')
+                  let b = out.find((x) => x.group === g)
+                  if (!b) { b = { group: g, items: [] }; out.push(b) }
+                  b.items.push(r)
+                }
+                return out
+              })().map((g) => (
+                <div key={g.group}>
+                  <div className="nav-group" style={{ display: 'block', padding: '0 0 6px' }}>{g.group}</div>
+                  <div className="more-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+                    {g.items.map((r) => {
+                      const Icon = Icons[r.icon]
+                      return (
+                        <button key={r.id} className="nav-item"
+                          aria-current={shown === r.id ? 'page' : undefined}
+                          onClick={() => { setMoreOpen(false); navigate(r.id) }}>
+                          <Icon /><span>{r.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Drawer>
+        )}
         <div className={`page${shown === 'globe' || shown === 'assistant' ? ' flush' : ''}`}>
           {updated && (
             <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>

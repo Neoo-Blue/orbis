@@ -40,8 +40,11 @@ export function CommandPalette({ pages, onNavigate }: {
       }
       if (e.key === 'Escape') setOpen(false)
     }
+    // Touch devices have no Cmd+K; the top bar's search button fires this.
+    const onOpen = () => setOpen(true)
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('orbis:palette', onOpen)
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('orbis:palette', onOpen) }
   }, [])
 
   // Lazy-load devices the first time it opens.

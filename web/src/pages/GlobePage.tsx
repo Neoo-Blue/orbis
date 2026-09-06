@@ -183,7 +183,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
             </Banner>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap', flex: 'none' }}>
+        <div className="globe-legend-row" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap', flex: 'none' }}>
           <div className="globe-legend">
             <span><i style={{ background: 'var(--accent)' }} />allowed</span>
             <span><i style={{ background: 'var(--red)' }} />blocked</span>

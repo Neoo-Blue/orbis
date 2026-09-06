@@ -516,7 +516,7 @@ function InStream() {
         </strong>
         YouTube serves its ads from the same hosts as its video, over the same connection. There is
         no name to block, so DNS filtering cannot touch it. Removing those ads means terminating
-        TLS on this node and editing the player response in flight — which requires installing the
+        TLS on this node and editing the player response in flight, which requires installing the
         certificate below on every device you want filtered.
       </Banner>
 
@@ -666,7 +666,7 @@ function InStream() {
           <div>
             <strong style={{ color: 'var(--text)' }}>Does not work:</strong> server-side stitched ads,
             where the ad frames are muxed into the same video stream as the content. Nothing on the
-            network can separate those — the ad and the video are literally the same bytes.
+            network can separate those, the ad and the video are literally the same bytes.
           </div>
           <div>
             <strong style={{ color: 'var(--text)' }}>Will not be intercepted:</strong> apps that pin

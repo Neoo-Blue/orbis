@@ -44,7 +44,7 @@ function LeasesTab({ status }: { status: SystemStatus | null }) {
       {!running && (
         <Banner tone="info">
           The DHCP server is not running. It only starts in inline mode with at least one scope
-          configured — running a second DHCP server on a network that already has one causes
+          configured, running a second DHCP server on a network that already has one causes
           address conflicts, so this stays off until you ask for it.
         </Banner>
       )}
@@ -250,7 +250,7 @@ function VLANTab() {
                       <Readiness ok={!!v.zone} label="Firewall zone"
                         detail={v.zone ? v.zone : 'no policy applies to this VLAN'} />
                       <Readiness ok={!!scope} label="DHCP"
-                        detail={scope ? `${scope.range_start}–${scope.range_end}` : 'no scope — devices need static addresses'} />
+                        detail={scope ? `${scope.range_start}–${scope.range_end}` : 'no scope, devices need static addresses'} />
                     </div>
 
                     {v.error && (

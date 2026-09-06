@@ -75,7 +75,7 @@ export function FirewallPage({ status }: { status: SystemStatus | null }) {
           <strong style={{ display: 'block', marginBottom: 3 }}>Kernel settings need attention</strong>
           {issues.slice(0, 3).map((i) => (
             <div key={i.key} style={{ fontSize: 11.5 }}>
-              <code>{i.key}</code> is <code>{i.current || '?'}</code>, should be <code>{i.want}</code> — {i.why}
+              <code>{i.key}</code> is <code>{i.current || '?'}</code>, should be <code>{i.want}</code>: {i.why}
             </div>
           ))}
         </Banner>
@@ -196,7 +196,7 @@ function RuleEditor({ rule, onSave, onClose }: {
             placeholder="Block IoT from reaching the NAS"
             onChange={(e) => set({ name: e.target.value })} />
         </Field>
-        <Field label="Description" hint="Why this rule exists — future you will want it.">
+        <Field label="Description" hint="Why this rule exists. Future you will want it.">
           <input className="input" value={draft.description ?? ''}
             onChange={(e) => set({ description: e.target.value })} />
         </Field>
@@ -205,11 +205,11 @@ function RuleEditor({ rule, onSave, onClose }: {
           <Field label="Chain">
             <select className="select" value={draft.chain ?? 'forward'}
               onChange={(e) => set({ chain: e.target.value })}>
-              <option value="forward">forward — traffic passing through</option>
-              <option value="input">input — traffic to this node</option>
-              <option value="output">output — traffic from this node</option>
-              <option value="dnat">dnat — port forwarding</option>
-              <option value="snat">snat — source rewriting</option>
+              <option value="forward">forward: traffic passing through</option>
+              <option value="input">input: traffic to this node</option>
+              <option value="output">output: traffic from this node</option>
+              <option value="dnat">dnat: port forwarding</option>
+              <option value="snat">snat: source rewriting</option>
             </select>
           </Field>
           {!isNAT && (

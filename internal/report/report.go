@@ -120,7 +120,7 @@ func (r *Report) WriteHTML(w io.Writer) error {
 // is more than the moment calls for.
 func (r *Report) TextSummary() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Orbis report — %s (%s)\n\n", r.Node, r.Window)
+	fmt.Fprintf(&b, "Orbis report: %s (%s)\n\n", r.Node, r.Window)
 	fmt.Fprintf(&b, "DNS: %s queries, %s blocked (%.1f%%)\n",
 		humanCount(r.DNSQueries), humanCount(r.DNSBlocked), r.BlockRate)
 	fmt.Fprintf(&b, "Traffic: %s down, %s up across %d devices\n",
@@ -134,7 +134,7 @@ func (r *Report) TextSummary() string {
 			if i >= 5 {
 				break
 			}
-			fmt.Fprintf(&b, "  %s — %s\n", row.Label, humanBytes(row.Value))
+			fmt.Fprintf(&b, "  %s: %s\n", row.Label, humanBytes(row.Value))
 		}
 	}
 	return b.String()

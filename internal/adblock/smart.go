@@ -353,7 +353,7 @@ func (s *SmartCapture) promote(domain string, score float64, reason, by string) 
 	if err := s.mgr.Rebuild(); err != nil {
 		s.log("smart-capture: rebuild after promote: %v", err)
 	}
-	s.log("smart-capture: blocked %s (%.2f) — %s", domain, score, reason)
+	s.log("smart-capture: blocked %s (%.2f): %s", domain, score, reason)
 	if s.onBlock != nil {
 		s.onBlock(domain, score, reason)
 	}

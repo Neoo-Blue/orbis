@@ -64,7 +64,7 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
       {sysctlIssues.length > 0 && status?.mode === 'inline' && (
         <Banner tone="err" action={<button className="btn sm" onClick={() => onNavigate('firewall')}>Fix</button>}>
           {sysctlIssues.map((s) => s.key).join(', ')} {sysctlIssues.length === 1 ? 'is' : 'are'} not set
-          correctly — routing will not work as configured.
+          correctly, routing will not work as configured.
         </Banner>
       )}
 
@@ -162,7 +162,7 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
       on: Boolean((status.filter_proxy as Record<string, unknown>)?.running),
       detail: (status.filter_proxy as Record<string, unknown>)?.running
         ? `${compact(Number((status.filter_proxy as Record<string, number>)?.ads_stripped ?? 0))} ads stripped`
-        : 'off — required for in-stream (YouTube) ad removal',
+        : 'off, required for in-stream (YouTube) ad removal',
     },
     {
       name: 'Firewall',

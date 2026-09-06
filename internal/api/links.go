@@ -23,6 +23,7 @@ func (s *Server) mountLinks(r chi.Router) {
 		r.Post("/enable", s.handleWiFiEnable)
 		r.Post("/disable", s.handleWiFiDisable)
 		r.Post("/passphrase", s.handleWiFiPassphrase)
+		r.Get("/qr.png", s.handleWiFiQR)
 	})
 }
 
@@ -126,4 +127,37 @@ func (s *Server) handleWiFiPassphrase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOK(w, st)
+}
+
+// wifiQRPayload is the string phones understand when they scan a Wi-Fi
+// code: WIFI:T:WPA;S:name;P:passphrase;H:true;; with the special characters
+// escaped.
+func wifiQRPayload(ssid, passphrase string, hidden bool) string {
+	esc := func(v string) string {
+		r := strings.NewReplacer(`\\`, `\\\\`, `;`, `\\;`, `,`, `\\,`, `:`, `\\:`, `"`, `\\"`)
+		return r.Replace(v)
+	}
+	h := ""
+	if hidden {
+		h = "H:true;"
+	}
+	return "WIFI:T:WPA;S:" + esc(ssid) + ";P:" + esc(passphrase) + ";" + h + ";"
+}
+
+// handleWiFiQR renders the join code as a PNG, behind the admin session
+// like the passphrase itself.
+func (s *Server) handleWiFiQR(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.Snapshot().WiFi
+	if !cfg.Enabled || cfg.SSID == "" || cfg.Passphrase == "" {
+		writeErr(w, http.StatusNotFound, "wi-fi is not configured")
+		return
+	}
+	png, err := qrPNG(wifiQRPayload(cfg.SSID, cfg.Passphrase, cfg.Hidden))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(png)
 }

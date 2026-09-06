@@ -100,6 +100,8 @@ function WiFiCard({ wifi, busy, act, refresh }: { wifi: WiFiStatus | null; busy:
   const [ssid, setSsid] = useState('')
   const [pass, setPass] = useState('')
   const [show, setShow] = useState(false)
+  const [newPass, setNewPass] = useState('')
+  const [qrKey, setQrKey] = useState(0)
   const toast = useToast()
   if (!wifi) return <Card title="Wi-Fi"><Loading what="wireless state" /></Card>
   const adapters = wifi.adapters ?? []
@@ -136,6 +138,15 @@ function WiFiCard({ wifi, busy, act, refresh }: { wifi: WiFiStatus | null; busy:
           </div>
         ) : (
           <>
+            <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              {wifi.running && (
+                <figure style={{ margin: 0, textAlign: 'center' }}>
+                  <img key={qrKey} src={`/api/wifi/qr.png?v=${qrKey}`} alt={`QR code to join ${wifi.ssid}`} width={168} height={168}
+                    style={{ borderRadius: 10, background: '#fff', padding: 8, display: 'block' }} />
+                  <figcaption className="hint" style={{ marginTop: 6 }}>Scan with a phone camera to join</figcaption>
+                </figure>
+              )}
+              <div style={{ flex: 1, minWidth: 240 }}>
             <dl className="kv">
               <dt>Network name</dt><dd>{wifi.ssid}</dd>
               <dt>Passphrase</dt>
@@ -143,12 +154,20 @@ function WiFiCard({ wifi, busy, act, refresh }: { wifi: WiFiStatus | null; busy:
                 <span className="mono">{show ? wifi.passphrase : '••••••••••••'}</span>
                 <button className="btn sm" onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
                 <button className="btn sm" onClick={() => { if (wifi.passphrase) { navigator.clipboard?.writeText(wifi.passphrase); toast('Copied', 'ok') } }}>Copy</button>
-                <button className="btn sm" disabled={busy === 'regen'} onClick={() => act('regen', () => api.wifi.passphrase(), 'New passphrase set; devices must rejoin')}>New passphrase</button>
+                <button className="btn sm" disabled={busy === 'regen'} onClick={() => act('regen', () => api.wifi.passphrase(), 'New passphrase set; devices must rejoin').then(() => setQrKey((k) => k + 1))}>New passphrase</button>
               </dd>
               <dt>Adapter</dt><dd>{wifi.interface} {wifi.type ? `(${wifi.type})` : ''} {wifi.channel_info ? `· ${wifi.channel_info}` : ''}</dd>
               <dt>State</dt><dd>{wifi.running ? `up since ${ago(wifi.since ?? '')}${wifi.restarts ? `, restarted ${wifi.restarts}×` : ''}` : wifi.error || 'starting'}</dd>
               <dt>Mode</dt><dd>{wifi.mode === 'bridge' ? `bridged into ${cfg?.bridge}` : `routed, ${wifi.subnet}`}</dd>
             </dl>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+              <input className="input mono" style={{ flex: '1 1 200px' }} value={newPass} placeholder="Set your own passphrase (8 to 63 characters)"
+                onChange={(e) => setNewPass(e.target.value)} />
+              <button className="btn" disabled={newPass.length < 8 || newPass.length > 63 || busy === 'setpass'}
+                onClick={() => act('setpass', () => api.wifi.passphrase(newPass), 'Passphrase changed; devices must rejoin').then(() => { setNewPass(''); setQrKey((k) => k + 1) })}>Set passphrase</button>
+            </div>
+              </div>
+            </div>
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
               <label className="field"><span>Band</span>
                 <select className="input" value={cfg?.band ?? 'auto'} onChange={(e) => save({ 'wifi.band': e.target.value }, 'Band changed; Wi-Fi restarts')}>

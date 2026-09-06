@@ -13,6 +13,7 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -53,7 +54,7 @@ func main() {
 	// nears it instead of the kernel killing the daemon at the wall.
 	applyMemoryLimit()
 	if *selfUpdate {
-		os.Exit(runSelfUpdate())
+		os.Exit(runSelfUpdate(*configPath))
 	}
 	// Profiling is opt-in and loopback-only: ORBIS_PPROF=127.0.0.1:6060.
 	if addr := os.Getenv("ORBIS_PPROF"); addr != "" {
@@ -249,8 +250,15 @@ func startPprof(addr string) {
 }
 
 // runSelfUpdate is the headless path: check, install, restart, report.
-func runSelfUpdate() int {
-	m := update.NewManager(versionString(), "", update.Hooks{}, log.Printf)
+func runSelfUpdate(configPath string) int {
+	dataDir := "/var/lib/orbis"
+	if cfg, err := config.Load(configPath); err == nil && cfg.Store.Path != "" {
+		dataDir = filepath.Dir(cfg.Store.Path)
+	}
+	if st, err := os.Stat(dataDir); err != nil || !st.IsDir() {
+		dataDir = os.TempDir()
+	}
+	m := update.NewManager(versionString(), dataDir, update.Hooks{}, log.Printf)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	rel, err := m.Check(ctx)

@@ -353,7 +353,14 @@ func (m *Manager) apply(rel *Release) {
 	defer cancel()
 
 	m.setState("downloading", 0, nil)
-	tmp := exe + ".new"
+	// Stage next to the binary when we may write there; a hardened unit
+	// (ProtectSystem=strict) cannot, so the data directory takes it and a
+	// transient systemd unit outside our sandbox does the swap.
+	tmp, inPlace, err := m.stagePath(exe)
+	if err != nil {
+		fail(err)
+		return
+	}
 	sum, err := m.download(ctx, asset, tmp)
 	if err != nil {
 		os.Remove(tmp)
@@ -388,23 +395,44 @@ func (m *Manager) apply(rel *Release) {
 	}
 
 	m.setState("installing", 1, nil)
+	if m.dataDir != "" {
+		_ = os.WriteFile(filepath.Join(m.dataDir, "update-pending"), []byte(m.current+" -> "+rel.Version), 0o644)
+	}
 	prev := exe + ".prev"
+	if !inPlace {
+		if Method() != "systemd" {
+			os.Remove(tmp)
+			fail(fmt.Errorf("cannot write %s from here; run: sudo orbisd -update", filepath.Dir(exe)))
+			return
+		}
+		// Swap and restart from a transient unit that has the whole
+		// filesystem, then let it take us down.
+		m.setState("restarting", 1, nil)
+		script := fmt.Sprintf("cp -a %q %q; install -m0755 %q %q && rm -f %q; systemctl restart orbis",
+			exe, prev, tmp, exe, tmp)
+		if err := transientRun(script); err != nil {
+			os.Remove(tmp)
+			m.clearPending()
+			fail(fmt.Errorf("could not hand the install to systemd: %w. Run: sudo orbisd -update", err))
+			return
+		}
+		m.log("update: installing %s over %s through systemd (rollback copy at %s)", rel.Version, m.current, prev)
+		return
+	}
 	_ = os.Remove(prev)
 	if err := copyFile(exe, prev); err != nil {
 		m.log("update: could not keep a rollback copy: %v", err)
 	}
 	if err := os.Rename(tmp, exe); err != nil {
+		m.clearPending()
 		fail(fmt.Errorf("install: %w", err))
 		return
-	}
-	if m.dataDir != "" {
-		_ = os.WriteFile(filepath.Join(m.dataDir, "update-pending"), []byte(m.current+" -> "+rel.Version), 0o644)
 	}
 	m.log("update: installed %s over %s (rollback copy at %s)", rel.Version, m.current, prev)
 
 	if Method() == "systemd" {
 		m.setState("restarting", 1, nil)
-		if err := restartService(); err != nil {
+		if err := transientRun("systemctl restart orbis"); err != nil {
 			fail(fmt.Errorf("installed, but the restart failed: %w. Run: systemctl restart orbis", err))
 			return
 		}
@@ -511,18 +539,51 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-// restartService asks systemd to restart us from outside our own cgroup, so
-// the request survives our shutdown. systemd-run makes a transient unit for
-// that; without it a detached shell issues the restart after a moment.
-func restartService() error {
+// transientRun hands a shell command to systemd as a transient unit outside
+// our own cgroup and sandbox, so it can touch the system tree and survive our
+// shutdown. Without systemd-run a detached shell does the job after a moment.
+func transientRun(script string) error {
+	unit := fmt.Sprintf("orbis-self-update-%d", time.Now().Unix())
 	if p, err := exec.LookPath("systemd-run"); err == nil {
-		if err := exec.Command(p, "--quiet", "--on-active=2", "--unit=orbis-self-update", "systemctl", "restart", "orbis").Run(); err == nil {
+		out, err := exec.Command(p, "--quiet", "--collect", "--unit="+unit, "/bin/sh", "-c", script).CombinedOutput()
+		if err == nil {
 			return nil
 		}
+		if msg := strings.TrimSpace(string(out)); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+		return err
 	}
-	cmd := exec.Command("sh", "-c", "sleep 2; systemctl restart orbis")
+	cmd := exec.Command("/bin/sh", "-c", "sleep 2; "+script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	return cmd.Start()
+}
+
+// stagePath picks where the download lands: beside the binary if we may
+// write there, else in the data directory. inPlace says which.
+func (m *Manager) stagePath(exe string) (path string, inPlace bool, err error) {
+	next := exe + ".new"
+	if f, err := os.OpenFile(next, os.O_CREATE|os.O_WRONLY, 0o700); err == nil {
+		f.Close()
+		return next, true, nil
+	}
+	dir := m.dataDir
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	staged := filepath.Join(dir, "orbisd.new")
+	f, err := os.OpenFile(staged, os.O_CREATE|os.O_WRONLY, 0o700)
+	if err != nil {
+		return "", false, fmt.Errorf("no writable place for the download: %w", err)
+	}
+	f.Close()
+	return staged, false, nil
+}
+
+func (m *Manager) clearPending() {
+	if m.dataDir != "" {
+		_ = os.Remove(filepath.Join(m.dataDir, "update-pending"))
+	}
 }
 
 // announceInstalled turns the marker left before a restart into an event,

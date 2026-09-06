@@ -140,6 +140,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountAI(r)
 	s.mountIssues(r)
 	s.mountServices(r)
+	s.mountThreat(r)
 	s.mountSimple(r)
 
 	r.Route("/chat", func(r chi.Router) {
@@ -1251,6 +1252,12 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			// Anything that changes which interfaces carry tunnel traffic,
 			// or where it egresses, invalidates the tunnel ruleset.
 			s.app.SyncTunnelRules()
+		case strings.HasPrefix(key, "threat."):
+			s.app.Threat.Reconfigure()
+			if key == "threat.enabled" || key == "threat.block_inbound" || key == "threat.block_outbound" {
+				// The drop rules themselves live in the rendered rulesets.
+				go s.app.ReapplyThreatEnforcement()
+			}
 		case key == "ai.enabled", key == "ai.provider", key == "ai.api_key", key == "ai.base_url",
 			key == "ai.auto_discover":
 			// A new provider or key deserves a fresh ranking straight away

@@ -22,7 +22,7 @@ func testConfig() config.Config {
 }
 
 func TestRenderProducesAtomicReplace(t *testing.T) {
-	out, err := renderRuleset(testConfig(), nil)
+	out, err := renderRuleset(testConfig(), nil, renderExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestRenderProducesAtomicReplace(t *testing.T) {
 }
 
 func TestRenderIsolatesUntrustedZones(t *testing.T) {
-	out, err := renderRuleset(testConfig(), nil)
+	out, err := renderRuleset(testConfig(), nil, renderExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestRenderIsolatesUntrustedZones(t *testing.T) {
 
 func TestRenderAntiLockout(t *testing.T) {
 	cfg := testConfig()
-	out, _ := renderRuleset(cfg, nil)
+	out, _ := renderRuleset(cfg, nil, renderExtras{})
 	if !strings.Contains(out, "orbis anti-lockout") {
 		t.Error("anti-lockout rule missing when enabled")
 	}
@@ -72,7 +72,7 @@ func TestRenderAntiLockout(t *testing.T) {
 	}
 
 	cfg.Firewall.AntiLockout = false
-	out, _ = renderRuleset(cfg, nil)
+	out, _ = renderRuleset(cfg, nil, renderExtras{})
 	if strings.Contains(out, "orbis anti-lockout") {
 		t.Error("anti-lockout rule present when disabled")
 	}
@@ -86,7 +86,7 @@ func TestRenderEscapesRuleNames(t *testing.T) {
 		ID: "r1", Enabled: true, Chain: "forward", Action: "drop",
 		Name: `evil" ; drop table inet orbis; comment "`, Position: 10, Log: true,
 	}}
-	out, err := renderRuleset(testConfig(), rules)
+	out, err := renderRuleset(testConfig(), rules, renderExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestRenderRuleFields(t *testing.T) {
 		Name: "block iot to nas", SrcZone: "iot", Dst: "192.168.1.10",
 		Proto: "tcp", DstPort: "445,139", Position: 10,
 	}}
-	out, err := renderRuleset(testConfig(), rules)
+	out, err := renderRuleset(testConfig(), rules, renderExtras{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestDisabledRulesAreNotRendered(t *testing.T) {
 		ID: "off", Enabled: false, Chain: "forward", Action: "drop",
 		Name: "disabled rule", Position: 10,
 	}}
-	out, _ := renderRuleset(testConfig(), rules)
+	out, _ := renderRuleset(testConfig(), rules, renderExtras{})
 	if strings.Contains(out, "off|disabled rule") {
 		t.Error("a disabled rule was rendered")
 	}
@@ -187,13 +187,13 @@ func TestSanitizeProducesValidIdentifiers(t *testing.T) {
 
 func TestTailscaleRulesAppearOnlyWhenEnabled(t *testing.T) {
 	cfg := testConfig()
-	out, _ := renderRuleset(cfg, nil)
+	out, _ := renderRuleset(cfg, nil, renderExtras{})
 	if strings.Contains(out, "tailscale0") {
 		t.Error("tailscale rules rendered while Tailscale is disabled")
 	}
 
 	cfg.Tailscale.Enabled = true
-	out, _ = renderRuleset(cfg, nil)
+	out, _ = renderRuleset(cfg, nil, renderExtras{})
 	for _, want := range []string{
 		`iifname "tailscale0" accept`,             // input: reach this node over the tailnet
 		`iifname "tailscale0" counter accept`,     // forward: act as an exit node
@@ -212,7 +212,7 @@ func TestObserveModeRendersButDoesNotClaimApplied(t *testing.T) {
 	cfg.Mode = config.ModeObserve
 	// Rendering must still work in observe mode so the preview pane has
 	// something to show; it is Apply that refuses.
-	out, err := renderRuleset(cfg, nil)
+	out, err := renderRuleset(cfg, nil, renderExtras{})
 	if err != nil || len(out) == 0 {
 		t.Fatalf("render failed in observe mode: %v", err)
 	}

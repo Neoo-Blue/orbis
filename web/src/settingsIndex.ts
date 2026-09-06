@@ -5,7 +5,7 @@
  */
 export type SettingsSection =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
-  | 'dhcp' | 'vpn' | 'tailscale' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
+  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
 
 export interface SettingsEntry { section: SettingsSection; label: string; keywords: string }
 
@@ -25,6 +25,10 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: 'dns', label: 'Encrypted DNS server (DoT, DoH)', keywords: 'serve dns over tls https 853 8443 certificate' },
   { section: 'dns', label: 'Rebind protection', keywords: 'rebinding private answers security' },
   { section: 'adblock', label: 'Ad blocking on or off', keywords: 'ads trackers enable disable' },
+  { section: 'threats', label: 'Block known-bad addresses (threat feeds)', keywords: 'threat intelligence ip feed blocklist spamhaus drop feodo botnet c2 malware attackers reputation' },
+  { section: 'threats', label: 'Ban an address or range', keywords: 'ban block ip cidr timed decision attacker scanner' },
+  { section: 'threats', label: 'CrowdSec bouncer', keywords: 'crowdsec bouncer lapi local api key decisions community blocklist' },
+  { section: 'threats', label: 'Never block these addresses', keywords: 'threat allow exception whitelist vpn endpoint server' },
   { section: 'adblock', label: 'Blocklists', keywords: 'lists subscriptions hagezi oisd stevenblack malware phishing update interval' },
   { section: 'adblock', label: 'Allowlist and denylist', keywords: 'allow deny whitelist blacklist exception' },
   { section: 'adblock', label: 'Block DNS bypass (private DNS)', keywords: 'doh bypass cloudflare-dns dns.google android private dns' },

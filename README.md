@@ -53,6 +53,7 @@ where Orbis keeps going.
 | WireGuard server and client, Tailscale exit node | ○ | | | ● | | | ● |
 | Every connection identified: host, app, ASN, country | | | | ○ | | | ● |
 | Network map, live globe, anomaly detection | | | | | | | ● |
+| IP threat feeds, timed bans, CrowdSec bouncer | | | | ○ | | | ● |
 | Assistant with tools, MCP server | | | | | | | ● |
 
 ● built in · ○ partial or via add-on · blank: not in scope for that product
@@ -113,6 +114,11 @@ ask your resolver, a DoH-bypass sinkhole, the built-in streaming-device list, an
 a heuristic pipeline (with an optional model) that scores hosts no list has caught yet and queues
 them with evidence for a one-click verdict.
 
+**Known-bad addresses, not just names.** Threat feeds (Spamhaus DROP, abuse.ch command
+servers, addresses seen attacking) become nftables sets dropped in both directions, so a device
+that never asks your resolver is still caught when it beacons to a listed address. Timed bans
+from you, the assistant, the scan detector or a CrowdSec engine live in the same set.
+
 **A real firewall.** Zones with trust levels, an ordered rule table with live hit counters, NAT and
 port forwarding, time-based rules, IPv6, flow offload, an anti-lockout rule, all compiled into one
 nftables ruleset and loaded atomically after `nft -c` validation.
@@ -131,7 +137,9 @@ NAT-PMP, Wake-on-LAN, ping, traceroute, speed test, pcap export.
 
 **Sight.** Every connection gets a hostname, an application, a network operator, a country and a
 coordinate, from a kernel BPF prefilter that hands userspace only the packets that carry identity.
-A 3D globe and a flat map of live and historical connections. Time-series analytics over 14 days,
+A 3D globe and a flat map of live and historical connections; every arc carries two crest trains,
+cool for bytes leaving the network and warm for bytes arriving, so a download and an upload on
+the same connection are both visible and tell apart. Time-series analytics over 14 days,
 user-defined alerts to webhook or email, scheduled reports, Prometheus metrics.
 
 **Ask first.** An opt-in per-device queue: the first time an enrolled device reaches a hostname it
@@ -302,6 +310,25 @@ reads open issues, reproduces clear defects with a failing test, opens a pull
 request on a `fix/issue-N` branch (never pushing to `main`), and triages the
 rest with a comment. Humans review and merge. Nothing is deployed automatically.
 
+## Threat intelligence and CrowdSec
+
+DNS blocking stops a name from resolving. The **Threats** page works on addresses: feeds of
+hijacked netblocks, live botnet command servers and addresses seen attacking are fetched on a
+schedule, parsed (private and reserved ranges are refused, and no feed can black out more
+than a /8), and loaded into nftables sets that drop connections to and from them. Where this
+node is in the path (inline, or a device it intercepts) the connection is dropped; everywhere
+else a hit is recorded, named to the device, and raised as an event, so a camera beaconing to
+a command server is visible even from a node that only serves DNS. The hit list says which
+was which. Your own servers and VPN endpoints go on an allow list that always wins.
+
+**Bans** are timed decisions against an address or range, from you, from the assistant
+("ban 203.0.113.7 for a day"), from the anomaly detector's scan findings when you let it, or
+from **CrowdSec**. Orbis does not parse server logs or share intelligence; CrowdSec does both,
+on the machines that serve the internet. Point Orbis at that engine's Local API with a key
+from `cscli bouncers add orbis` and it acts as the bouncer: bans arrive within one poll,
+are enforced at the gateway with country and operator shown, and are lifted when CrowdSec
+lifts them.
+
 ## Modes and placement
 
 **Observe** (the default) watches whatever traffic reaches it and records what it would have done.
@@ -339,7 +366,7 @@ own traffic and broadcast noise; the onboarding wizard measures this and tells y
                       | netlink        | smart capture    | tailscale    |
                       +-------+--------+------------------+--------------+
                               |
-     topology . intercept . alerts . report . notify . usage . issues . ai + mcp
+  topology . intercept . alerts . report . notify . usage . issues . threat . ai + mcp
                               |
                          SQLite (WAL)
 ```

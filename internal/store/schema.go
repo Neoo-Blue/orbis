@@ -415,4 +415,53 @@ var migrations = []string{
 		note    TEXT NOT NULL,
 		source  TEXT NOT NULL DEFAULT 'operator'
 	)`,
+	// IP threat intelligence: feed metadata, the parsed entries (so a restart
+	// without network still enforces), timed ban decisions, and every
+	// connection that touched a listed address.
+	`CREATE TABLE IF NOT EXISTS threat_feeds (
+		name       TEXT PRIMARY KEY,
+		url        TEXT NOT NULL,
+		category   TEXT NOT NULL DEFAULT '',
+		enabled    INTEGER NOT NULL DEFAULT 1,
+		entries    INTEGER NOT NULL DEFAULT 0,
+		skipped    INTEGER NOT NULL DEFAULT 0,
+		fetched_at INTEGER,
+		last_error TEXT NOT NULL DEFAULT '',
+		etag       TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE TABLE IF NOT EXISTS threat_entries (
+		feed   TEXT NOT NULL,
+		prefix TEXT NOT NULL,
+		PRIMARY KEY (feed, prefix)
+	)`,
+	`CREATE TABLE IF NOT EXISTS threat_decisions (
+		id          TEXT PRIMARY KEY,
+		value       TEXT NOT NULL,
+		source      TEXT NOT NULL,
+		reason      TEXT NOT NULL DEFAULT '',
+		origin      TEXT NOT NULL DEFAULT '',
+		external_id INTEGER NOT NULL DEFAULT 0,
+		actor       TEXT NOT NULL DEFAULT '',
+		created     INTEGER NOT NULL,
+		until       INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_threat_decisions_value ON threat_decisions(value)`,
+	`CREATE TABLE IF NOT EXISTS threat_hits (
+		id        INTEGER PRIMARY KEY AUTOINCREMENT,
+		ts        INTEGER NOT NULL,
+		client_id TEXT NOT NULL DEFAULT '',
+		local_ip  TEXT NOT NULL DEFAULT '',
+		remote_ip TEXT NOT NULL,
+		prefix    TEXT NOT NULL DEFAULT '',
+		source    TEXT NOT NULL,
+		reason    TEXT NOT NULL DEFAULT '',
+		direction TEXT NOT NULL,
+		port      INTEGER NOT NULL DEFAULT 0,
+		proto     TEXT NOT NULL DEFAULT '',
+		enforced  INTEGER NOT NULL DEFAULT 0,
+		flow_id   TEXT NOT NULL DEFAULT '',
+		country   TEXT NOT NULL DEFAULT '',
+		as_org    TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_threat_hits_ts ON threat_hits(ts)`,
 }

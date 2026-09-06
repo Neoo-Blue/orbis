@@ -30,6 +30,8 @@ const TERMS: Array<{ term: string; plain: string }> = [
   { term: 'Policy / profile', plain: 'Per-device filtering: switched-off apps, safe search, schedule, exceptions, or no filtering at all.' },
   { term: 'Anomaly', plain: 'Behaviour the detectors flag: a device calling home on a schedule, a large upload, a scan, suspicious lookups. Most have a mundane cause.' },
   { term: 'Brief', plain: 'The assistant’s periodic note on what happened and whether anything needs you.' },
+  { term: 'Threat feed', plain: 'A published list of internet addresses known to be bad: hijacked networks, botnet control servers, machines seen attacking. Orbis drops connections to and from them where it is in the path, and records them everywhere.' },
+  { term: 'CrowdSec', plain: 'An open-source intrusion detection system that reads server logs and shares attacker addresses. Orbis can act as its bouncer: it pulls the ban list and enforces it at the gateway.' },
 ]
 
 export function GlossaryButton() {

@@ -635,6 +635,74 @@ export interface AppConfig {
     }
   }
   geoip: { city_db: string; asn_db: string }
+  threat: {
+    enabled: boolean; feeds: ThreatFeedConfig[]; update_interval_hours: number
+    block_outbound: boolean; block_inbound: boolean; allow: string[]; auto_ban_scanners: boolean
+    crowdsec: { enabled: boolean; url: string; api_key: string; poll_seconds: number }
+  }
+}
+
+// ---- threat intelligence ----
+
+export interface ThreatFeedConfig { name: string; url: string; enabled: boolean; category: string }
+
+export interface ThreatFeed extends ThreatFeedConfig {
+  entries: number
+  skipped: number
+  fetched_at?: string
+  last_error?: string
+}
+
+export interface ThreatDecision {
+  id: string
+  value: string
+  source: string
+  reason?: string
+  origin?: string
+  external_id?: number
+  actor?: string
+  created: string
+  until?: string
+}
+
+export interface ThreatHit {
+  id: number
+  ts: string
+  client_id?: string
+  local_ip?: string
+  remote_ip: string
+  prefix?: string
+  source: string
+  reason?: string
+  direction: 'in' | 'out'
+  port?: number
+  proto?: string
+  enforced: boolean
+  flow_id?: string
+  country?: string
+  as_org?: string
+}
+
+export interface ThreatStatus {
+  enabled: boolean
+  block_outbound: boolean
+  block_inbound: boolean
+  entries: number
+  excluded_by_allow: number
+  decisions: number
+  decisions_by_source: Record<string, number>
+  hits_24h: number
+  dropped_24h: number
+  hits_since_start: number
+  auto_ban_scanners: boolean
+  update_interval_hours: number
+  allow: string[]
+  last_build?: string
+  crowdsec: {
+    enabled: boolean; url: string; configured: boolean; poll_seconds: number
+    decisions: number; ignored: number; last_error: string; last_pull?: string
+  }
+  enforcement: { mode: string; inline: boolean; nft_available: boolean; intercepted_clients: number; detect_only: boolean }
 }
 
 // ---- YouTube (Lounge engine) ----

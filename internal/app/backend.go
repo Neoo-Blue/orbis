@@ -97,6 +97,9 @@ func (a *App) LookupIP(ip string) (map[string]any, error) {
 		out["network"] = loc.ASOrg
 		out["anycast"] = loc.Anycast
 		out["accuracy"] = loc.Accuracy
+		if a.Threat != nil {
+			out["threat"] = a.Threat.Describe(addr)
+		}
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Second)
 	defer cancel()
@@ -614,6 +617,15 @@ func (a *App) Health() map[string]any {
 	if !cfg.AdBlock.Enabled {
 		add("attention", "Ad and tracker blocking is switched off.")
 	}
+	if a.Threat != nil && cfg.Threat.Enabled {
+		if total, dropped := a.Threat.HitCount(time.Now().Add(-24 * time.Hour)); total > 0 {
+			if dropped == total {
+				add("attention", fmt.Sprintf("%d connection%s to known-bad addresses were blocked in the last day. Check which device in Threats.", total, pluralS(total)))
+			} else {
+				add("problem", fmt.Sprintf("%d connection%s to known-bad addresses in the last day, %d not blocked because this node is not in that device's path. Check Threats.", total, pluralS(total), total-dropped))
+			}
+		}
+	}
 	if events, err := a.Store.Events(time.Now().Add(-24*time.Hour), store.SevWarning, true, 20); err == nil && len(events) > 0 {
 		n := len(events)
 		word := "warnings"
@@ -980,6 +992,11 @@ func (a *App) SyncIntercept() error {
 		}
 	}
 
+	threatCfg := a.Cfg.Snapshot().Threat
+	var threat4 []string
+	if a.Threat != nil {
+		threat4, _ = a.Threat.Elements()
+	}
 	return a.Intercept.Apply(a.ctx, intercept.Config{
 		Enabled:      cfg.Enabled,
 		LANInterface: lan,
@@ -992,6 +1009,9 @@ func (a *App) SyncIntercept() error {
 		HTTPSPort:    portOfAddr(mitmCfg.ListenTLS),
 		HTTPScoped:   scoped,
 		HTTPClients:  webClients,
+		Threat4:      threat4,
+		ThreatOut:    threatCfg.Enabled && threatCfg.BlockOutbound,
+		ThreatIn:     threatCfg.Enabled && threatCfg.BlockInbound,
 	})
 }
 
@@ -1235,4 +1255,83 @@ func (a *App) maybeSendReport(now time.Time) {
 	rep := a.BuildReport(window, now.Add(-time.Duration(hours)*time.Hour))
 	a.Notifier.SendReport("Orbis "+window+" report", rep.TextSummary())
 	a.log("report: sent %s summary", window)
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// ThreatStatus is the assistant's view: summary, enforcement, feeds, bans
+// and recent hits in one call.
+func (a *App) ThreatStatus(since time.Time, limit int) (map[string]any, error) {
+	if a.Threat == nil {
+		return map[string]any{"enabled": false}, nil
+	}
+	out := a.Threat.Status()
+	out["enforcement"] = a.ThreatEnforcement()
+	out["feeds"] = a.Threat.Feeds()
+	out["bans"] = a.Threat.Decisions()
+	hits, err := a.Threat.Hits(since, limit)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]string{}
+	for _, c := range a.Registry.All() {
+		n := c.Label
+		if n == "" {
+			n = c.Hostname
+		}
+		if n == "" {
+			n = c.IP
+		}
+		names[c.ID] = n
+	}
+	rows := make([]map[string]any, 0, len(hits))
+	for _, h := range hits {
+		rows = append(rows, map[string]any{
+			"ts": h.TS, "device": names[h.ClientID], "local_ip": h.LocalIP, "remote_ip": h.RemoteIP,
+			"prefix": h.Prefix, "source": h.Source, "reason": h.Reason, "direction": h.Direction,
+			"port": h.Port, "proto": h.Proto, "dropped": h.Enforced, "country": h.Country, "network": h.ASOrg,
+		})
+	}
+	out["hits"] = rows
+	return out, nil
+}
+
+// BanAddress records a timed ban from the assistant (or the API on its behalf).
+func (a *App) BanAddress(value string, hours int, reason, actor string) (*store.ThreatDecision, error) {
+	if a.Threat == nil {
+		return nil, fmt.Errorf("threat intelligence is not available")
+	}
+	var d time.Duration
+	if hours > 0 {
+		d = time.Duration(hours) * time.Hour
+	}
+	source := "manual"
+	if strings.Contains(actor, "assistant") {
+		source = "assistant"
+	}
+	dec, err := a.Threat.Ban(value, d, reason, source, actor)
+	if err != nil {
+		a.Store.Audit(actor, "threat.ban", value, "", "", "error: "+err.Error())
+		return nil, err
+	}
+	a.Store.Audit(actor, "threat.ban", dec.Value, "", reason, "ok")
+	return dec, nil
+}
+
+// UnbanAddress lifts bans by id or value.
+func (a *App) UnbanAddress(value, actor string) (int, error) {
+	if a.Threat == nil {
+		return 0, fmt.Errorf("threat intelligence is not available")
+	}
+	n, err := a.Threat.Unban(value)
+	if err != nil {
+		return 0, err
+	}
+	a.Store.Audit(actor, "threat.unban", value, "", "", "ok")
+	return n, nil
 }

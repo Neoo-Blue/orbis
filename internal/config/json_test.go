@@ -26,7 +26,7 @@ func TestJSONShapeMatchesYAML(t *testing.T) {
 
 	for _, key := range []string{
 		"mode", "node", "api", "store", "capture", "dns",
-		"adblock", "mitm", "firewall", "dhcp", "vpn", "tailscale", "ai", "geoip", "issues",
+		"adblock", "mitm", "firewall", "dhcp", "vpn", "tailscale", "ai", "geoip", "issues", "threat",
 	} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("top-level key %q is missing from the JSON encoding", key)
@@ -43,6 +43,7 @@ func TestJSONShapeMatchesYAML(t *testing.T) {
 		"tailscale": {"enabled", "hostname", "advertise_exit_node", "exit_node", "exit_node_allow_lan", "steer_clients", "advertise_routes", "accept_routes", "accept_dns", "ssh"},
 		"ai":        {"enabled", "provider", "base_url", "model", "fast_model", "max_tokens", "allow_write", "anomaly", "prefer_free", "auto_discover", "model_chain", "fast_model_chain", "probe_interval_hours", "free_daily_budget", "brief", "review"},
 		"capture":   {"enabled", "interfaces", "snaplen", "conntrack"},
+		"threat":    {"enabled", "feeds", "update_interval_hours", "block_outbound", "block_inbound", "allow", "auto_ban_scanners", "crowdsec"},
 		"store":     {"path", "flow_retention_days", "event_retention_days"},
 		"geoip":     {"city_db", "asn_db"},
 		"issues":    {"enabled", "auto_capture", "redact_extra", "github"},

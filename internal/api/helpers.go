@@ -330,6 +330,29 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 			c.Issues.GitHub.Token = v
 			return true
 		}
+	case "threat.enabled":
+		return setBool(&c.Threat.Enabled, raw)
+	case "threat.block_outbound":
+		return setBool(&c.Threat.BlockOutbound, raw)
+	case "threat.block_inbound":
+		return setBool(&c.Threat.BlockInbound, raw)
+	case "threat.update_interval_hours":
+		return setInt(&c.Threat.UpdateIntervalHours, raw)
+	case "threat.allow":
+		return setStrSlice(&c.Threat.Allow, raw)
+	case "threat.auto_ban_scanners":
+		return setBool(&c.Threat.AutoBanScanners, raw)
+	case "threat.crowdsec.enabled":
+		return setBool(&c.Threat.CrowdSec.Enabled, raw)
+	case "threat.crowdsec.url":
+		return setStr(&c.Threat.CrowdSec.URL, raw)
+	case "threat.crowdsec.api_key":
+		if v, ok := raw.(string); ok && v != config.MaskedSecret {
+			c.Threat.CrowdSec.APIKey = v
+			return true
+		}
+	case "threat.crowdsec.poll_seconds":
+		return setInt(&c.Threat.CrowdSec.PollSeconds, raw)
 	case "issues.github.relay_url":
 		return setStr(&c.Issues.GitHub.RelayURL, raw)
 	case "issues.github.auto_report":

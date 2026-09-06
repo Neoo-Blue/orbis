@@ -62,6 +62,11 @@ type Backend interface {
 	// is enabled.
 	ReportIssue(ctx context.Context, title, detail, actor string) (*store.Issue, error)
 
+	// Threat intelligence: listed addresses, bans and the hits against them.
+	ThreatStatus(since time.Time, limit int) (map[string]any, error)
+	BanAddress(value string, hours int, reason, actor string) (*store.ThreatDecision, error)
+	UnbanAddress(value, actor string) (int, error)
+
 	// Mutating operations.
 	AddRule(r *store.Rule) error
 	DeleteRule(id string) error
@@ -306,6 +311,18 @@ func Tools(allowWrite bool) []ToolDef {
 				"id": strProp("The note id"),
 			}, []string{"id"}),
 		},
+		{
+			Name: "threat_status",
+			Description: "IP threat intelligence: which address feeds are loaded (hijacked netblocks, " +
+				"botnet command servers, known attackers), the active bans and where each came from " +
+				"(manual, assistant, the scan detector, CrowdSec), whether drops are enforced or only " +
+				"recorded on this node, and recent hits: devices that reached, or were reached from, a " +
+				"listed address. Use for \"is anything on my network talking to a known-bad address\".",
+			Schema: objSchema(map[string]any{
+				"hours": numProp("Window for hits (default 24, max 720)"),
+				"limit": numProp("Max hits to return (default 50)"),
+			}, nil),
+		},
 
 		// ---- mutating ----
 		{
@@ -327,6 +344,26 @@ func Tools(allowWrite bool) []ToolDef {
 			Description: "Remove a shortcut by name.",
 			Mutating:    true,
 			Schema:      objSchema(map[string]any{"name": strProp("The shortcut name")}, []string{"name"}),
+		},
+		{
+			Name: "ban_address",
+			Description: "Ban an internet address or range for a number of hours (0 = permanent). " +
+				"Connections to and from it are dropped at the gateway where this node enforces, and " +
+				"recorded everywhere. Local and reserved addresses are refused: to cut a device off, " +
+				"use set_client_blocked.",
+			Mutating: true,
+			Schema: objSchema(map[string]any{
+				"value":  strProp("An IP address or a CIDR range"),
+				"hours":  numProp("How long, in hours (default 24; 0 = permanent)"),
+				"reason": strProp("Why, in a few words"),
+			}, []string{"value"}),
+		},
+		{
+			Name: "unban_address",
+			Description: "Lift a ban by its id (from threat_status) or by the address. Bans that came " +
+				"from a CrowdSec engine are lifted there, not here.",
+			Mutating: true,
+			Schema:   objSchema(map[string]any{"value": strProp("Ban id or the address")}, []string{"value"}),
 		},
 		{
 			Name: "decide_recommendation",
@@ -491,6 +528,7 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"flush_dns_cache": true, "refresh_blocklists": true,
 		"decide_recommendation": true, "report_problem": true,
 		"add_shortcut": true, "remove_shortcut": true,
+		"ban_address": true, "unban_address": true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -698,6 +736,30 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 
 	case "list_shortcuts":
 		return jsonOf(map[string]any{"shortcuts": b.Shortcuts()}, nil)
+
+	case "threat_status":
+		return jsonOf(b.ThreatStatus(hoursAgo(args, "hours", 24, 720), intArg(args, "limit", 50, 500)))
+
+	case "ban_address":
+		hours := 24
+		if v, ok := args["hours"].(float64); ok {
+			hours = int(v)
+		}
+		dec, err := b.BanAddress(strArg(args, "value"), hours, strArg(args, "reason"), actor)
+		if err != nil {
+			return "", err
+		}
+		if dec.Until == nil {
+			return fmt.Sprintf("Banned %s permanently.", dec.Value), nil
+		}
+		return fmt.Sprintf("Banned %s until %s.", dec.Value, dec.Until.Format(time.RFC1123)), nil
+
+	case "unban_address":
+		n, err := b.UnbanAddress(strArg(args, "value"), actor)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Lifted %d ban(s).", n), nil
 
 	case "add_shortcut":
 		sc, err := b.SaveShortcut(config.DNSShortcut{

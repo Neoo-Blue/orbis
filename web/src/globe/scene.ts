@@ -34,7 +34,27 @@ export interface ArcSpec {
    *  the only way to tell an ordinary web request from an unsolicited inbound
    *  connection at a glance. */
   direction: 'in' | 'out' | 'local'
+  /** Bytes each way. Both crest trains are drawn from these, so a download
+   *  and an upload on the same connection are both visible. */
+  bytesIn: number
+  bytesOut: number
   meta: Record<string, unknown>
+}
+
+/**
+ * flowWeights turns the byte split of a connection into the brightness of
+ * its two crest trains. Traffic on a connection goes both ways, so both are
+ * drawn: the heavier direction brighter, the lighter one still visible. A
+ * connection that has moved nothing yet shows the direction it was opened in.
+ */
+export function flowWeights(bytesIn: number, bytesOut: number, direction: string): { out: number; in: number } {
+  const total = bytesIn + bytesOut
+  if (total <= 0) return direction === 'in' ? { out: 0.15, in: 0.7 } : { out: 0.7, in: 0.15 }
+  const share = bytesOut / total
+  return {
+    out: bytesOut > 0 ? 0.25 + 0.75 * share : 0,
+    in: bytesIn > 0 ? 0.25 + 0.75 * (1 - share) : 0,
+  }
 }
 
 /** CountryShape is one ring of one country, as generated from Natural Earth
@@ -136,19 +156,23 @@ function arcCurve(start: THREE.Vector3, end: THREE.Vector3): THREE.QuadraticBezi
  * connection visibly runs the other way.
  */
 function arcFlowMaterial(spec: ArcSpec, weight: number): THREE.ShaderMaterial {
-  const inbound = spec.direction === 'in'
+  const w = flowWeights(spec.bytesIn, spec.bytesOut, spec.direction)
   return new THREE.ShaderMaterial({
     transparent: true,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     uniforms: {
       uBase: { value: arcColor(spec) },
-      uCrest: { value: inbound ? COLORS.flowIn : COLORS.flowOut },
+      // Two crest trains run on every arc: cool ones carry bytes leaving the
+      // network (home to remote), warm ones carry bytes arriving. Their
+      // brightness follows the byte split, so a download and an upload on
+      // the same connection are both visible and tell apart.
+      uCrestOut: { value: COLORS.flowOut },
+      uCrestIn: { value: COLORS.flowIn },
+      uOutW: { value: w.out },
+      uInW: { value: w.in },
       uTime: { value: 0 },
-      // Speed is a magnitude; direction is carried by uForward so the shader
-      // can put the tail on the correct side of the crest.
       uSpeed: { value: 0.22 + Math.min(0.34, spec.bytes / 6_000_000) },
-      uForward: { value: inbound ? -1 : 1 },
       uPhase: { value: hashPhase(spec.id) },
       uOpacity: { value: 0.2 + weight * 0.5 },
       // Several pulses per arc rather than one. A single crest spends most of
@@ -168,40 +192,43 @@ function arcFlowMaterial(spec: ArcSpec, weight: number): THREE.ShaderMaterial {
       }`,
     fragmentShader: `
       uniform vec3 uBase;
-      uniform vec3 uCrest;
+      uniform vec3 uCrestOut;
+      uniform vec3 uCrestIn;
+      uniform float uOutW;
+      uniform float uInW;
       uniform float uTime;
       uniform float uSpeed;
-      uniform float uForward;
       uniform float uPhase;
       uniform float uOpacity;
       uniform float uRepeat;
       uniform float uActive;
       varying float vProgress;
 
+      // Comet profile: a sharp crest with a tail fading over most of the gap
+      // between pulses. Cubed so the leading edge stays crisp at any speed.
+      float comet(float behind) {
+        return pow(1.0 - clamp(behind / 0.55, 0.0, 1.0), 3.0);
+      }
+
       void main() {
-        // A repeating sawtooth along the arc. Crests sit where fract(phase)
-        // is 0; subtracting time moves them toward +progress, and uForward
-        // flips that for an inbound connection.
-        float phase = vProgress * uRepeat - uForward * uTime * uSpeed + uPhase;
-        float f = fract(phase);
-
-        // Distance BEHIND the crest, measured against the direction of travel.
-        // This is the part that makes direction readable: the tail has to trail
-        // the crest, so which side of it is "behind" depends on which way the
-        // crest is moving. Measuring it the same way for both directions makes
-        // inbound and outbound look identical, which is the bug this replaces.
-        float behind = uForward > 0.0 ? 1.0 - f : f;
-
-        // Comet profile: a sharp crest with a tail fading over most of the gap
-        // between pulses. Cubed so the leading edge stays crisp at any speed.
-        float tail = pow(1.0 - clamp(behind / 0.55, 0.0, 1.0), 3.0) * uActive;
+        // Two repeating sawtooths along the arc. Crests sit where fract() is
+        // 0. Subtracting time moves the outbound train toward the remote end;
+        // adding it moves the inbound train toward home. The tail always has
+        // to trail its crest, so "behind" is measured against each train's
+        // own direction of travel. The inbound train is offset by half a
+        // period so the two never sit on top of each other at the start.
+        float fOut = fract(vProgress * uRepeat - uTime * uSpeed + uPhase);
+        float tailOut = comet(1.0 - fOut) * uOutW * uActive;
+        float fIn = fract(vProgress * uRepeat + uTime * uSpeed + uPhase + 0.5);
+        float tailIn = comet(fIn) * uInW * uActive;
 
         // Taper the ends so an arc lifts off and lands rather than stopping
         // dead against the globe.
         float ends = smoothstep(0.0, 0.05, vProgress) * smoothstep(1.0, 0.95, vProgress);
 
-        vec3 col = mix(uBase, uCrest, tail * 0.9);
-        float alpha = uOpacity * (0.35 + tail * 1.5) * ends;
+        vec3 col = mix(uBase, uCrestOut, tailOut * 0.9);
+        col = mix(col, uCrestIn, tailIn * 0.9);
+        float alpha = uOpacity * (0.35 + (tailOut + tailIn) * 1.5) * ends;
         gl_FragColor = vec4(col, alpha);
       }`,
   })
@@ -517,18 +544,15 @@ export class GlobeScene {
       if (existing !== undefined) {
         // Update only what can change on a live flow.
         const entry = this.arcs[existing]
-        const wasInbound = entry.spec.direction === 'in'
         entry.spec = spec
         const mat = entry.line.material as THREE.ShaderMaterial
         mat.uniforms.uBase.value = arcColor(spec)
         mat.uniforms.uActive.value = spec.active ? 1 : 0
-        // A flow that reverses direction mid-life is rare but real (a peer
-        // dialling back). Flip the crest rather than leaving it running the
-        // wrong way until the flow expires.
-        if (wasInbound !== (spec.direction === 'in') && !this.reducedMotion) {
-          mat.uniforms.uForward.value = spec.direction === 'in' ? -1 : 1
-          mat.uniforms.uCrest.value = spec.direction === 'in' ? COLORS.flowIn : COLORS.flowOut
-        }
+        // Bytes keep moving on a live connection, and the split between the
+        // two directions is what the crest trains show, so follow it.
+        const w = flowWeights(spec.bytesIn, spec.bytesOut, spec.direction)
+        mat.uniforms.uOutW.value = w.out
+        mat.uniforms.uInW.value = w.in
         continue
       }
       this.addArc(spec, now)

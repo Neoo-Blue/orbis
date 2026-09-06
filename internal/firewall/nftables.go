@@ -44,6 +44,10 @@ type Engine struct {
 	tunnelApplied bool
 	tunnelCfg     TunnelConfig
 	tunnelErr     string
+
+	// threat supplies the listed-address elements the ruleset embeds, so a
+	// full apply and the incremental set sync always agree.
+	threat func() (v4, v6 []string)
 }
 
 func New(cfg *config.Config, st *store.Store, log func(string, ...any)) *Engine {
@@ -95,7 +99,7 @@ func (e *Engine) Render() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return renderRuleset(cfg, rules)
+	return renderRuleset(cfg, rules, e.extras())
 }
 
 // Apply writes and loads the ruleset. In observe mode it is a no-op with an
@@ -252,7 +256,13 @@ func (e *Engine) UnblockAddress(addr netip.Addr) error {
 
 // ---- rendering ----
 
-func renderRuleset(cfg config.Config, rules []store.Rule) (string, error) {
+// renderExtras carries runtime-derived data the ruleset embeds alongside the
+// configuration: the listed-address sets from the threat manager.
+type renderExtras struct {
+	ThreatV4, ThreatV6 []string
+}
+
+func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (string, error) {
 	var b strings.Builder
 	w := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
@@ -300,6 +310,20 @@ func renderRuleset(cfg config.Config, rules []store.Rule) (string, error) {
 	w("  set orbis_blocked_v6 { type ipv6_addr; flags interval, timeout; timeout 1h; }")
 	w("  set orbis_quarantine_v4 { type ipv4_addr; flags interval; }")
 	w("  set orbis_quarantine_v6 { type ipv6_addr; flags interval; }")
+	// Listed addresses from threat feeds and bans. auto-merge lets feeds that
+	// overlap each other load without an "interval overlaps" refusal.
+	w("  set orbis_threat_v4 {")
+	w("    type ipv4_addr")
+	w("    flags interval")
+	w("    auto-merge")
+	writeElements(w, extras.ThreatV4)
+	w("  }")
+	w("  set orbis_threat_v6 {")
+	w("    type ipv6_addr")
+	w("    flags interval")
+	w("    auto-merge")
+	writeElements(w, extras.ThreatV6)
+	w("  }")
 	w("")
 
 	if cfg.Firewall.FlowOffload {
@@ -322,6 +346,10 @@ func renderRuleset(cfg config.Config, rules []store.Rule) (string, error) {
 	w("    iif lo accept comment \"loopback\"")
 	w("    ct state established,related accept")
 	w("    ct state invalid drop comment \"malformed or out-of-window\"")
+	if cfg.Threat.Enabled && cfg.Threat.BlockInbound {
+		w("    ip saddr @orbis_threat_v4 counter drop comment \"threat: inbound from listed address\"")
+		w("    ip6 saddr @orbis_threat_v6 counter drop comment \"threat: inbound from listed address\"")
+	}
 	if cfg.Firewall.AntiLockout {
 		// Without this, one bad rule strands the operator outside their own
 		// firewall with no way back in except a console.
@@ -384,6 +412,16 @@ func renderRuleset(cfg config.Config, rules []store.Rule) (string, error) {
 			w("    iifname @zone_%s udp dport 443 counter reject comment \"force QUIC to TCP for filtering\"", sanitize(z.Name))
 		}
 	}
+	// Listed addresses are dropped before any user rule can allow them, in
+	// whichever directions the operator chose.
+	if cfg.Threat.Enabled && cfg.Threat.BlockOutbound {
+		w("    ip daddr @orbis_threat_v4 counter drop comment \"threat: outbound to listed address\"")
+		w("    ip6 daddr @orbis_threat_v6 counter drop comment \"threat: outbound to listed address\"")
+	}
+	if cfg.Threat.Enabled && cfg.Threat.BlockInbound {
+		w("    ip saddr @orbis_threat_v4 counter drop comment \"threat: inbound from listed address\"")
+		w("    ip6 saddr @orbis_threat_v6 counter drop comment \"threat: inbound from listed address\"")
+	}
 	// Runtime blocks take effect before any user rule can allow them.
 	w("    ip daddr @orbis_blocked_v4 counter reject with icmp type admin-prohibited comment \"orbis dynamic block\"")
 	w("    ip6 daddr @orbis_blocked_v6 counter reject with icmpv6 type admin-prohibited comment \"orbis dynamic block\"")
@@ -441,6 +479,10 @@ func renderRuleset(cfg config.Config, rules []store.Rule) (string, error) {
 
 	w("  chain output {")
 	w("    type filter hook output priority filter; policy accept;")
+	if cfg.Threat.Enabled && cfg.Threat.BlockOutbound {
+		w("    ip daddr @orbis_threat_v4 counter drop comment \"threat: node outbound to listed address\"")
+		w("    ip6 daddr @orbis_threat_v6 counter drop comment \"threat: node outbound to listed address\"")
+	}
 	for _, r := range filterRules(rules, "output") {
 		if line := renderRule(r, cfg); line != "" {
 			w("    %s", line)
@@ -519,6 +561,72 @@ func renderRuleset(cfg config.Config, rules []store.Rule) (string, error) {
 
 	w("}")
 	return b.String(), nil
+}
+
+// writeElements emits a set's elements in short lines; nft accepts one very
+// long line, people reading the rendered ruleset do not.
+func writeElements(w func(string, ...any), elems []string) {
+	if len(elems) == 0 {
+		return
+	}
+	w("    elements = {")
+	for i := 0; i < len(elems); i += 16 {
+		end := min(i+16, len(elems))
+		line := strings.Join(elems[i:end], ", ")
+		if end < len(elems) {
+			line += ","
+		}
+		w("      %s", line)
+	}
+	w("    }")
+}
+
+// SetThreatSource wires the threat manager's element lists into rendering.
+func (e *Engine) SetThreatSource(fn func() (v4, v6 []string)) {
+	e.mu.Lock()
+	e.threat = fn
+	e.mu.Unlock()
+}
+
+func (e *Engine) extras() renderExtras {
+	e.mu.Lock()
+	fn := e.threat
+	e.mu.Unlock()
+	if fn == nil {
+		return renderExtras{}
+	}
+	v4, v6 := fn()
+	return renderExtras{ThreatV4: v4, ThreatV6: v6}
+}
+
+// SyncThreatSets replaces the listed-address sets in the live ruleset in one
+// transaction, without re-applying everything else (which would reset every
+// counter). A ruleset that is not installed is left alone.
+func (e *Engine) SyncThreatSets(v4, v6 []string) error {
+	cfg := e.cfg.Snapshot()
+	if cfg.Mode != config.ModeInline || !cfg.Firewall.Enabled || !e.available {
+		return nil
+	}
+	e.mu.Lock()
+	applied := e.applied
+	e.mu.Unlock()
+	if !applied {
+		return nil
+	}
+	var b strings.Builder
+	for _, s := range []struct {
+		name  string
+		elems []string
+	}{{"orbis_threat_v4", v4}, {"orbis_threat_v6", v6}} {
+		fmt.Fprintf(&b, "flush set inet %s %s\n", tableName, s.name)
+		for i := 0; i < len(s.elems); i += 200 {
+			end := min(i+200, len(s.elems))
+			fmt.Fprintf(&b, "add element inet %s %s { %s }\n", tableName, s.name, strings.Join(s.elems[i:end], ", "))
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return e.run(ctx, b.String(), false)
 }
 
 func renderRule(r store.Rule, cfg config.Config) string {

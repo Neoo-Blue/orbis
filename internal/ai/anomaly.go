@@ -29,6 +29,10 @@ type Analyzer struct {
 	// raised keys off a finding's identity so the same beacon is not
 	// reported every ten minutes forever.
 	raised map[string]time.Time
+
+	// OnScan, when set, is told the source address of every scan finding so
+	// the threat manager can turn an outside scanner into a timed ban.
+	OnScan func(src string)
 }
 
 func NewAnalyzer(cfg *config.Config, client *Client, st *store.Store, log func(string, ...any)) *Analyzer {
@@ -357,6 +361,9 @@ func (a *Analyzer) detectPortScans(since time.Time) ([]Finding, error) {
 		kind := "host sweep"
 		if portSweep {
 			kind = "port sweep"
+		}
+		if a.OnScan != nil {
+			a.OnScan(src)
 		}
 		out = append(out, Finding{
 			Kind: "scanning", Severity: store.SevWarning,

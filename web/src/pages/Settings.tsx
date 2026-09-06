@@ -10,7 +10,7 @@ import { searchSettings } from '../settingsIndex'
 
 type Section =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
-  | 'dhcp' | 'vpn' | 'tailscale' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
+  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
 
 const SECTIONS: Array<{ id: Section; label: string; group: string; blurb: string }> = [
   { id: 'general', label: 'Node & mode', group: 'System', blurb: 'Name, timezone, and whether Orbis is inline' },
@@ -27,6 +27,7 @@ const SECTIONS: Array<{ id: Section; label: string; group: string; blurb: string
   { id: 'dhcp', label: 'DHCP', group: 'Network', blurb: 'Scopes, ranges and reservations' },
   { id: 'vpn', label: 'WireGuard', group: 'Network', blurb: 'Server address, port and public endpoint' },
   { id: 'tailscale', label: 'Tailscale', group: 'Network', blurb: 'Exit node, subnet routes, tailnet options' },
+  { id: 'threats', label: 'Threat intelligence', group: 'Network', blurb: 'Address feeds, bans, the CrowdSec bouncer' },
 
   { id: 'assistant', label: 'Assistant', group: 'Intelligence', blurb: 'Provider, model, write access, anomaly detection' },
   { id: 'problems', label: 'Problem reports', group: 'Intelligence', blurb: 'Record what goes wrong, scrub it, file it on GitHub' },
@@ -136,6 +137,7 @@ export function SettingsPage({ status, onAuthChange }: {
         {section === 'dhcp' && <DHCPSection {...props} />}
         {section === 'vpn' && <VPNSection {...props} />}
         {section === 'tailscale' && <TailscaleSection {...props} />}
+        {section === 'threats' && <ThreatsSection {...props} />}
         {section === 'assistant' && <AssistantSection {...props} />}
         {section === 'problems' && <ProblemsSection {...props} />}
         {section === 'about' && <AboutSection {...props} />}
@@ -1679,6 +1681,81 @@ function BriefNow({ toast }: { toast: SectionProps['toast'] }) {
         </div>
       )}
     </div>
+  )
+}
+
+function ThreatsSection({ config, save, toast }: SectionProps) {
+  const t = config.threat
+  const [key, setKey] = useState('')
+  const [testing, setTesting] = useState(false)
+  if (!t) return null
+  return (
+    <>
+      <Card title="Known-bad addresses">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            DNS blocking stops a name from resolving. This stops a connection to or from an address, which is
+            what catches a device that never asked the resolver: hijacked networks, live botnet command servers
+            and addresses seen attacking, from published security feeds. Drops happen where this node is in the
+            path (inline, or a device it intercepts); everywhere else a hit is recorded and shown in Events.
+            Feeds, bans and hits are managed on the <a href="#/threats">Threats page</a>.
+          </div>
+          <SwitchRow label="Block known-bad addresses" checked={t.enabled}
+            onChange={(v) => save({ 'threat.enabled': v })} />
+          <SwitchRow label="Outbound: devices reaching a listed address" checked={t.block_outbound}
+            hint="A device on your network connecting to a listed address. This is the direction that finds a compromised device."
+            onChange={(v) => save({ 'threat.block_outbound': v })} />
+          <SwitchRow label="Inbound: listed addresses reaching in" checked={t.block_inbound}
+            hint="Scanners and brute-force sources hitting a forwarded port or this node. Behind a router with no port forwards this rarely fires."
+            onChange={(v) => save({ 'threat.block_inbound': v })} />
+          <SwitchRow label="Ban outside scanners automatically" checked={t.auto_ban_scanners}
+            hint="When the anomaly detector sees a port or host sweep from an internet address, ban it for an hour."
+            onChange={(v) => save({ 'threat.auto_ban_scanners': v })} />
+          <NumberSetting label="Refresh feeds every" value={t.update_interval_hours} min={1} max={168} suffix="hours"
+            onSave={(v) => save({ 'threat.update_interval_hours': v })} />
+          <ListSetting label="Never block these addresses" value={t.allow}
+            hint="One address or range per line. Your own servers, a VPN endpoint, a provider that ended up on a list by accident. A listed range that overlaps one of these is left out entirely."
+            placeholder={'203.0.113.7\n198.51.100.0/24'}
+            onSave={(v) => save({ 'threat.allow': v })} />
+        </div>
+      </Card>
+
+      <Card title="CrowdSec bouncer">
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ lineHeight: 1.7 }}>
+            If a CrowdSec engine runs on one of your servers, this node can enforce its decisions at the gateway.
+            On the machine running CrowdSec, run <code>cscli bouncers add orbis</code> and paste the key here.
+            Bans arrive within one poll and are lifted when CrowdSec lifts them.
+          </div>
+          <SwitchRow label="Act as a CrowdSec bouncer" checked={t.crowdsec.enabled}
+            onChange={(v) => save({ 'threat.crowdsec.enabled': v })} />
+          <TextSetting label="Local API URL" value={t.crowdsec.url} mono placeholder="http://192.168.1.20:8080"
+            onSave={(v) => save({ 'threat.crowdsec.url': v })} />
+          <Field label="Bouncer API key" hint="Stored in the config file with 0600 permissions and never returned by the API.">
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <input className="input mono" type="password" value={key} style={{ flex: 1, minWidth: 180 }}
+                placeholder={t.crowdsec.api_key ? '•••••••• (set)' : 'paste the key from cscli'}
+                onChange={(e) => setKey(e.target.value)} />
+              <button className="btn" disabled={!key} onClick={async () => {
+                if (await save({ 'threat.crowdsec.api_key': key })) { setKey(''); toast('Key saved', 'ok') }
+              }}>Save</button>
+              <button className="btn" disabled={testing} onClick={async () => {
+                setTesting(true)
+                try {
+                  const r = await api.threat.testCrowdSec({ url: t.crowdsec.url, api_key: key })
+                  toast(`Connected: ${r.bans} active ban${r.bans === 1 ? '' : 's'} on the engine`, 'ok')
+                } catch (e) {
+                  toast(e instanceof Error ? e.message : 'Could not reach the Local API', 'err')
+                } finally { setTesting(false) }
+              }}>Test</button>
+              {t.crowdsec.api_key && <button className="btn" onClick={() => save({ 'threat.crowdsec.api_key': '' })}>Clear</button>}
+            </div>
+          </Field>
+          <NumberSetting label="Poll every" value={t.crowdsec.poll_seconds} min={10} max={600} suffix="seconds"
+            onSave={(v) => save({ 'threat.crowdsec.poll_seconds': v })} />
+        </div>
+      </Card>
+    </>
   )
 }
 

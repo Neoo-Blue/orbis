@@ -107,6 +107,14 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		m.counter("orbis_adblock_misses_total", "Lookups that matched nothing.", float64(misses))
 	}
 
+	// Threat intelligence.
+	if app.Threat != nil {
+		entries, decisions := app.Threat.Counts()
+		m.gauge("orbis_threat_entries", "Listed addresses and ranges in the threat table.", float64(entries))
+		m.gauge("orbis_threat_decisions", "Active ban decisions (manual, assistant, scan, crowdsec).", float64(decisions))
+		m.counter("orbis_threat_hits_total", "Connections that touched a listed address since start.", float64(app.Threat.HitsSinceStart()))
+	}
+
 	// Flows.
 	if app.Tracker != nil {
 		t := app.Tracker.Stats()

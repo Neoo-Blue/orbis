@@ -41,6 +41,9 @@ func (e *Engine) Running() bool               { return false }
 func (e *Engine) StatsSnapshot() Stats        { return Stats{} }
 
 type ForwardConfig struct {
+	Threat4      []string
+	ThreatOut    bool
+	ThreatIn     bool
 	LANInterface string
 	Clients      []netip.Addr
 	RedirectDNS  bool
@@ -54,5 +57,6 @@ type ForwardConfig struct {
 
 func ApplyForwarding(context.Context, ForwardConfig) error { return nil }
 func RemoveForwarding(context.Context) error               { return nil }
+func SyncThreat(context.Context, []string) error           { return nil }
 func EnableForwardingSysctl() (bool, error)                { return false, nil }
 func writeForwarding(bool) error                           { return nil }

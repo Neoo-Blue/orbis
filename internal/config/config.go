@@ -50,6 +50,7 @@ type Config struct {
 	Tailscale TailscaleConfig `yaml:"tailscale" json:"tailscale"`
 	AI        AIConfig        `yaml:"ai" json:"ai"`
 	Issues    IssuesConfig    `yaml:"issues" json:"issues"`
+	Threat    ThreatConfig    `yaml:"threat" json:"threat"`
 	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
 	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
 
@@ -147,9 +148,9 @@ type NodeConfig struct {
 	// UIMode is the default interface for new browsers: "simple" shows the
 	// plain-language surface (protection, devices, usage, assistant),
 	// "advanced" shows every page and setting. Each browser can override it.
-	UIMode string `yaml:"ui_mode" json:"ui_mode"`
-	DataDir       string `yaml:"data_dir" json:"data_dir"`
-	Timezone      string `yaml:"timezone" json:"timezone"`
+	UIMode   string `yaml:"ui_mode" json:"ui_mode"`
+	DataDir  string `yaml:"data_dir" json:"data_dir"`
+	Timezone string `yaml:"timezone" json:"timezone"`
 	// Latitude/Longitude pin this node on the globe. When both are zero the
 	// node discovers its own public address and geolocates it locally.
 	Latitude  float64 `yaml:"latitude" json:"latitude"`
@@ -499,6 +500,52 @@ type FirewallConfig struct {
 	// AntiLockout keeps a permanent accept for the management address so a
 	// bad ruleset cannot orphan the box.
 	AntiLockout bool `yaml:"anti_lockout" json:"anti_lockout"`
+}
+
+// ThreatConfig is IP-level threat intelligence: address feeds, timed ban
+// decisions and an optional CrowdSec bouncer. Where a DNS blocklist stops a
+// name from resolving, these stop a connection to or from an address, which
+// is what catches a device that never asked the resolver.
+type ThreatConfig struct {
+	Enabled bool         `yaml:"enabled" json:"enabled"`
+	Feeds   []ThreatFeed `yaml:"feeds" json:"feeds"`
+	// UpdateIntervalHours is how often each feed is fetched again.
+	UpdateIntervalHours int `yaml:"update_interval_hours" json:"update_interval_hours"`
+	// BlockOutbound drops connections from the network to listed addresses
+	// (a device beaconing to a command server). BlockInbound drops
+	// connections from listed addresses into the network (scanners, brute
+	// force against a forwarded port).
+	BlockOutbound bool `yaml:"block_outbound" json:"block_outbound"`
+	BlockInbound  bool `yaml:"block_inbound" json:"block_inbound"`
+	// Allow lists addresses and prefixes that are never blocked whatever a
+	// feed says: your own servers, a VPN endpoint, a provider that landed on
+	// a list by accident. A listed range that overlaps an allowed one is
+	// dropped from the set entirely.
+	Allow []string `yaml:"allow" json:"allow"`
+	// AutoBanScanners turns the anomaly detector's port-scan findings from
+	// outside the network into one-hour bans.
+	AutoBanScanners bool           `yaml:"auto_ban_scanners" json:"auto_ban_scanners"`
+	CrowdSec        CrowdSecConfig `yaml:"crowdsec" json:"crowdsec"`
+}
+
+// ThreatFeed is one address list: plain IPs, CIDRs, or either with comments
+// after # or ;, one per line.
+type ThreatFeed struct {
+	Name    string `yaml:"name" json:"name"`
+	URL     string `yaml:"url" json:"url"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	// Category is a short label for the UI: c2, attackers, compromised, spam.
+	Category string `yaml:"category" json:"category"`
+}
+
+// CrowdSecConfig makes this node a CrowdSec bouncer: it pulls the decision
+// stream from a Local API and enforces bans at the gateway. The key comes
+// from `cscli bouncers add orbis` on the machine running the engine.
+type CrowdSecConfig struct {
+	Enabled     bool   `yaml:"enabled" json:"enabled"`
+	URL         string `yaml:"url" json:"url"`
+	APIKey      string `yaml:"api_key" json:"api_key"`
+	PollSeconds int    `yaml:"poll_seconds" json:"poll_seconds"`
 }
 
 type DHCPConfig struct {
@@ -969,6 +1016,14 @@ func Default() *Config {
 			ExitNodeAllowLAN: true,
 			RouteTable:       52,
 		},
+		Threat: ThreatConfig{
+			Enabled:             true,
+			Feeds:               DefaultThreatFeeds(),
+			UpdateIntervalHours: 6,
+			BlockOutbound:       true,
+			BlockInbound:        true,
+			CrowdSec:            CrowdSecConfig{PollSeconds: 30},
+		},
 		Issues: IssuesConfig{
 			Enabled:     true,
 			AutoCapture: true,
@@ -1016,6 +1071,25 @@ func Default() *Config {
 
 // DefaultLists is the out-of-the-box subscription set. Every entry is a
 // widely mirrored, permissively licensed list.
+// DefaultThreatFeeds are small, well-maintained address lists that are safe
+// to drop in both directions: hijacked and criminal netblocks, live botnet
+// command servers, and addresses seen attacking. The larger aggregates are
+// present but off, since a few thousand more entries on a small board is a
+// choice the operator should make.
+func DefaultThreatFeeds() []ThreatFeed {
+	return []ThreatFeed{
+		{Name: "Spamhaus DROP", URL: "https://www.spamhaus.org/drop/drop.txt", Enabled: true, Category: "hijacked"},
+		{Name: "Spamhaus DROP v6", URL: "https://www.spamhaus.org/drop/dropv6.txt", Enabled: true, Category: "hijacked"},
+		{Name: "Feodo Tracker C2", URL: "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt", Enabled: true, Category: "c2"},
+		{Name: "Binary Defense banlist", URL: "https://www.binarydefense.com/banlist.txt", Enabled: true, Category: "attackers"},
+		{Name: "Emerging Threats compromised", URL: "https://rules.emergingthreats.net/blockrules/compromised-ips.txt", Enabled: true, Category: "compromised"},
+		{Name: "Firehol level 1", URL: "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset", Enabled: false, Category: "attackers"},
+		{Name: "CINS Army", URL: "https://cinsscore.com/list/ci-badguys.txt", Enabled: false, Category: "attackers"},
+		{Name: "GreenSnow", URL: "https://blocklist.greensnow.co/greensnow.txt", Enabled: false, Category: "attackers"},
+		{Name: "blocklist.de (all)", URL: "https://lists.blocklist.de/lists/all.txt", Enabled: false, Category: "attackers"},
+	}
+}
+
 func DefaultLists() []BlockList {
 	return []BlockList{
 		{Name: "StevenBlack unified", URL: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", Enabled: true, Category: "ads"},
@@ -1280,6 +1354,9 @@ func (c *Config) Redacted() Config {
 	}
 	if cp.Issues.GitHub.Token != "" {
 		cp.Issues.GitHub.Token = mask
+	}
+	if cp.Threat.CrowdSec.APIKey != "" {
+		cp.Threat.CrowdSec.APIKey = mask
 	}
 	if cp.API.SessionKey != "" {
 		cp.API.SessionKey = mask

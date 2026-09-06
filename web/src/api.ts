@@ -9,6 +9,7 @@ import type {
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
   OnboardingState, PlacementCheck, TopoGraph, InterceptStatus, DNSRecord,
   AlertRule, ReportData, BuiltinList,
+  ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
 } from './types'
 
 export class ApiError extends Error {
@@ -329,6 +330,20 @@ export const api = {
     pauses: () => get<{ pauses: Record<string, string> }>('/pauses'),
   },
 
+  threat: {
+    status: () => get<ThreatStatus>('/threat/status'),
+    feeds: () => get<{ feeds: ThreatFeed[] }>('/threat/feeds'),
+    saveFeed: (feed: ThreatFeedConfig) => post<{ ok: boolean }>('/threat/feeds', feed),
+    deleteFeed: (name: string) => del<{ ok: boolean }>(`/threat/feeds/${encodeURIComponent(name)}`),
+    refresh: () => post<{ started: boolean }>('/threat/refresh'),
+    decisions: () => get<{ decisions: ThreatDecision[] }>('/threat/decisions'),
+    ban: (body: { value: string; hours: number; reason: string }) => post<{ decision: ThreatDecision }>('/threat/decisions', body),
+    unban: (id: string) => del<{ lifted: number }>(`/threat/decisions/${encodeURIComponent(id)}`),
+    hits: (hours = 24, limit = 200) =>
+      get<{ since: string; hits: ThreatHit[]; devices: Record<string, { id: string; name: string; ip: string }> }>(`/threat/hits${qs({ hours, limit })}`),
+    lookup: (ip: string) => get<{ ip: string; listed: boolean; prefix?: string; source?: string; reason?: string; country?: string; network?: string }>(`/threat/lookup${qs({ ip })}`),
+    testCrowdSec: (body: { url: string; api_key: string }) => post<{ ok: boolean; decisions: number; bans: number }>('/threat/crowdsec/test', body),
+  },
   services: {
     list: (hours = 24, client_id = '') => get<ServicesResponse>(`/services${qs({ hours, client_id })}`),
     detail: (service: string, hours = 24, client_id = '') =>

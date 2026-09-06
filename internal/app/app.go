@@ -33,6 +33,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/notify"
 	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"github.com/Neoo-Blue/orbis/internal/store"
+	"github.com/Neoo-Blue/orbis/internal/threat"
 	"github.com/Neoo-Blue/orbis/internal/topology"
 	"github.com/Neoo-Blue/orbis/internal/usage"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
@@ -79,6 +80,8 @@ type App struct {
 
 	// Issues is the problem recorder (and GitHub reporter).
 	Issues *issues.Recorder
+	// Threat is IP threat intelligence: feeds, bans, the CrowdSec bouncer.
+	Threat *threat.Manager
 	// Usage rolls the live flow table and the query log into per-device,
 	// per-service counters.
 	Usage *usage.Meter
@@ -186,6 +189,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		a.Bus.Publish(Event{Type: string(u.Kind), Data: u.Flow})
 		if u.Kind == flows.UpdateNew {
 			a.observeConsent(u.Flow)
+			if a.Threat != nil {
+				a.Threat.Observe(u.Flow)
+			}
 		}
 	})
 	a.Registry.SetOnNew(func(c *store.Client) {
@@ -210,6 +216,39 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	// Firewall + VPN.
 	a.Firewall = firewall.New(cfg, st, logf)
 	a.Tracker.SetEnforcer(a.Firewall)
+
+	// Threat intelligence sits between the flow tracker (which sees every
+	// new connection) and the two enforcement points (the firewall's sets
+	// when inline, the intercept table for pulled-in devices otherwise).
+	a.Threat = threat.NewManager(cfg, st, a.Geo, a.build, logf)
+	a.Firewall.SetThreatSource(a.Threat.Elements)
+	a.Threat.SetOnChange(func(v4, v6 []string) {
+		if err := a.Firewall.SyncThreatSets(v4, v6); err != nil {
+			logf("threat: firewall set sync: %v", err)
+		}
+		if a.Intercept != nil {
+			if err := a.Intercept.SyncThreat(v4); err != nil {
+				logf("threat: intercept set sync: %v", err)
+			}
+		}
+	})
+	a.Threat.SetBlocker(func(flowID, reason string) bool { return a.Tracker.BlockFlow(flowID, reason) })
+	a.Threat.SetEnforced(a.threatEnforced)
+	a.Threat.SetNamer(func(id string) string {
+		for _, c := range a.Registry.All() {
+			if c.ID == id {
+				if c.Label != "" {
+					return c.Label
+				}
+				if c.Hostname != "" {
+					return c.Hostname
+				}
+				return c.IP
+			}
+		}
+		return ""
+	})
+	a.Threat.SetEmit(a.emit)
 	a.VPN = vpn.New(cfg, st, logf)
 	a.Tailscale = vpn.NewTailscale(cfg, logf)
 	a.Egress = vpn.NewEgressManager(logf)
@@ -374,6 +413,8 @@ func (a *App) Start() {
 	// the network, so it is as short as the disk allows.
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.Lists.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Threat.Run(a.ctx) }()
 
 	if cfg.AdBlock.SmartCapture.Enabled {
 		a.wg.Add(1)
@@ -400,6 +441,10 @@ func (a *App) Start() {
 			a.raise(store.SevWarning, "dhcp", "DHCP server failed to start", err.Error())
 		}
 	}
+
+	// Listed addresses come from the database first, so the ruleset that is
+	// about to render already carries them; the network refresh follows.
+	a.Threat.Load()
 
 	if cfg.Firewall.Enabled && cfg.Mode == config.ModeInline {
 		if err := a.Firewall.Apply(a.ctx); err != nil {
@@ -446,6 +491,18 @@ func (a *App) Start() {
 
 	if cfg.AI.Enabled && cfg.AI.Anomaly.Enabled {
 		a.wg.Add(1)
+		a.Analyzer.OnScan = func(src string) {
+			if !a.Cfg.Snapshot().Threat.AutoBanScanners {
+				return
+			}
+			addr, err := netip.ParseAddr(src)
+			if err != nil || geoip.IsPrivate(addr) || a.Tracker == nil {
+				return
+			}
+			if _, err := a.Threat.Ban(src, time.Hour, "port scan detected by the anomaly detector", "scan", "anomaly"); err == nil {
+				a.log("threat: banned %s for an hour after a scan finding", src)
+			}
+		}
 		go func() { defer a.wg.Done(); a.Analyzer.Run(a.ctx) }()
 	}
 	// The model router and the brief writer always run: both read the
@@ -765,6 +822,64 @@ func (a *App) raise(severity, category, title, detail string) {
 				Severity: severity, Category: category, Title: title, Detail: detail, Source: "auto",
 			})
 		}()
+	}
+}
+
+// emit records an event that is a detection rather than a defect: stored,
+// streamed, notified when it is a warning or worse, never filed as a problem.
+func (a *App) emit(ev store.Event) {
+	_ = a.Store.AddEvent(ev)
+	if a.Notifier != nil && store.SeverityRank(ev.Severity) >= store.SeverityRank(store.SevWarning) {
+		a.Notifier.Send(ev)
+	}
+	a.Bus.Publish(Event{Type: "event.new", Data: map[string]any{
+		"severity": ev.Severity, "category": ev.Category, "title": ev.Title, "detail": ev.Detail, "client_id": ev.ClientID,
+	}})
+}
+
+// threatEnforced answers whether a listed-address hit for this local device
+// is dropped by a ruleset this node controls, or merely observed.
+func (a *App) threatEnforced(local netip.Addr, outbound bool) bool {
+	cfg := a.Cfg.Snapshot()
+	if cfg.Mode == config.ModeInline && cfg.Firewall.Enabled && a.Firewall.Available() {
+		return true
+	}
+	if cfg.Network.Intercept.Enabled && a.Intercept != nil && a.Intercept.Running() && local.IsValid() {
+		if _, ok := cfg.Network.Intercept.Clients[local.String()]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// ThreatEnforcement describes where drops actually happen, for the UI.
+func (a *App) ThreatEnforcement() map[string]any {
+	cfg := a.Cfg.Snapshot()
+	inline := cfg.Mode == config.ModeInline && cfg.Firewall.Enabled && a.Firewall.Available()
+	intercepting := 0
+	if cfg.Network.Intercept.Enabled && a.Intercept != nil && a.Intercept.Running() {
+		intercepting = len(cfg.Network.Intercept.Clients)
+	}
+	return map[string]any{
+		"mode": string(cfg.Mode), "inline": inline, "nft_available": a.Firewall.Available(),
+		"intercepted_clients": intercepting,
+		"detect_only":         !inline && intercepting == 0,
+	}
+}
+
+// ReapplyThreatEnforcement re-renders whichever rulesets embed the threat
+// rules after the feature or a direction was switched.
+func (a *App) ReapplyThreatEnforcement() {
+	cfg := a.Cfg.Snapshot()
+	if cfg.Firewall.Enabled && cfg.Mode == config.ModeInline {
+		if err := a.Firewall.Apply(a.ctx); err != nil {
+			a.log("threat: firewall re-apply: %v", err)
+		}
+	}
+	if cfg.Network.Intercept.Enabled && len(cfg.Network.Intercept.Clients) > 0 {
+		if err := a.SyncIntercept(); err != nil {
+			a.log("threat: intercept re-apply: %v", err)
+		}
 	}
 }
 

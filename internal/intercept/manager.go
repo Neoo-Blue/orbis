@@ -35,6 +35,10 @@ type Config struct {
 	HTTPSPort    int
 	HTTPScoped   bool
 	HTTPClients  []netip.Addr
+	// Listed addresses to drop for intercepted clients; see ForwardConfig.
+	Threat4   []string
+	ThreatOut bool
+	ThreatIn  bool
 }
 
 func NewManager(log func(string, ...any)) *Manager {
@@ -108,7 +112,34 @@ func (m *Manager) Apply(ctx context.Context, cfg Config) error {
 		HTTPSPort:    cfg.HTTPSPort,
 		HTTPScoped:   cfg.HTTPScoped,
 		HTTPClients:  cfg.HTTPClients,
+		Threat4:      cfg.Threat4,
+		ThreatOut:    cfg.ThreatOut,
+		ThreatIn:     cfg.ThreatIn,
 	})
+}
+
+// SyncThreat pushes a new listed-address set into the running intercept
+// table. A manager that is not intercepting has no table to update.
+func (m *Manager) SyncThreat(v4 []string) error {
+	m.mu.Lock()
+	running := m.running
+	ctx := m.ctx
+	m.cfg.Threat4 = v4
+	m.mu.Unlock()
+	if !running {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return SyncThreat(ctx, v4)
+}
+
+// Running reports whether interception is active for at least one client.
+func (m *Manager) Running() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running
 }
 
 // Stop tears everything down: restore the ARP caches, remove the rules, and put

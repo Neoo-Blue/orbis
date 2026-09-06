@@ -67,6 +67,9 @@ type Config struct {
 	// lock; snapshots set it to nil and are read-only by construction.
 	path string
 	mu   *sync.RWMutex
+	// gen counts mutations; snap caches the last snapshot for that gen.
+	gen  uint64
+	snap *snapshotCache
 }
 
 // lock/unlock tolerate a nil mutex so the same methods work on a snapshot.
@@ -1442,14 +1445,46 @@ func (c *Config) Update(fn func(*Config)) error {
 		c.unlock()
 		return fmt.Errorf("inline mode not applied: %s", msg)
 	}
+	c.gen++
 	c.unlock()
 	return c.Save()
 }
 
 // Snapshot returns a deep copy safe to hand to a goroutine or serialise.
+// snapshotCache holds the last value copy so the hot paths (every DNS
+// query, every new connection) do not each pay for a YAML round trip of
+// the whole configuration, which costs milliseconds and megabytes on a
+// small board. It is rebuilt only after a mutation bumped gen.
+type snapshotCache struct {
+	mu  sync.Mutex
+	gen uint64
+	val *Config
+}
+
 func (c *Config) Snapshot() Config {
 	c.rlock()
 	defer c.runlock()
+	if c.mu == nil {
+		// A snapshot of a snapshot: no cache, no lock, just copy.
+		return c.deepCopyLocked()
+	}
+	if c.snap == nil {
+		c.snap = &snapshotCache{}
+	}
+	c.snap.mu.Lock()
+	defer c.snap.mu.Unlock()
+	if c.snap.val == nil || c.snap.gen != c.gen {
+		cp := c.deepCopyLocked()
+		c.snap.val, c.snap.gen = &cp, c.gen
+	}
+	// A struct copy: scalars are independent, slices and maps are shared
+	// with the cache and with every other caller. Snapshots are read-only
+	// by contract; a caller that needs to change a list assigns a new one.
+	return *c.snap.val
+}
+
+// deepCopyLocked is the YAML round trip; the caller holds the lock.
+func (c *Config) deepCopyLocked() Config {
 	out, _ := yaml.Marshal(c)
 	var cp Config
 	_ = yaml.Unmarshal(out, &cp)

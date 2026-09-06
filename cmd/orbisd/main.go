@@ -9,9 +9,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -41,6 +45,15 @@ func main() {
 		verbose     = flag.Bool("v", false, "verbose logging")
 	)
 	flag.Parse()
+
+	// A small board has no memory cgroup to lean on, so the runtime itself
+	// is told where the ceiling is: the collector works harder as the heap
+	// nears it instead of the kernel killing the daemon at the wall.
+	applyMemoryLimit()
+	// Profiling is opt-in and loopback-only: ORBIS_PPROF=127.0.0.1:6060.
+	if addr := os.Getenv("ORBIS_PPROF"); addr != "" {
+		startPprof(addr)
+	}
 
 	if *showVersion {
 		fmt.Printf("orbisd %s\n", versionString())
@@ -176,4 +189,56 @@ func versionString() string {
 		return "dev+" + rev + dirty
 	}
 	return version
+}
+
+// applyMemoryLimit sets the Go soft memory limit to 70% of physical memory
+// unless GOMEMLIMIT already says otherwise.
+func applyMemoryLimit() {
+	if os.Getenv("GOMEMLIMIT") != "" {
+		return
+	}
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return
+		}
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || kb <= 0 {
+			return
+		}
+		limit := kb * 1024 * 7 / 10
+		if limit < 512<<20 {
+			limit = 512 << 20
+		}
+		debug.SetMemoryLimit(limit)
+		log.Printf("memory limit %d MB (70%% of %d MB)", limit>>20, kb>>10)
+		return
+	}
+}
+
+// startPprof serves net/http/pprof on a loopback address for diagnosis.
+func startPprof(addr string) {
+	if !strings.HasPrefix(addr, "127.") && !strings.HasPrefix(addr, "localhost") && !strings.HasPrefix(addr, "[::1]") {
+		log.Printf("pprof: refusing to listen on %s; loopback only", addr)
+		return
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	go func() {
+		log.Printf("pprof: listening on %s", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			log.Printf("pprof: %v", err)
+		}
+	}()
 }

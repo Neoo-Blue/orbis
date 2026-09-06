@@ -102,9 +102,10 @@ ads are being stripped, because from the sofa every one of those failures looks 
 
 ## Everything else it is
 
-**A full DNS server.** Filtering resolver with an LRU cache, upstreams over plain, DoT and DoH, and
-a DoT/DoH server for your own clients so a phone keeps using it off the LAN. Local authoritative
-records with wildcards. Rewrites, conditional forwarding, per-client policies, safe search,
+**A full DNS server.** Filtering resolver with an LRU cache and a TTL floor, upstreams over plain,
+DoT and DoH (encrypted by default), and a DoT/DoH server for your own clients so a phone keeps
+using it off the LAN. It is happy to be nothing but the resolver: on a Raspberry Pi on port 53 it
+replaces AdGuard Home or Pi-hole outright, lists and all. Local authoritative records with wildcards. Rewrites, conditional forwarding, per-client policies, safe search,
 blocked-service bundles, rate limiting, rebinding protection.
 
 **Ad blocking beyond the lists.** CNAME uncloaking, SNI and QUIC blocking for clients that never
@@ -136,9 +137,11 @@ user-defined alerts to webhook or email, scheduled reports, Prometheus metrics.
 **Ask first.** An opt-in per-device queue: the first time an enrolled device reaches a hostname it
 has never reached before, it waits for your verdict, and the answer becomes a rule.
 
-**An assistant that can do the work.** Fifteen read tools and eleven write tools over the same code
-paths the UI uses. Write access is off by default; everything lands in the audit log. The same
-tools are exposed over MCP for an external assistant.
+**An assistant that can do the work.** Twenty-four read tools and fifteen write tools over the
+same code paths the UI uses: it explains a domain, places an address, reads a device's history, the
+audit log or a service's usage, adds a shortcut, remembers a fact about your network, and files a
+scrubbed problem report. Write access is off by default; everything lands in the audit log. The
+same tools are exposed over MCP for an external assistant.
 
 Press **⌘K** (or Ctrl-K) anywhere to jump to a page, device, or action.
 
@@ -158,6 +161,23 @@ up in observe mode. Overrides are documented at the top of
 
 Then open `http://<host>:8080`. A first-run wizard asks how the node should sit on the network and
 checks whether it can actually see your traffic.
+
+### On a Raspberry Pi, replacing AdGuard Home or Pi-hole
+
+The binary and the image are built for arm64, and a Pi 4 runs the resolver for a household with
+room to spare. The one-line installer works there too. What maps to what:
+
+| You had | In Orbis |
+|---|---|
+| Filter list subscriptions | Ad blocking → Lists (hosts, domain, dnsmasq and AdBlock syntax) |
+| Custom rules, `\|\|host^` and `@@` | Ad blocking → My rules, or a profile's deny and allow lists |
+| Clients with filtering disabled | The **Unfiltered** profile, assigned per device |
+| unbound or another DoT forwarder | `dns.upstreams` entries such as `tls://1.1.1.1:853`; `cache_size` and `min_ttl` are settings |
+| Port 53, admin UI on 80 | `dns.listen` and `api.listen`; the UI moves with `api.listen` |
+
+Stop the old resolver first. Two services cannot share port 53, and the DNS page says so rather
+than failing quietly. Blocklists are indexed after the listener comes up, so the first minute after
+a start on a Pi answers unfiltered; that window is logged and shown on the Problems page.
 
 ### Docker
 
@@ -216,8 +236,11 @@ seven screens in plain words for a household: Home (is everything fine, ask a
 question), Devices (pause internet with a timer, pick a profile, rename),
 Protection (every filter as a sentence and a switch, fix or block a site, pair a
 TV), Usage (what is using the internet), Ask, Alerts (what happened, in
-sentences) and Settings. It collapses to a bottom tab bar on a phone.
-**Advanced** is every page and setting. Both write the same configuration, so
+sentences) and Settings. **Advanced** is every page and setting. On a phone both
+become a bottom tab bar: simple keeps its seven screens there; advanced keeps
+Overview, Connections, Devices and Assistant in the bar, with every other page one
+tap away behind More and a search button in the top bar. Every page has been laid
+out and checked at phone width ([docs/UX-AUDIT.md](docs/UX-AUDIT.md) records the audit). Both write the same configuration, so
 nothing done in one is invisible in the other. **Profiles** (Kids, Homework,
 Guests, Unfiltered, or your own) are per-device filtering policies with
 switched-off apps, safe search, schedules and allow/deny lists, shared by both.
@@ -287,7 +310,10 @@ No ruleset is installed, DHCP stays off, nothing is routed through it. Safe to l
 **Inline** makes it a real gateway: the ruleset is loaded, forwarding and NAT are enabled, DHCP
 starts if a scope exists, and outbound DNS is redirected so a device with hardcoded resolvers still
 gets filtered. A config that would forward without translating, or drop everything, is corrected
-to observe on load with an explanation rather than silently misbehaving.
+to observe on load with an explanation rather than silently misbehaving. Switching to inline is
+refused, with the reason, while a prerequisite is missing (no `nft`, forwarding switched off in the
+kernel, no LAN interface), and Settings lists what to fix, so the node never appears to accept
+inline and quietly fall back.
 
 To filter a network without becoming its gateway, use **ARP interception** per device, or point
 your router's DHCP DNS at Orbis. On a switched network a node that is not in the path sees only its
@@ -313,7 +339,7 @@ own traffic and broadcast noise; the onboarding wizard measures this and tells y
                       | netlink        | smart capture    | tailscale    |
                       +-------+--------+------------------+--------------+
                               |
-        topology . intercept . alerts . report . notify . ai + mcp
+     topology . intercept . alerts . report . notify . usage . issues . ai + mcp
                               |
                          SQLite (WAL)
 ```
@@ -348,6 +374,17 @@ Each of these cost real time, and each is now a line in the code rather than a s
   before it.
 - **Tailscale route acceptance is guarded** against a peer advertising a prefix this node is already
   on, which would route the LAN into the tunnel and strand the node.
+- **A pinned app does not refuse the certificate, it hangs.** The first attempt used to wait on a
+  handshake that would never finish. A six-second deadline now counts as a rejection, and the
+  bypass is written to disk so a restart does not repeat the lesson.
+- **Listen first, then rebuild the index.** Indexing six million blocklist entries takes a minute on
+  a Pi 4. Doing it before the listener came up turned a one-minute unfiltered window into a
+  one-minute DNS outage for every device in the house.
+- **Free models fail per model, not per key.** A 429 from one free model is a two-minute cooldown
+  for that model and a step down the ranking, not a broken assistant.
+- **On a phone, a page is as wide as its widest tab strip.** Sections stack in grids whose single
+  column auto-sizes to the widest child, so one unwrapped strip stretched every banner and card
+  past the screen. One rule pinning that column to the screen width fixed every page at once.
 
 ## Configuration
 
@@ -361,8 +398,10 @@ masks.
 - One administrator, not a user model. **Do not expose port 8080 to the internet** directly; reach
   it over WireGuard, Tailscale, or a Cloudflare Tunnel with Access in front.
 - TLS interception is invasive and off by default, scoped to an explicit host allowlist, with banks
-  and pinned apps on a bypass list that always wins. Only the CA certificate is downloadable; the
-  private key never leaves the node.
+  and pinned apps on a bypass list that always wins. An app that pins its certificate and rejects,
+  or simply hangs on, the Orbis handshake is detected on that first attempt and bypassed for 24
+  hours, so the YouTube app on a phone keeps working while the browser next to it is filtered. Only
+  the CA certificate is downloadable; the private key never leaves the node.
 - The in-page engine talks to nothing but the page it lives in and two same-origin paths that Orbis
   answers itself. Its counters are capped per report, because a counter is evidence.
 - ARP interception is a legitimate technique against your own devices and an attack against a
@@ -378,14 +417,19 @@ See [SECURITY.md](SECURITY.md).
 go test -race ./...                  # the concurrency ones matter here
 go vet ./...
 
-cd web && npm run dev                # UI against a daemon on :8080
+cd web && npm run build              # the UI is embedded: build it before go build
+cd web && npm run dev                # or iterate against a daemon on :8080
 go run ./cmd/orbisd -config ./dev.yaml
 go run ./cmd/orbisd -print-ruleset   # render nftables without applying
 orbisd -mcp -config /etc/orbis/orbis.yaml   # the tool catalogue over MCP
 ```
 
+The built UI under `cmd/orbisd/web/dist` is not committed; CI builds it for every push and
+release. Releases ship `orbisd-linux-amd64`, `orbisd-linux-arm64` and the multi-arch image.
+
 The competitive audit that drove much of the feature set is in
-[docs/COMPETITIVE-AUDIT.md](docs/COMPETITIVE-AUDIT.md); the MCP surface in [docs/MCP.md](docs/MCP.md).
+[docs/COMPETITIVE-AUDIT.md](docs/COMPETITIVE-AUDIT.md); the interface audit and the two-mode
+design in [docs/UX-AUDIT.md](docs/UX-AUDIT.md); the MCP surface in [docs/MCP.md](docs/MCP.md).
 
 ## Licence
 

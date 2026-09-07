@@ -2,7 +2,7 @@
 
 # Orbis
 
-<img width="1913" height="889" alt="Orbis globe view: live connections drawn as arcs from the network to the world" src="https://github.com/user-attachments/assets/3650f99c-d682-4e5c-a7b6-e938a7d18e13" />
+<img width="1280" height="698" alt="image" src="https://github.com/user-attachments/assets/ccb87f2c-92fa-41fd-b3ff-2407d330959b" />
 
 **The firewall that follows the ad into the stream, and knows what your network is doing.**
 

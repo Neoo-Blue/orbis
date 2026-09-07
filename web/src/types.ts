@@ -375,6 +375,15 @@ export interface GlobeArc {
   active: boolean
   src: string
   dst: string
+  hostname?: string
+  host_source?: 'dns' | 'handshake' | ''
+  service?: string
+  service_category?: string
+  service_source?: 'name' | 'network' | ''
+  hint?: string
+  src_name?: string
+  src_vendor?: string
+  src_type?: string
 }
 
 export interface GlobeData {

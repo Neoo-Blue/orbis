@@ -3,6 +3,17 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.27.1
+
+### Added
+- **The globe's connection card says what a connection is for.** A Service row names the
+  service behind the hostname (YouTube, iCloud, Steam) or, when no name was visible, the company
+  whose network it is (Google, Netflix, Akamai). The card also shows how the name was learned
+  (a DNS lookup the device made, or the TLS handshake), names the device that opened the
+  connection instead of its address, and offers a guess for unnamed connections from what the
+  device is and where it went: a Synology talking to Taiwan is its QuickConnect relay, a Tapo
+  plug talking to Singapore is TP-Link's cloud. "Ask the assistant what this is" is on the card.
+
 ## v1.27.0
 
 ### Added

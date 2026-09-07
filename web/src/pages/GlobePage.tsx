@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ExplainButton } from './ai/Explain'
 import { api } from '../api'
 import { usePoll, useLocalStorage, type LiveEvent } from '../hooks'
 import { Globe } from '../globe/Globe'
@@ -319,6 +320,20 @@ function ArcDetail({ arc, onClose, onBlock }: { arc: GlobeArc; onClose: () => vo
           {arc.label}
         </div>
         <dl className="kv">
+          {arc.service && (
+            <><dt>Service</dt><dd>
+              {arc.service}
+              {arc.service_category && arc.service_category !== 'other' && <span className="tag" style={{ marginLeft: 6 }}>{arc.service_category}</span>}
+              {arc.service_source === 'network' && <div className="hint" style={{ fontSize: 10.5 }}>from the network it belongs to; the name was not visible</div>}
+            </dd></>
+          )}
+          {arc.hostname && arc.hostname !== arc.label && <><dt>Name</dt><dd className="mono" style={{ wordBreak: 'break-all' }}>{arc.hostname}</dd></>}
+          {arc.hostname && arc.host_source && (
+            <><dt>Named by</dt><dd className="hint">{arc.host_source === 'handshake' ? 'the TLS handshake' : 'a DNS lookup the device made'}</dd></>
+          )}
+          {!arc.hostname && !arc.service && (
+            <><dt>Name</dt><dd className="hint">not visible: no DNS lookup seen and the handshake is encrypted</dd></>
+          )}
           <dt>Address</dt><dd>{arc.dst}:{arc.port}</dd>
           <dt>Protocol</dt><dd>{arc.proto}</dd>
           {arc.app && <><dt>Application</dt><dd>{arc.app}</dd></>}
@@ -328,13 +343,21 @@ function ArcDetail({ arc, onClose, onBlock }: { arc: GlobeArc; onClose: () => vo
           )}
           <dt>Received</dt><dd>{bytes(arc.bytes_in ?? 0)}</dd>
           <dt>Sent</dt><dd>{bytes(arc.bytes_out ?? 0)}</dd>
-          <dt>From</dt><dd>{arc.src}</dd>
+          <dt>From</dt><dd>{arc.src_name ? <>{arc.src_name} <span className="hint">{arc.src}</span></> : arc.src}</dd>
         </dl>
-        {arc.active && arc.verdict === 'allow' && (
-          <button className="btn danger sm" style={{ marginTop: 12, width: '100%' }} onClick={onBlock}>
-            Block this connection
-          </button>
+        {arc.hint && (
+          <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 7, background: 'var(--bg-2)', border: '1px solid var(--line-soft)', fontSize: 12, lineHeight: 1.55, color: 'var(--text-dim)' }}>
+            <b>Probably:</b> {arc.hint}
+          </div>
         )}
+        <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+          <ExplainButton kind="ip" id={arc.dst} label="Ask the assistant what this is" size="sm" />
+          {arc.active && arc.verdict === 'allow' && (
+            <button className="btn danger sm" style={{ width: '100%' }} onClick={onBlock}>
+              Block this connection
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

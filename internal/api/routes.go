@@ -11,6 +11,7 @@ import (
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/dpi"
 	"github.com/Neoo-Blue/orbis/internal/firewall"
 	"github.com/Neoo-Blue/orbis/internal/flows"
 	"github.com/Neoo-Blue/orbis/internal/geoip"
@@ -379,6 +380,17 @@ func (s *Server) handleGlobe(w http.ResponseWriter, r *http.Request) {
 	// itself, arcs would all originate from (0,0) in the Atlantic.
 	home := s.homePoint()
 
+	// Devices by id and address, so the card can say "Synology NAS" rather
+	// than 192.168.50.111, and so an unnamed connection can be guessed from
+	// who opened it.
+	clients := map[string]store.Client{}
+	for _, c := range s.app.Clients() {
+		clients[c.ID] = c
+		if c.IP != "" {
+			clients["ip:"+c.IP] = c
+		}
+	}
+
 	arcs := make([]map[string]any, 0, len(flows))
 	for _, f := range flows {
 		if f.Lat == 0 && f.Lon == 0 {
@@ -390,6 +402,57 @@ func (s *Server) handleGlobe(w http.ResponseWriter, r *http.Request) {
 		}
 		if label == "" {
 			label = f.DstIP
+		}
+		host := f.Hostname
+		if host == "" {
+			host = f.SNI
+		}
+		hostSource := ""
+		switch {
+		case host == "":
+		case f.SNI != "" && host == f.SNI:
+			hostSource = "handshake"
+		default:
+			hostSource = "dns"
+		}
+		src, hasSrc := clients[f.ClientID]
+		if !hasSrc {
+			src, hasSrc = clients["ip:"+f.SrcIP]
+		}
+		if f.Direction == store.DirInbound {
+			// The device is on the far side of an inbound connection.
+			if c, ok := clients["ip:"+f.DstIP]; ok {
+				src, hasSrc = c, true
+			}
+		}
+		var svc dpi.Service
+		svcSource := ""
+		if host != "" {
+			if c, ok := dpi.Classify(host); ok {
+				svc, svcSource = c, "name"
+			}
+		}
+		if svcSource == "" {
+			if c, ok := dpi.ServiceForNetwork(f.ASN, f.ASOrg); ok {
+				svc, svcSource = c, "network"
+			}
+		}
+		hint := ""
+		if svcSource == "" && hasSrc {
+			hint = dpi.RelayHint(src.Vendor, src.DeviceType, f.Country, f.ASOrg)
+		}
+		srcName := ""
+		if hasSrc {
+			srcName = src.Label
+			if srcName == "" {
+				srcName = src.Hostname
+			}
+			if srcName == "" && src.Vendor != "" {
+				srcName = src.Vendor
+				if src.DeviceType != "" {
+					srcName += " " + src.DeviceType
+				}
+			}
 		}
 		// The arc is always drawn between this network and the remote end;
 		// direction says which way the traffic actually initiated, which the
@@ -408,6 +471,9 @@ func (s *Server) handleGlobe(w http.ResponseWriter, r *http.Request) {
 			"port": f.DstPort, "proto": f.Proto, "risk": f.Risk,
 			"started": f.StartedAt.Unix(), "active": f.Active(),
 			"src": f.SrcIP, "dst": f.DstIP,
+			"hostname": host, "host_source": hostSource,
+			"service": svc.Name, "service_category": svc.Category, "service_source": svcSource,
+			"hint": hint, "src_name": srcName, "src_vendor": src.Vendor, "src_type": src.DeviceType,
 		})
 	}
 	countries, err := s.app.Store.CountryTotals(querySince(r, 24))

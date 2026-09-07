@@ -3,6 +3,12 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.28.2
+
+### Fixed
+- The hourly list refresh rebuilt the whole index even when every list came back unchanged. It
+  now rebuilds only when a list actually changed.
+
 ## v1.28.1
 
 ### Fixed

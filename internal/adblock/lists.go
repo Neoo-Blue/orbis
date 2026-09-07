@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
@@ -116,6 +117,7 @@ func (m *Manager) UpdateAll(ctx context.Context, force bool) error {
 	// from minutes into seconds. Four at a time is polite to the mirrors.
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
+	var changed atomic.Int32
 	for _, meta := range metas {
 		if !meta.Enabled {
 			continue
@@ -128,22 +130,32 @@ func (m *Manager) UpdateAll(ctx context.Context, force bool) error {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if err := m.updateOne(ctx, meta); err != nil {
+			did, err := m.updateOne(ctx, meta)
+			if err != nil {
 				m.log("adblock: list %q failed: %v", meta.Name, err)
 				_ = m.st.SetListError(meta.Name, err.Error())
+			}
+			if did {
+				changed.Add(1)
 			}
 		}(meta)
 	}
 	wg.Wait()
+	// A refresh where every list came back unchanged has nothing to
+	// rebuild, and a rebuild is the most expensive thing this process does.
+	if changed.Load() == 0 && m.matcher.Count() > 0 {
+		return nil
+	}
 	return m.Rebuild()
 }
 
-func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) error {
+// updateOne fetches one list; it reports whether the stored entries changed.
+func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) (bool, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, meta.URL, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("User-Agent", "orbis/1.0 (+https://github.com/Neoo-Blue/orbis)")
 	req.Header.Set("Accept-Encoding", "gzip")
@@ -152,23 +164,23 @@ func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) error {
 	}
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotModified {
 		m.log("adblock: %s unchanged", meta.Name)
-		return nil
+		return false, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return false, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	var reader io.Reader = io.LimitReader(resp.Body, 256<<20)
 	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
 		gz, err := gzip.NewReader(reader)
 		if err != nil {
-			return fmt.Errorf("gzip: %w", err)
+			return false, fmt.Errorf("gzip: %w", err)
 		}
 		defer gz.Close()
 		reader = gz
@@ -176,13 +188,13 @@ func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) error {
 
 	parsed, err := Parse(reader, m.parseOptions(meta.Name))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if parsed.Total() == 0 {
-		return fmt.Errorf("list parsed to zero entries (format change?)")
+		return false, fmt.Errorf("list parsed to zero entries (format change?)")
 	}
 	if err := m.st.ReplaceListDomains(meta.Name, meta.Category, ToListEntries(parsed)); err != nil {
-		return err
+		return false, err
 	}
 	meta.ETag = resp.Header.Get("ETag")
 	now := time.Now()
@@ -194,7 +206,7 @@ func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) error {
 	} else {
 		m.log("adblock: %s -> %d entries (%d blocks, %d exceptions)", meta.Name, meta.Entries, parsed.Blocks(), parsed.Allows())
 	}
-	return nil
+	return true, nil
 }
 
 // parseOptions reads a list's action and format from the configuration.

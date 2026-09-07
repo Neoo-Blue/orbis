@@ -3,6 +3,15 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.27.2
+
+### Changed
+- **The flat map opens centred on your network.** The projection's central meridian is the
+  node's own longitude, so the home sits in the middle of the map and connections fan out both
+  ways. From the US West Coast that puts Asia on the left and Europe on the right instead of
+  every line crossing the whole map from the far left. Countries the seam cuts through are
+  drawn whole at both edges.
+
 ## v1.27.1
 
 ### Added

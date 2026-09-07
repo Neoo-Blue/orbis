@@ -80,6 +80,9 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
   const view = useRef<View>({ zoom: 1, offsetX: 0, offsetY: 0 })
   const arcsRef = useRef<GlobeArc[]>([])
   const homeRef = useRef<{ lat: number; lng: number; label: string } | null>(null)
+  // The map is centred on this network's longitude, so the home sits in the
+  // middle and the arcs fan out both ways instead of all crossing the map.
+  const centerRef = useRef(0)
   const countryLoadRef = useRef<Map<string, { intensity: number; blocked: boolean }>>(new Map())
   const hoverRef = useRef<GlobeArc | null>(null)
   const pointerRef = useRef<{ x: number; y: number } | null>(null)
@@ -93,6 +96,7 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
     for (const a of liveArcs ?? []) map.set(a.id, a)
     arcsRef.current = [...map.values()].filter((a) => a.end_lat !== 0 || a.end_lng !== 0)
     homeRef.current = data?.home ?? homeRef.current
+    if (homeRef.current) centerRef.current = homeRef.current.lng
 
     // Per-country intensity, scaled against the busiest country so the map
     // adapts to this network rather than to an absolute byte count.
@@ -118,7 +122,9 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
   const project = useCallback((lat: number, lng: number): [number, number] => {
     const { w, h } = sizeRef.current
     const v = view.current
-    const x = ((lng + 180) / 360) * w * v.zoom + v.offsetX
+    // Longitude relative to the centre, wrapped into [-180, 180).
+    const rel = ((lng - centerRef.current + 540) % 360) - 180
+    const x = ((rel + 180) / 360) * w * v.zoom + v.offsetX
     const y = ((90 - lat) / 180) * h * v.zoom + v.offsetY
     return [x, y]
   }, [])
@@ -192,7 +198,7 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
         ctx.moveTo(0, y)
         ctx.lineTo(w, y)
       }
-      for (let lng = -150; lng <= 150; lng += 30) {
+      for (let lng = -180; lng < 180; lng += 30) {
         const [x] = project(0, lng)
         ctx.moveTo(x, 0)
         ctx.lineTo(x, h)
@@ -204,24 +210,44 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
       // this network is talking to reads at a glance without hiding its outline.
       const loads = countryLoadRef.current
       if (loads.size) {
+        const worldW = w * view.current.zoom
         for (const shape of countryShapes as CountryShape[]) {
           const load = loads.get(shape.c)
           if (!load) continue
-          ctx.beginPath()
+          // A country the seam cuts through (Russia when the map is centred
+          // on the Pacific) is unwrapped into one continuous outline and
+          // drawn at both edges, so each half fills correctly.
+          const pts: number[] = []
+          let crosses = false
+          let prevX: number | null = null
+          let shift = 0
           const flat = shape.r
           for (let i = 0; i + 1 < flat.length; i += 2) {
-            const [x, y] = project(flat[i + 1], flat[i])
-            if (i === 0) ctx.moveTo(x, y)
-            else ctx.lineTo(x, y)
+            let [x, y] = project(flat[i + 1], flat[i])
+            if (prevX !== null && Math.abs(x + shift - prevX) > worldW * 0.5) {
+              shift += x + shift > prevX ? -worldW : worldW
+              crosses = true
+            }
+            x += shift
+            pts.push(x, y)
+            prevX = x
           }
-          ctx.closePath()
-          ctx.fillStyle = load.blocked ? COLORS.block : COLORS.allow
-          ctx.globalAlpha = load.intensity * 0.16
-          ctx.fill()
-          ctx.strokeStyle = load.blocked ? COLORS.block : COLORS.allow
-          ctx.globalAlpha = load.intensity * 0.55
-          ctx.lineWidth = 1
-          ctx.stroke()
+          const offsets = crosses ? [0, -worldW, worldW] : [0]
+          for (const off of offsets) {
+            ctx.beginPath()
+            for (let i = 0; i + 1 < pts.length; i += 2) {
+              if (i === 0) ctx.moveTo(pts[i] + off, pts[i + 1])
+              else ctx.lineTo(pts[i] + off, pts[i + 1])
+            }
+            ctx.closePath()
+            ctx.fillStyle = load.blocked ? COLORS.block : COLORS.allow
+            ctx.globalAlpha = load.intensity * 0.16
+            ctx.fill()
+            ctx.strokeStyle = load.blocked ? COLORS.block : COLORS.allow
+            ctx.globalAlpha = load.intensity * 0.55
+            ctx.lineWidth = 1
+            ctx.stroke()
+          }
         }
         ctx.globalAlpha = 1
       }

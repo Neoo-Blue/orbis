@@ -4,6 +4,7 @@ import { Field, Loading } from '../ui'
 import type { AppConfig, SystemStatus } from '../types'
 import { BigSwitch, Section } from './common'
 import { UpdateCard } from '../pages/UpdateCard'
+import { SafetyCard } from '../pages/SafetyCard'
 
 /** The handful of settings a household changes, in plain words. */
 export function SimpleSettings({ config, status, save, uiMode, setUIMode, onNavigate }: {
@@ -23,6 +24,9 @@ export function SimpleSettings({ config, status, save, uiMode, setUIMode, onNavi
         </div>
       </Section>
 
+      <Section title="If Orbis goes down" hint="The safety net keeps names resolving and devices online.">
+        <div style={{ padding: '4px 0' }}><SafetyCard config={config} save={save} compact /></div>
+      </Section>
       <Section title="Updates">
         <div style={{ padding: '4px 0' }}><UpdateCard compact /></div>
       </Section>

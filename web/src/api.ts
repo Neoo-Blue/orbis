@@ -12,7 +12,7 @@ import type {
   ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
   HostedResponse, StorageDevice, PortForward, RouterInfo,
   LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus, IDSStatus,
- UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset } from './types'
+ UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -350,6 +350,10 @@ export const api = {
     enable: (body: { ssid?: string; passphrase?: string; band?: string }) => post<WiFiStatus>('/wifi/enable', body),
     disable: () => post<WiFiStatus>('/wifi/disable'),
     passphrase: (passphrase?: string) => post<WiFiStatus>('/wifi/passphrase', { passphrase: passphrase ?? '' }),
+  },
+  safety: {
+    get: () => get<SafetyStatus>('/safety'),
+    install: () => post<SafetyStatus>('/safety/install', {}),
   },
   update: {
     get: () => get<UpdateStatus>('/update'),

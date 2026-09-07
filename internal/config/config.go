@@ -50,13 +50,15 @@ type Config struct {
 	Tailscale TailscaleConfig `yaml:"tailscale" json:"tailscale"`
 	AI        AIConfig        `yaml:"ai" json:"ai"`
 	Issues    IssuesConfig    `yaml:"issues" json:"issues"`
-	Threat    ThreatConfig    `yaml:"threat" json:"threat"`
-	Discover  DiscoverConfig  `yaml:"discover" json:"discover"`
-	WiFi      WiFiConfig      `yaml:"wifi" json:"wifi"`
-	Country   CountryConfig   `yaml:"country" json:"country"`
-	IDS       IDSConfig       `yaml:"ids" json:"ids"`
-	Notify    NotifyConfig    `yaml:"notify" json:"notify"`
-	GeoIP     GeoIPConfig     `yaml:"geoip" json:"geoip"`
+	// Safety is the safety net: restart policy, lifeboat, watchdogs, fallback DNS.
+	Safety   SafetyConfig   `yaml:"safety" json:"safety"`
+	Threat   ThreatConfig   `yaml:"threat" json:"threat"`
+	Discover DiscoverConfig `yaml:"discover" json:"discover"`
+	WiFi     WiFiConfig     `yaml:"wifi" json:"wifi"`
+	Country  CountryConfig  `yaml:"country" json:"country"`
+	IDS      IDSConfig      `yaml:"ids" json:"ids"`
+	Notify   NotifyConfig   `yaml:"notify" json:"notify"`
+	GeoIP    GeoIPConfig    `yaml:"geoip" json:"geoip"`
 
 	// Notes carries messages produced while loading, for the daemon to log and
 	// surface. Not persisted: it describes this load, not the configuration.
@@ -904,6 +906,26 @@ type ReviewConfig struct {
 // written down locally, scrubbed of anything that identifies the network, and
 // optionally filed on the project's GitHub issue board so it can be fixed for
 // everyone. Nothing leaves the node unless GitHub reporting is switched on.
+// SafetyConfig is the safety net: what keeps the network up when Orbis
+// itself is down. Each layer can be switched off, none of them should be.
+type SafetyConfig struct {
+	// FallbackDNS is a second resolver handed out by DHCP after this node,
+	// so devices keep resolving names if this node stops answering. "auto"
+	// picks the first public upstream, or 1.1.1.1; "none" hands out this
+	// node only; anything else is an address.
+	FallbackDNS string `yaml:"fallback_dns" json:"fallback_dns"`
+	// Lifeboat installs the standby unit that serves DNS and DHCP without
+	// filtering when the main service has failed for good.
+	Lifeboat bool `yaml:"lifeboat" json:"lifeboat"`
+	// HardwareWatchdog arms the board's watchdog through systemd at the next
+	// boot, so a frozen kernel reboots instead of sitting dead. Off by
+	// default: a watchdog is a reset button held by software.
+	HardwareWatchdog bool `yaml:"hardware_watchdog" json:"hardware_watchdog"`
+	// LivenessProbe feeds systemd's software watchdog only while the
+	// resolver actually answers, so a wedged process is restarted.
+	LivenessProbe bool `yaml:"liveness_probe" json:"liveness_probe"`
+}
+
 type IssuesConfig struct {
 	// Enabled records problems locally. Safe to leave on: nothing is sent.
 	Enabled bool `yaml:"enabled" json:"enabled"`
@@ -1179,6 +1201,7 @@ func Default() *Config {
 		WiFi:     WiFiConfig{SSID: "Orbis", Band: "auto", Mode: "routed", Subnet: "192.168.60.1/24", LANAccess: true},
 		Country:  CountryConfig{Mode: "block", BlockOutbound: true, BlockInbound: true, DNS: true},
 		IDS:      IDSConfig{Enabled: true, Journal: true, SyslogListen: "0.0.0.0:514", Flows: true, BanMultiplier: 1},
+		Safety:   SafetyConfig{FallbackDNS: "auto", Lifeboat: true, HardwareWatchdog: true, LivenessProbe: true},
 		Issues: IssuesConfig{
 			Enabled:     true,
 			AutoCapture: true,

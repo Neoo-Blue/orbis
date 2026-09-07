@@ -334,6 +334,14 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 	case "ai.intel.notify":
 		return setBool(&c.AI.Intel.Notify, raw)
 
+	case "safety.fallback_dns":
+		return setStr(&c.Safety.FallbackDNS, raw)
+	case "safety.lifeboat":
+		return setBool(&c.Safety.Lifeboat, raw)
+	case "safety.hardware_watchdog":
+		return setBool(&c.Safety.HardwareWatchdog, raw)
+	case "safety.liveness_probe":
+		return setBool(&c.Safety.LivenessProbe, raw)
 	case "issues.enabled":
 		return setBool(&c.Issues.Enabled, raw)
 	case "issues.auto_capture":

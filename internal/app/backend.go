@@ -3,9 +3,13 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/Neoo-Blue/orbis/internal/dhcp"
+	"github.com/Neoo-Blue/orbis/internal/safety"
 	"net"
 	"net/netip"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -1639,4 +1643,69 @@ func (a *App) JudgeDomain(ctx context.Context, domain string) (map[string]any, e
 		return nil, fmt.Errorf("the assistant is not available")
 	}
 	return a.Explainer.JudgeDomain(ctx, domain)
+}
+
+// NoteLifeboatEpisode records that the lifeboat kept the network up while
+// this daemon was down, as an event the operator will see.
+func (a *App) NoteLifeboatEpisode(ep safety.Episode) {
+	d := ep.LastSeen.Sub(ep.Started).Round(time.Minute)
+	a.emit(store.Event{
+		ID: uuid.NewString(), TS: time.Now(), Severity: store.SevWarning, Category: "safety",
+		Title:  "The lifeboat kept the network up for " + d.String(),
+		Detail: "Orbis was down from " + ep.Started.Format("2006-01-02 15:04") + " to " + ep.LastSeen.Format("15:04") + " (" + ep.Reason + "). DNS was forwarded without filtering, DHCP and forwarding stayed up, and the main service was retried " + fmt.Sprint(ep.Retries) + " time(s). Check the journal for why it failed: journalctl -u orbis.",
+		Data:   map[string]any{"started": ep.Started, "ended": ep.LastSeen, "retries": ep.Retries, "reason": ep.Reason},
+	})
+	a.log("safety: the lifeboat ran from %s to %s (%s)", ep.Started.Format(time.RFC3339), ep.LastSeen.Format(time.RFC3339), ep.Reason)
+}
+
+// SafetyStatus is the safety net page's view.
+func (a *App) SafetyStatus(ctx context.Context) (map[string]any, error) {
+	cfg := a.Cfg.Snapshot()
+	dataDir := filepath.Dir(cfg.Store.Path)
+	fb := ""
+	if ip := dhcp.FallbackDNS(cfg); ip != nil {
+		fb = ip.String()
+	}
+	ok, age := safety.LastProbe()
+	st := safety.Compute(ctx, cfg, dataDir, fb, len(cfg.Network.Intercept.Clients), ok, age)
+	out := map[string]any{
+		"method": st.Method, "placement": st.Placement, "layers": st.Layers, "unit": st.Unit,
+		"fallback_dns": fb, "runbook": st.Runbook, "install_hint": st.InstallHint,
+		"config": cfg.Safety, "has_hardware_watchdog": safety.HasHardwareWatchdog(),
+	}
+	if st.LastEpisode != nil {
+		out["last_episode"] = st.LastEpisode
+	}
+	return out, nil
+}
+
+// InstallSafetyNet writes the units through a transient systemd unit, which
+// has the whole filesystem this sandboxed service does not, then reports
+// the new state.
+func (a *App) InstallSafetyNet(ctx context.Context, actor string) (map[string]any, error) {
+	if _, err := exec.LookPath("systemd-run"); err != nil {
+		return nil, fmt.Errorf("this node does not run under systemd; the safety net needs it")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	cfgPath := a.Cfg.Path()
+	if cfgPath == "" {
+		cfgPath = "/etc/orbis/orbis.yaml"
+	}
+	unit := fmt.Sprintf("orbis-safety-install-%d", time.Now().Unix())
+	cmd := exec.CommandContext(ctx, "systemd-run", "--quiet", "--wait", "--collect", "--unit="+unit, exe, "-install-safety-net", "-config", cfgPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		a.Store.Audit(actor, "safety.install", "", "", "", "error: "+msg)
+		return nil, fmt.Errorf("install failed: %s", msg)
+	}
+	a.Store.Audit(actor, "safety.install", "", "", strings.TrimSpace(string(out)), "ok")
+	a.log("safety: units installed by %s", actor)
+	return a.SafetyStatus(ctx)
 }

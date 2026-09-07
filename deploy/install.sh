@@ -137,11 +137,18 @@ if ! command -v tailscale >/dev/null 2>&1; then
   fi
 fi
 
-say "Installing the systemd unit"
-cat > /etc/systemd/system/orbis.service <<'UNIT'
+say "Installing the systemd units and the safety net"
+# The units come from the binary so the installer, the daemon and the
+# settings page all install the same thing: restart on failure, a software
+# watchdog fed only while the resolver answers, the lifeboat standby that
+# takes over DNS, DHCP and forwarding when the service cannot come back,
+# the release step that puts intercepted devices back on the real gateway
+# after any stop, and the hardware watchdog where the board has one.
+if ! /usr/local/bin/orbisd -install-safety-net -config "$CONFIG"; then
+  warn "safety net install failed; writing a plain unit instead"
+  cat > /etc/systemd/system/orbis.service <<'UNIT'
 [Unit]
 Description=Orbis network firewall and traffic analyser
-Documentation=https://github.com/Neoo-Blue/orbis
 After=network-online.target
 Wants=network-online.target
 
@@ -150,33 +157,14 @@ Type=simple
 ExecStart=/usr/local/bin/orbisd -config /etc/orbis/orbis.yaml
 Restart=on-failure
 RestartSec=3
-
-# Runs as root because it needs raw sockets, netfilter and network
-# configuration. The capability set below is still narrowed to what is
-# actually used, so a compromise does not hand over the whole machine.
 User=root
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_MODULE CAP_DAC_OVERRIDE CAP_CHOWN CAP_SETUID CAP_SETGID
-
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-ReadWritePaths=/var/lib/orbis /etc/orbis /etc/resolv.conf
-ProtectKernelLogs=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
-LockPersonality=yes
-
-# The flow table and the DNS cache are the memory footprint; this is a
-# generous ceiling that still stops a runaway from taking the host down.
-MemoryMax=2G
 LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 UNIT
+fi
 
 say "Applying kernel settings"
 cat > /etc/sysctl.d/99-orbis.conf <<'SYSCTL'

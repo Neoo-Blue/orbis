@@ -88,6 +88,10 @@ type Backend interface {
 	Explain(ctx context.Context, kind, key string) (map[string]any, error)
 	JudgeDomain(ctx context.Context, domain string) (map[string]any, error)
 
+	// Safety net.
+	SafetyStatus(ctx context.Context) (map[string]any, error)
+	InstallSafetyNet(ctx context.Context, actor string) (map[string]any, error)
+
 	// Updates.
 	UpdateStatus() map[string]any
 	CheckUpdate(ctx context.Context) (map[string]any, error)
@@ -382,6 +386,21 @@ func Tools(allowWrite bool) []ToolDef {
 				"kind": enumProp("What the key names", []string{"event", "alert", "ip", "domain"}),
 				"key":  strProp("The event or alert id, the address, or the hostname"),
 			}, []string{"kind", "key"}),
+		},
+		{
+			Name: "safety_net",
+			Description: "What keeps the network up when Orbis itself is down: restart policy, the software " +
+				"watchdog for hangs, the lifeboat standby, the release of intercepted devices, the second " +
+				"DNS server in leases, the hardware watchdog, and the runbook if the box dies. Each layer " +
+				"says whether it is in place.",
+			Schema: objSchema(map[string]any{}, nil),
+		},
+		{
+			Name: "install_safety_net",
+			Description: "Install or update the safety net's systemd units and watchdog settings on this node. " +
+				"Needs systemd; takes a few seconds; does not restart Orbis.",
+			Mutating: true,
+			Schema:   objSchema(map[string]any{}, nil),
 		},
 		{
 			Name: "check_update",
@@ -696,7 +715,7 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 		"forward_port": true, "remove_forward": true,
 		"configure_wifi":   true,
 		"set_country_rule": true,
-		"apply_update":     true, "run_threat_intel": true, "decide_ai_action": true,
+		"apply_update":     true, "install_safety_net": true, "run_threat_intel": true, "decide_ai_action": true,
 	}
 	if mutating[call.Name] && !allowWrite {
 		return "", fmt.Errorf("write access is disabled; this change needs to be made from the UI")
@@ -940,6 +959,12 @@ func Execute(ctx context.Context, b Backend, call ToolCall, allowWrite bool, act
 
 	case "explain":
 		return jsonOf(b.Explain(ctx, strArg(args, "kind"), strArg(args, "key")))
+
+	case "safety_net":
+		return jsonOf(b.SafetyStatus(ctx))
+
+	case "install_safety_net":
+		return jsonOf(b.InstallSafetyNet(ctx, actor))
 
 	case "check_update":
 		if v, ok := args["refresh"].(bool); ok && v {

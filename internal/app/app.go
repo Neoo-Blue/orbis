@@ -37,6 +37,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/netconf"
 	"github.com/Neoo-Blue/orbis/internal/notify"
 	"github.com/Neoo-Blue/orbis/internal/portmap"
+	"github.com/Neoo-Blue/orbis/internal/safety"
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/Neoo-Blue/orbis/internal/threat"
 	"github.com/Neoo-Blue/orbis/internal/topology"
@@ -476,6 +477,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.WAN = netconf.NewWANMonitor(logf)
 	a.Topology = topology.NewScanner()
 	a.Intercept = intercept.NewManager(logf)
+	a.Intercept.SetMarkerPath(safety.MarkerPath(filepath.Dir(cfg.Store.Path)))
 	a.PortMap = portmap.New(func() portmap.Config {
 		return cfg.Snapshot().Network.PortMap
 	}, logf)

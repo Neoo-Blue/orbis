@@ -468,6 +468,38 @@ issues, reproduces clear defects with a failing test, opens a pull request on a 
 branch (never pushing to `main`), and triages the rest with a comment. Humans review and merge.
 Nothing is deployed automatically.
 
+## Safety net: when Orbis itself is down
+
+A router that takes the network down with it is worse than no router. Orbis ships seven layers,
+shown with their state under Settings, Safety net, and installed by the installer or with one
+click:
+
+- **Restart after a crash.** systemd restarts the service two seconds after a failure.
+- **Restart when it hangs.** The unit runs a software watchdog and the daemon only sends the
+  heartbeat while its own resolver answers a test query. A process that is alive but wedged is
+  restarted too.
+- **Lifeboat when it cannot come back.** After five failures in two minutes systemd hands the
+  network to `orbis-lifeboat`, a standby built into the same binary: DNS forwarded without
+  filtering, DHCP so every device keeps its address, forwarding and NAT kept up on a gateway,
+  intercepted devices put back on the real gateway. It opens no database, loads no list and talks
+  to no model, because any of those may be the reason Orbis is down. It retries Orbis on a
+  backoff, serves a plain status page with a "Start Orbis now" button on the usual address, and
+  hands back the moment Orbis starts.
+- **Devices go back to the real gateway.** A release step runs after every stop, clean or crash,
+  so intercepted devices are not left pointed at a dead node until their ARP cache expires.
+- **A second resolver in every lease.** DHCP hands out this node first and a public resolver
+  second, so a dead resolver does not read as a dead internet. A node that is not the DHCP server
+  is told what to put in the router.
+- **Reboot a frozen board.** Opt-in. Where there is a hardware watchdog, the setting is written
+  for systemd to arm at the next boot, never applied live.
+- **Traffic keeps flowing through restarts.** The ruleset lives in the kernel and stays through a
+  restart or an update.
+
+For the failure no software covers, the box itself dying, the same page holds a runbook written
+for the node's placement. Placement is the strongest layer of all: in intercept mode the router
+stays the gateway and devices fall back to it on their own; a node that is the gateway needs the
+runbook.
+
 ## Modes and placement
 
 **Observe** (the default) watches whatever traffic reaches it and records what it would have

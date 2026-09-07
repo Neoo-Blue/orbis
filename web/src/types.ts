@@ -688,6 +688,7 @@ export interface AppConfig {
       max_actions_per_run: number; max_ban_hours: number; ban_addresses: boolean; block_domains: boolean; notify: boolean
     }
   }
+  safety: { fallback_dns: string; lifeboat: boolean; hardware_watchdog: boolean; liveness_probe: boolean }
   issues: {
     enabled: boolean; auto_capture: boolean; redact_extra: string[]
     github: {
@@ -1430,4 +1431,25 @@ export interface DomainJudgement {
   domain: string
   verdict: { domain: string; is_ad_or_tracking: boolean; confidence: number; reason: string; breakage_risk: string }
   protected?: string
+}
+
+export interface SafetyLayer {
+  id: string
+  title: string
+  ok: boolean
+  detail: string
+  applies: boolean
+}
+
+export interface SafetyStatus {
+  method: 'systemd' | 'other'
+  placement: 'gateway' | 'gateway-no-dhcp' | 'intercept' | 'resolver'
+  layers: SafetyLayer[]
+  unit: Record<string, string>
+  fallback_dns: string
+  runbook: string[]
+  install_hint?: string
+  has_hardware_watchdog: boolean
+  config: { fallback_dns: string; lifeboat: boolean; hardware_watchdog: boolean; liveness_probe: boolean }
+  last_episode?: { started: string; last_seen: string; reason: string; retries: number }
 }

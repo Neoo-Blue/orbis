@@ -8,15 +8,17 @@ import { ago, bytes, compact, duration, num } from '../format'
 import type { AIBrief, AppConfig, SystemStatus } from '../types'
 import { searchSettings } from '../settingsIndex'
 import { UpdateCard } from './UpdateCard'
+import { SafetyCard } from './SafetyCard'
 
 type Section =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
-  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'hosted' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
+  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'hosted' | 'assistant' | 'problems' | 'capture' | 'storage' | 'safety' | 'security' | 'about'
 
 const SECTIONS: Array<{ id: Section; label: string; group: string; blurb: string }> = [
   { id: 'general', label: 'Node & mode', group: 'System', blurb: 'Name, timezone, and whether Orbis is inline' },
   { id: 'capture', label: 'Traffic capture', group: 'System', blurb: 'Which interfaces are watched and how deeply' },
   { id: 'storage', label: 'Storage & retention', group: 'System', blurb: 'How long history is kept' },
+  { id: 'safety', label: 'Safety net', group: 'System', blurb: 'What keeps the network up when Orbis is down' },
   { id: 'security', label: 'Access', group: 'System', blurb: 'Admin password and API access' },
 
   { id: 'dns', label: 'DNS resolver', group: 'Filtering', blurb: 'Upstreams, cache, sinkhole behaviour' },
@@ -130,6 +132,7 @@ export function SettingsPage({ status, onAuthChange }: {
         {section === 'general' && <GeneralSection {...props} />}
         {section === 'capture' && <CaptureSection {...props} />}
         {section === 'storage' && <StorageSection {...props} />}
+        {section === 'safety' && <SafetySection {...props} />}
         {section === 'security' && <SecuritySection onAuthChange={onAuthChange} />}
         {section === 'dns' && <DNSSection {...props} />}
         {section === 'adblock' && <AdBlockSection {...props} />}
@@ -2005,4 +2008,9 @@ function AboutSection({ config, status }: SectionProps) {
       </Card>
     </>
   )
+}
+
+
+function SafetySection({ config, save }: SectionProps) {
+  return <SafetyCard config={config} save={save} />
 }

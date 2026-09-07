@@ -3,6 +3,37 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.28.0
+
+### Added
+- **A safety net for when Orbis itself is down.** Seven layers, each shown with its state under
+  Settings, Safety net, and installed with one click or by the installer:
+  - **Restart after a crash.** systemd restarts the service two seconds after a failure.
+  - **Restart when it hangs.** The unit runs a software watchdog, and the daemon only sends the
+    heartbeat while its own resolver answers a test query, so a process that is alive but wedged
+    is restarted too.
+  - **Lifeboat when it cannot come back.** After five failures in two minutes systemd hands the
+    network to `orbis-lifeboat`, a standby built into the same binary that forwards DNS without
+    filtering, serves DHCP so every device keeps its address, keeps forwarding and NAT up on a
+    gateway, and puts intercepted devices back on the real gateway. It opens no database, loads no
+    list and talks to no model. It retries Orbis on a backoff, serves a plain status page with a
+    "Start Orbis now" button on the usual address, and hands back the moment Orbis starts.
+  - **Devices go back to the real gateway.** A release step runs after every stop, clean or crash,
+    and tells intercepted devices the gateway's real address instead of leaving them pointed at a
+    dead node until their ARP cache expires.
+  - **A second resolver in every lease.** DHCP hands out this node first and a public resolver
+    second (the first public upstream, or 1.1.1.1), so a dead resolver does not read as a dead
+    internet. Nodes that are not the DHCP server are told what to put in the router instead.
+  - **Reboot a frozen board.** Opt-in. Where the board has a hardware watchdog, the setting is
+    written for systemd to arm at the next boot, never live: a frozen kernel then resets and
+    Orbis is back in about a minute. Off by default, because a watchdog is a reset button held
+    by software, and a board on a weak power supply already resets often enough.
+  - **Traffic keeps flowing through restarts.** The ruleset lives in the kernel and stays through a
+    restart or an update; only DNS and DHCP pause, and the lifeboat covers those.
+- A runbook for the case no software can cover, the box itself dying, written for the node's
+  placement: gateway, intercepting, or resolver only.
+- Assistant tools `safety_net` and `install_safety_net`.
+
 ## v1.27.2
 
 ### Changed

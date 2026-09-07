@@ -5,7 +5,7 @@
  */
 export type SettingsSection =
   | 'general' | 'dns' | 'adblock' | 'proxy' | 'firewall' | 'zones'
-  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'hosted' | 'assistant' | 'problems' | 'capture' | 'storage' | 'security' | 'about'
+  | 'dhcp' | 'vpn' | 'tailscale' | 'threats' | 'hosted' | 'assistant' | 'problems' | 'capture' | 'storage' | 'safety' | 'security' | 'about'
 
 export interface SettingsEntry { section: SettingsSection; label: string; keywords: string }
 
@@ -68,6 +68,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: 'storage', label: 'Database path and retention', keywords: 'database sqlite retention days flows events prune' },
   { section: 'security', label: 'Admin password', keywords: 'password login session sign in' },
   { section: 'security', label: 'Metrics token', keywords: 'prometheus metrics token scrape' },
+  { section: 'safety', label: 'Safety net (what happens when Orbis is down)', keywords: 'safety net crash restart watchdog lifeboat standby failover fallback dns hardware watchdog reboot runbook down outage' },
   { section: 'about', label: 'Version and diagnostics', keywords: 'version build health raw config backup restore' },
 ]
 

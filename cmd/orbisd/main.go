@@ -23,8 +23,14 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/api"
 	"github.com/Neoo-Blue/orbis/internal/app"
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/intercept"
+	"github.com/Neoo-Blue/orbis/internal/lifeboat"
 	"github.com/Neoo-Blue/orbis/internal/mcp"
+	"github.com/Neoo-Blue/orbis/internal/safety"
+	"github.com/Neoo-Blue/orbis/internal/sdnotify"
 	"github.com/Neoo-Blue/orbis/internal/update"
+	"github.com/miekg/dns"
+	"net"
 )
 
 // version is overwritten at build time with -ldflags "-X main.version=...".
@@ -38,14 +44,17 @@ var webAssets embed.FS
 
 func main() {
 	var (
-		configPath  = flag.String("config", "/etc/orbis/orbis.yaml", "path to the configuration file")
-		showVersion = flag.Bool("version", false, "print version and exit")
-		checkOnly   = flag.Bool("check", false, "validate the configuration and exit")
-		printRules  = flag.Bool("print-ruleset", false, "render the nftables ruleset to stdout and exit")
-		selfUpdate  = flag.Bool("update", false, "install the latest release from GitHub over this binary and exit")
-		mcpMode     = flag.Bool("mcp", false, "run as a Model Context Protocol server on stdin/stdout")
-		mcpWrite    = flag.Bool("mcp-write", false, "allow the MCP server to change configuration (off by default)")
-		verbose     = flag.Bool("v", false, "verbose logging")
+		configPath   = flag.String("config", "/etc/orbis/orbis.yaml", "path to the configuration file")
+		showVersion  = flag.Bool("version", false, "print version and exit")
+		checkOnly    = flag.Bool("check", false, "validate the configuration and exit")
+		printRules   = flag.Bool("print-ruleset", false, "render the nftables ruleset to stdout and exit")
+		selfUpdate   = flag.Bool("update", false, "install the latest release from GitHub over this binary and exit")
+		lifeboatMode = flag.Bool("lifeboat", false, "run the standby: unfiltered DNS, DHCP and forwarding while orbis.service is down")
+		releaseMode  = flag.Bool("release", false, "put intercepted devices back on the real gateway and exit (systemd runs this after every stop)")
+		installNet   = flag.Bool("install-safety-net", false, "write the systemd units and watchdog settings, reload systemd, and exit")
+		mcpMode      = flag.Bool("mcp", false, "run as a Model Context Protocol server on stdin/stdout")
+		mcpWrite     = flag.Bool("mcp-write", false, "allow the MCP server to change configuration (off by default)")
+		verbose      = flag.Bool("v", false, "verbose logging")
 	)
 	flag.Parse()
 
@@ -69,6 +78,10 @@ func main() {
 	logger := log.New(os.Stderr, "", log.LstdFlags|log.Lmsgprefix)
 	logf := func(format string, args ...any) {
 		logger.Printf(format, args...)
+	}
+
+	if *lifeboatMode || *releaseMode || *installNet {
+		os.Exit(runSideMode(*configPath, *lifeboatMode, *releaseMode, *installNet, logf))
 	}
 
 	cfg, err := config.Load(*configPath)
@@ -137,6 +150,12 @@ func main() {
 	}
 
 	logf("orbis %s ready, open http://%s", versionString(), cfg.API.Listen)
+	sdnotify.Ready()
+	go heartbeat(cfg, logf)
+	if ep := safety.ReadEpisode(filepath.Dir(cfg.Store.Path)); ep != nil {
+		application.NoteLifeboatEpisode(*ep)
+		_ = os.Remove(safety.EpisodePath(filepath.Dir(cfg.Store.Path)))
+	}
 	if cfg.Mode == config.ModeObserve {
 		logf("running in OBSERVE mode: nothing is routed through this node and no " +
 			"ruleset is installed. Switch to inline mode when you are ready to enforce.")
@@ -148,6 +167,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	logf("received %s, shutting down", sig)
+	sdnotify.Stopping()
 
 	done := make(chan struct{})
 	go func() {
@@ -292,5 +312,129 @@ func runSelfUpdate(configPath string) int {
 			return 0
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// heartbeat feeds systemd's watchdog, but only while the resolver answers:
+// a process that is alive and wedged is the failure the watchdog exists
+// for, and an unconditional heartbeat would hide it.
+func heartbeat(cfg *config.Config, logf func(string, ...any)) {
+	period, ok := sdnotify.WatchdogInterval()
+	if !ok {
+		return
+	}
+	every := period / 3
+	if every < 5*time.Second {
+		every = 5 * time.Second
+	}
+	logf("watchdog: systemd expects a heartbeat every %s; probing the resolver every %s", period, every)
+	failures := 0
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for range t.C {
+		c := cfg.Snapshot()
+		alive := true
+		if c.Safety.LivenessProbe {
+			alive = probeResolver(c)
+		}
+		safety.NoteProbe(alive)
+		if alive {
+			failures = 0
+			sdnotify.Watchdog()
+			continue
+		}
+		failures++
+		logf("watchdog: the resolver did not answer (%d in a row)", failures)
+		if failures < 3 {
+			// One missed probe is a busy moment; the heartbeat still goes out.
+			sdnotify.Watchdog()
+			continue
+		}
+		logf("watchdog: not answering; stopping the heartbeat so systemd restarts the service")
+		sdnotify.Status("resolver not answering; awaiting watchdog restart")
+	}
+}
+
+// probeResolver asks this node's own resolver a question and accepts any
+// answer, including a refusal, as proof of life. When DNS is off it checks
+// that the API accepts a connection instead.
+func probeResolver(c config.Config) bool {
+	if c.DNS.Enabled && len(c.DNS.Listen) > 0 {
+		addr := c.DNS.Listen[0]
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return true
+		}
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			host = "127.0.0.1"
+		}
+		m := new(dns.Msg)
+		m.SetQuestion("liveness.orbis.invalid.", dns.TypeA)
+		cl := &dns.Client{Timeout: 3 * time.Second}
+		_, _, err = cl.Exchange(m, net.JoinHostPort(host, port))
+		return err == nil
+	}
+	addr := c.API.Listen
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			host = "127.0.0.1"
+		}
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 3*time.Second)
+		if err != nil {
+			return false
+		}
+		conn.Close()
+	}
+	return true
+}
+
+// runSideMode is the safety net's other lives: the lifeboat, the release
+// step after a stop, and the unit installer.
+func runSideMode(configPath string, lifeboatMode, releaseMode, installNet bool, logf func(string, ...any)) int {
+	cfg, cfgErr := config.Load(configPath)
+	dataDir := "/var/lib/orbis"
+	if cfgErr == nil && cfg.Store.Path != "" {
+		dataDir = filepath.Dir(cfg.Store.Path)
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	switch {
+	case installNet:
+		if cfgErr != nil {
+			logf("configuration: %v (installing with defaults)", cfgErr)
+			cfg = config.Default()
+		}
+		c := cfg.Snapshot()
+		changed, err := safety.Install(ctx, safety.UnitOptions{ConfigPath: configPath, Lifeboat: c.Safety.Lifeboat, WatchdogSec: 90}, c.Safety.HardwareWatchdog, logf)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "safety net:", err)
+			return 1
+		}
+		if len(changed) == 0 {
+			fmt.Println("safety net: already up to date")
+		} else {
+			fmt.Println("safety net: wrote " + strings.Join(changed, ", "))
+		}
+		return 0
+	case releaseMode:
+		n, err := intercept.RestoreFromMarker(ctx, safety.MarkerPath(dataDir), logf)
+		if err != nil {
+			logf("release: %v", err)
+			return 0 // never fail the stop
+		}
+		if n > 0 {
+			logf("release: %d intercepted device(s) put back on the real gateway", n)
+		}
+		return 0
+	default:
+		var cp *config.Config
+		if cfgErr == nil {
+			cp = cfg
+		}
+		if err := lifeboat.Run(ctx, lifeboat.Options{Config: cp, ConfigErr: cfgErr, DataDir: dataDir, Version: versionString(), Log: logf}); err != nil {
+			logf("lifeboat: %v", err)
+			return 1
+		}
+		return 0
 	}
 }

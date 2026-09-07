@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 )
 
 // Manager owns the ARP engine and the forwarding rules together, and keeps them
@@ -20,6 +21,16 @@ type Manager struct {
 	ctx      context.Context
 	cfg      Config
 	priorFwd bool // ip_forward value before we touched it
+	// markerPath, when set, records the active takeover on disk so a crash
+	// can be cleaned up after by the release step.
+	markerPath string
+}
+
+// SetMarkerPath chooses where the takeover marker is written.
+func (m *Manager) SetMarkerPath(p string) {
+	m.mu.Lock()
+	m.markerPath = p
+	m.mu.Unlock()
 }
 
 // Config is the whole feature, resolved from the app's configuration.
@@ -101,6 +112,13 @@ func (m *Manager) Apply(ctx context.Context, cfg Config) error {
 	}
 
 	m.engine.SetTargets(cfg.Clients)
+	clients := make(map[string]string, len(cfg.Clients))
+	for _, c := range cfg.Clients {
+		clients[c.IP.String()] = c.MAC.String()
+	}
+	if err := WriteMarker(m.markerPath, Marker{Interface: cfg.LANInterface, Gateway: cfg.Gateway.String(), Clients: clients, Since: time.Now()}); err != nil {
+		m.log("intercept: could not write the takeover marker: %v", err)
+	}
 
 	addrs := make([]netip.Addr, 0, len(cfg.Clients))
 	for _, c := range cfg.Clients {
@@ -191,6 +209,7 @@ func (m *Manager) stopLocked() {
 		_ = writeForwarding(false)
 	}
 	m.running = false
+	RemoveMarker(m.markerPath)
 }
 
 // Stats returns the engine's view plus whether the manager considers itself on.

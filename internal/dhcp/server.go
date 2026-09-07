@@ -412,6 +412,19 @@ func (s *Server) applyOptions(reply *dhcpv4.DHCPv4, scope config.DHCPScope) {
 			dnsIPs = append(dnsIPs, ip)
 		}
 	}
+	// The safety net's second resolver: devices try it when this node stops
+	// answering, so a dead resolver does not read as a dead internet.
+	if fb := FallbackDNS(s.cfg.Snapshot()); fb != nil {
+		dup := false
+		for _, ip := range dnsIPs {
+			if ip.Equal(fb) {
+				dup = true
+			}
+		}
+		if !dup && len(dnsIPs) > 0 {
+			dnsIPs = append(dnsIPs, fb)
+		}
+	}
 	if len(dnsIPs) > 0 {
 		reply.UpdateOption(dhcpv4.OptDNS(dnsIPs...))
 	}
@@ -595,4 +608,41 @@ func (s *Server) StartScope(scope config.DHCPScope) (func(), error) {
 	}()
 	s.log("dhcp: serving scope %q on %s (%s-%s)", scope.Name, scope.Interface, scope.RangeStart, scope.RangeEnd)
 	return func() { _ = srv.Close() }, nil
+}
+
+// FallbackDNS resolves the safety net's second resolver from the
+// configuration: "none" for nothing, an address as given, or "auto", which
+// is the first public upstream this node forwards to (plain, DoT or DoH by
+// address), and 1.1.1.1 when there is none.
+func FallbackDNS(cfg config.Config) net.IP {
+	v := strings.TrimSpace(strings.ToLower(cfg.Safety.FallbackDNS))
+	switch v {
+	case "none", "off", "false":
+		return nil
+	case "", "auto":
+		for _, u := range cfg.DNS.Upstreams {
+			if ip := upstreamIP(u); ip != nil && !ip.IsPrivate() && !ip.IsLoopback() {
+				return ip
+			}
+		}
+		return net.ParseIP("1.1.1.1")
+	}
+	return net.ParseIP(v)
+}
+
+// upstreamIP pulls the address out of "1.1.1.1:53", "tls://9.9.9.9:853" or
+// "https://1.1.1.1/dns-query"; a hostname-only upstream yields nil.
+func upstreamIP(spec string) net.IP {
+	spec = strings.TrimSpace(spec)
+	if i := strings.Index(spec, "://"); i >= 0 {
+		spec = spec[i+3:]
+	}
+	if i := strings.Index(spec, "/"); i >= 0 {
+		spec = spec[:i]
+	}
+	if h, _, err := net.SplitHostPort(spec); err == nil {
+		spec = h
+	}
+	spec = strings.Trim(spec, "[]")
+	return net.ParseIP(spec)
 }

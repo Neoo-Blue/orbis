@@ -350,7 +350,7 @@ func (s *SmartCapture) promote(domain string, score float64, reason, by string) 
 		return
 	}
 	_ = s.st.SetCandidateStatus(domain, store.CandidateBlocked, by)
-	if err := s.mgr.Rebuild(); err != nil {
+	if err := s.mgr.RebuildLocal(); err != nil {
 		s.log("smart-capture: rebuild after promote: %v", err)
 	}
 	s.log("smart-capture: blocked %s (%.2f): %s", domain, score, reason)
@@ -387,7 +387,7 @@ func (s *SmartCapture) Decide(domain, decision, actor string) error {
 	default:
 		return fmt.Errorf("unknown decision %q", decision)
 	}
-	return s.mgr.Rebuild()
+	return s.mgr.RebuildLocal()
 }
 
 func (s *SmartCapture) buildEvidence(o *observation) DomainEvidence {

@@ -106,7 +106,7 @@ func (s *Server) handleQuickUnblock(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.app.Lists.Rebuild(); err != nil {
+	if err := s.app.Lists.RebuildLocal(); err != nil {
 		writeErr(w, http.StatusInternalServerError, "removed but reindex failed: "+err.Error())
 		return
 	}

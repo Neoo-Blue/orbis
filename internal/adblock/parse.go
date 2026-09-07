@@ -152,8 +152,19 @@ func (p *parser) line(raw string) {
 		body := strings.TrimSpace(strings.TrimPrefix(line, "local-zone:"))
 		body = strings.Trim(strings.Fields(body + " x")[0], "\"'")
 		p.addWild(body)
+	case p.looksLikeRegex(line):
+		// A Pi-hole style expression: anchored at the start or opening a group.
+		p.regexLine(line)
+	case strings.HasSuffix(line, " CNAME .") || strings.HasSuffix(line, "\tCNAME ."):
+		// RPZ, whose wildcard form starts with "*." and must not read as a URL pattern.
+		p.plainLine(line)
 	case strings.HasPrefix(line, "||"), strings.HasPrefix(line, "|"), strings.HasPrefix(line, "@@"),
-		strings.HasPrefix(line, "/"), strings.HasSuffix(line, "^"), strings.Contains(line, "^$"), strings.Contains(line, "$important"):
+		strings.HasPrefix(line, "/"), strings.HasSuffix(line, "^"), strings.Contains(line, "^$"), strings.Contains(line, "$important"),
+		strings.Contains(line, "://"), strings.Contains(line, "$"), strings.Contains(line, "|"), strings.ContainsAny(line, "*?&="):
+		// Anything with AdBlock syntax in it is a network rule, and a network
+		// rule that is not anchored to a host is a URL pattern DNS cannot
+		// honour. It must never reach the plain path, where a stray "|" or
+		// "*" would read as a regular expression.
 		p.abpLine(line)
 	default:
 		p.plainLine(line)
@@ -201,7 +212,7 @@ func (p *parser) plainLine(line string) {
 			p.regexLine(line)
 			return
 		}
-		p.skip("invalid")
+		p.skip("not-dns")
 		return
 	}
 	host := fields[0]
@@ -220,7 +231,7 @@ func (p *parser) plainLine(line string) {
 	case p.looksLikeRegex(host):
 		p.regexLine(host)
 	default:
-		p.skip("invalid")
+		p.skip("not-dns")
 	}
 }
 
@@ -270,22 +281,27 @@ func (p *parser) abpLine(line string) {
 	switch {
 	case pattern == "":
 		p.skip("invalid")
-	case strings.ContainsAny(pattern, "/^"):
+	case strings.ContainsAny(pattern, "/^|?&=:"):
 		p.skip("path")
 	case strings.Contains(pattern, "*"):
 		if strings.HasPrefix(pattern, "*.") && !strings.Contains(pattern[2:], "*") {
 			p.addWild(pattern[2:])
 			return
 		}
-		body := strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*")
-		if anchored {
-			p.addRegex(`^(.*\.)?` + body + "$")
-		} else {
-			p.addRegex("^" + body + "$")
+		if !anchored {
+			// "ads*.gif" is a URL substring rule, not a hostname.
+			p.skip("url-pattern")
+			return
 		}
+		body := strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, "[^.]*")
+		p.addRegex(`^(.*\.)?` + body + "$")
 	case anchored:
 		p.addWild(pattern)
 	default:
+		if normalize(pattern) == "" {
+			p.skip("url-pattern")
+			return
+		}
 		if p.abp && !strings.HasPrefix(rule, "|") {
 			p.addWild(pattern)
 		} else {
@@ -373,8 +389,16 @@ func (p *parser) regexLine(line string) {
 	p.addRegex(pat)
 }
 
+// looksLikeRegex accepts what a Pi-hole regex list holds: an expression
+// anchored at the start or opening a group, the shapes "(\.|^)ads\." and
+// "^ad[0-9]+\." take. A bare token that merely contains an odd character
+// is not a regex; it is a URL pattern or a typo, and treating it as a
+// pattern is how an empty alternation once blocked every name.
 func (p *parser) looksLikeRegex(s string) bool {
-	return strings.ContainsAny(s, `^$()[]|\+?{}`) || strings.Contains(s, ".*")
+	if strings.ContainsAny(s, " \t") {
+		return false
+	}
+	return strings.HasPrefix(s, "^") || strings.HasPrefix(s, "(")
 }
 
 func (p *parser) addExact(host string) {
@@ -417,8 +441,13 @@ func (p *parser) addRegex(pat string) {
 		p.skip("invalid")
 		return
 	}
-	if _, err := compileRegex(pat); err != nil {
+	re, err := compileRegex(pat)
+	if err != nil {
 		p.skip("bad-regex")
+		return
+	}
+	if TooBroad(re) {
+		p.skip("broad-regex")
 		return
 	}
 	if p.lineOpts.allow {
@@ -496,6 +525,18 @@ func isHostsNoise(h string) bool {
 	case "localhost", "localhost.localdomain", "local", "broadcasthost", "ip6-localhost",
 		"ip6-loopback", "ip6-localnet", "ip6-mcastprefix", "ip6-allnodes", "ip6-allrouters", "ip6-allhosts", "0.0.0.0":
 		return true
+	}
+	return false
+}
+
+// TooBroad rejects a pattern that would match ordinary names. A list
+// entry has no business matching example.com, and one that does is a
+// parse artefact or a typo that would take the network offline.
+func TooBroad(re *compiledRegex) bool {
+	for _, probe := range []string{"example.com", "www.example.org", "a.b", "orbis.invalid"} {
+		if re.MatchString(probe) {
+			return true
+		}
 	}
 	return false
 }

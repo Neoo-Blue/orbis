@@ -3,6 +3,28 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.28.1
+
+### Fixed
+- **Every name was being blocked.** The v1.27.0 parser turned URL-pattern rules from AdBlock
+  lists into regular expressions. One EasyPrivacy rule ending in a bare `|` became an empty
+  alternation that matched every hostname, and the resolver sinkholed the whole network. Lines
+  with AdBlock syntax now never reach the regex path, unanchored patterns with wildcards are
+  skipped as URL patterns, and any list regex that matches an ordinary name such as example.com
+  is rejected both when parsing and when building the index.
+- **The index was rebuilt on every rule change.** Each discovered ad host, quick allow or block
+  rebuilt all six million list entries from the database, taking a core for a minute and a
+  second copy of the index in memory. The operator's rules and the configuration's overrides now
+  live in a small overlay checked first; a rule change rebuilds only that, and full rebuilds that
+  arrive while one is running are coalesced.
+- **Allows cover subdomains.** Allowing a site allows its hostnames too, which is what breaks a
+  site and what a person means.
+
+### Changed
+- The Domain tester names the list that blocked or excepted a name, instead of "list".
+- The service unit caps the daemon at two cores' worth of CPU, so a rebuild or a scan cannot pin
+  a small board's whole processor: peak draw is what browns out a Raspberry Pi on a weak supply.
+
 ## v1.28.0
 
 ### Added

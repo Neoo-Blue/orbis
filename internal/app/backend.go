@@ -268,7 +268,7 @@ func (a *App) BlockDomain(domain string, wildcard bool, note string) error {
 	}); err != nil {
 		return err
 	}
-	if err := a.Lists.Rebuild(); err != nil {
+	if err := a.Lists.RebuildLocal(); err != nil {
 		return err
 	}
 	a.Store.Audit("api", "domain.block", domain, "", note, "ok")
@@ -281,12 +281,14 @@ func (a *App) AllowDomain(domain, note string) error {
 	if domain == "" {
 		return fmt.Errorf("domain is required")
 	}
+	// An allow covers the name and everything under it: the thing that
+	// breaks a site is almost always a subdomain nobody typed.
 	if err := a.Store.SaveLocalRule(store.LocalRule{
-		Domain: domain, Action: "allow", Wildcard: false, Origin: "user", Note: note,
+		Domain: domain, Action: "allow", Wildcard: true, Origin: "user", Note: note,
 	}); err != nil {
 		return err
 	}
-	if err := a.Lists.Rebuild(); err != nil {
+	if err := a.Lists.RebuildLocal(); err != nil {
 		return err
 	}
 	a.Store.Audit("api", "domain.allow", domain, "", note, "ok")
@@ -1594,7 +1596,7 @@ func (a *App) UnblockDomain(domain string) error {
 	if err := a.Store.DeleteLocalRule(domain); err != nil {
 		return err
 	}
-	return a.Lists.Rebuild()
+	return a.Lists.RebuildLocal()
 }
 
 // IntelStatus is the threat-intelligence page's view.

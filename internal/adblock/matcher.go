@@ -5,6 +5,7 @@
 package adblock
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,10 @@ type Match struct {
 // swaps it in.
 type Matcher struct {
 	idx atomic.Pointer[index]
+	// overlay holds the operator's own rules and the configuration's
+	// overrides. It is tiny and rebuilt in microseconds, so a rule change
+	// never touches the millions of list entries in idx.
+	overlay atomic.Pointer[index]
 
 	// buildMu serialises rebuilds so two concurrent list refreshes cannot
 	// interleave into a half-built index.
@@ -70,16 +75,21 @@ type regexEntry struct {
 
 // allowEntry records whether the exception is the operator's own (local)
 // or came from a subscribed list.
-type allowEntry struct{ local bool }
+type allowEntry struct {
+	local  bool
+	source string // the list the exception came from; empty for the operator's own
+}
 
 type allowRegex struct {
-	re    *compiledRegex
-	local bool
+	re     *compiledRegex
+	local  bool
+	source string
 }
 
 func New() *Matcher {
 	m := &Matcher{}
 	m.idx.Store(newIndex())
+	m.overlay.Store(newIndex())
 	return m
 }
 
@@ -128,23 +138,23 @@ func (b *Builder) AddBlockImportant(domain, source, category string, wildcard, i
 
 // AddAllow adds the operator's own exception, which beats everything.
 func (b *Builder) AddAllow(domain string, wildcard bool) {
-	b.AddAllowFrom(domain, wildcard, true)
+	b.AddAllowFrom(domain, wildcard, true, "")
 }
 
-// AddAllowFrom adds an exception; local false means it came from a list and
-// yields to blocks marked important.
-func (b *Builder) AddAllowFrom(domain string, wildcard, local bool) {
+// AddAllowFrom adds an exception; local false means it came from the named
+// list and yields to blocks marked important.
+func (b *Builder) AddAllowFrom(domain string, wildcard, local bool, source string) {
 	d := normalize(domain)
 	if d == "" {
 		return
 	}
 	if wildcard {
 		if old, ok := b.idx.allowWildcard[d]; !ok || !old.local {
-			b.idx.allowWildcard[d] = allowEntry{local: local}
+			b.idx.allowWildcard[d] = allowEntry{local: local, source: source}
 		}
 	} else {
 		if old, ok := b.idx.allowExact[d]; !ok || !old.local {
-			b.idx.allowExact[d] = allowEntry{local: local}
+			b.idx.allowExact[d] = allowEntry{local: local, source: source}
 		}
 	}
 }
@@ -158,18 +168,24 @@ func (b *Builder) AddRegexImportant(pattern, source, category string, important 
 	if err != nil {
 		return err
 	}
+	if !isLocalSource(source) && TooBroad(re) {
+		return fmt.Errorf("pattern matches ordinary names")
+	}
 	b.idx.regexes = append(b.idx.regexes, regexEntry{re: re, source: source, category: category, important: important})
 	b.idx.count++
 	return nil
 }
 
 // AddAllowRegex adds an exception pattern.
-func (b *Builder) AddAllowRegex(pattern string, local bool) error {
+func (b *Builder) AddAllowRegex(pattern string, local bool, source string) error {
 	re, err := compileRegex(pattern)
 	if err != nil {
 		return err
 	}
-	b.idx.allowRegexes = append(b.idx.allowRegexes, allowRegex{re: re, local: local})
+	if !local && TooBroad(re) {
+		return fmt.Errorf("pattern matches ordinary names")
+	}
+	b.idx.allowRegexes = append(b.idx.allowRegexes, allowRegex{re: re, local: local, source: source})
 	return nil
 }
 
@@ -183,6 +199,14 @@ func (m *Matcher) Commit(b *Builder) {
 	m.buildMu.Unlock()
 }
 
+// CommitOverlay publishes the operator's rules. Anything here is checked
+// before the lists and is authoritative either way.
+func (m *Matcher) CommitOverlay(b *Builder) {
+	m.buildMu.Lock()
+	m.overlay.Store(b.idx)
+	m.buildMu.Unlock()
+}
+
 // Lookup walks the label hierarchy from most to least specific:
 // "a.b.doubleclick.net" tests a.b.doubleclick.net, b.doubleclick.net,
 // doubleclick.net, net. Exact entries only match the full name; wildcard
@@ -193,12 +217,26 @@ func (m *Matcher) Lookup(domain string) Match {
 	if d == "" {
 		return Match{}
 	}
-	idx := m.idx.Load()
+	// The operator's own rules first: an allow or a block there settles it.
+	if r, ok := lookupIn(m.overlay.Load(), d); ok {
+		m.hits.Add(1)
+		return r
+	}
+	if r, ok := lookupIn(m.idx.Load(), d); ok {
+		m.hits.Add(1)
+		return r
+	}
+	m.misses.Add(1)
+	return Match{}
+}
 
+// lookupIn resolves one name against one index; ok is false when nothing
+// in it applies.
+func lookupIn(idx *index, d string) (Match, bool) {
 	var allow *Match
 	var allowLocal bool
 	if a, ok := idx.allowExact[d]; ok {
-		allow, allowLocal = &Match{Allowed: true, Source: "allowlist", Rule: d}, a.local
+		allow, allowLocal = &Match{Allowed: true, Source: allowSource(a.local, a.source), Rule: d}, a.local
 	}
 
 	var block *Match
@@ -207,7 +245,7 @@ func (m *Matcher) Lookup(domain string) Match {
 	for {
 		if allow == nil {
 			if a, ok := idx.allowWildcard[name]; ok {
-				allow, allowLocal = &Match{Allowed: true, Source: "allowlist", Rule: "*." + name}, a.local
+				allow, allowLocal = &Match{Allowed: true, Source: allowSource(a.local, a.source), Rule: "*." + name}, a.local
 			}
 		}
 		if block == nil && first {
@@ -245,7 +283,7 @@ func (m *Matcher) Lookup(domain string) Match {
 	if allow == nil {
 		for _, r := range idx.allowRegexes {
 			if r.re.MatchString(d) {
-				allow, allowLocal = &Match{Allowed: true, Source: "allowlist", Rule: "/" + r.re.pattern + "/"}, r.local
+				allow, allowLocal = &Match{Allowed: true, Source: allowSource(r.local, r.source), Rule: "/" + r.re.pattern + "/"}, r.local
 				break
 			}
 		}
@@ -253,14 +291,11 @@ func (m *Matcher) Lookup(domain string) Match {
 
 	switch {
 	case allow != nil && (allowLocal || block == nil || !block.Important):
-		m.hits.Add(1)
-		return *allow
+		return *allow, true
 	case block != nil:
-		m.hits.Add(1)
-		return *block
+		return *block, true
 	}
-	m.misses.Add(1)
-	return Match{}
+	return Match{}, false
 }
 
 // LookupChain applies the matcher to a full CNAME chain. First-party CNAME
@@ -280,7 +315,7 @@ func (m *Matcher) LookupChain(names []string) Match {
 }
 
 func (m *Matcher) Count() int {
-	return m.idx.Load().count
+	return m.idx.Load().count + m.overlay.Load().count
 }
 
 func (m *Matcher) Stats() (hits, misses int64) {
@@ -324,4 +359,13 @@ func isAllDigitsAndDots(s string) bool {
 		}
 	}
 	return true
+}
+
+// allowSource names where an exception came from: the operator's own
+// allowlist, or the list that carried it.
+func allowSource(local bool, source string) string {
+	if local || source == "" {
+		return "allowlist"
+	}
+	return "exception:" + source
 }

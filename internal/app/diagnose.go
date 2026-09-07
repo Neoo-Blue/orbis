@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,18 +151,22 @@ func (a *App) DiagnoseDomain(ctx context.Context, domain, clientID string, resol
 	match := a.Matcher.Lookup(name)
 	switch {
 	case match.Allowed:
+		detail, why := "On your allowlist, which wins over every subscription.", "Explicitly allowed by your own rule."
+		if list, ok := strings.CutPrefix(match.Source, "exception:"); ok {
+			detail = fmt.Sprintf("An exception in %s lets it through; a block marked important in another list could still win.", list)
+			why = "Allowed by an exception in " + list + "."
+		}
 		steps = append(steps, DiagnoseStep{
 			Stage: "Allowlist", Hit: true, Verdict: "allow",
-			Detail: "On your allowlist, which wins over every subscription.",
-			Rule:   match.Rule, Source: match.Source,
+			Detail: detail, Rule: match.Rule, Source: match.Source,
 		})
 		if final != "block" {
-			final, reason = "allow", "Explicitly allowed by your own rule."
+			final, reason = "allow", why
 		}
 	case match.Blocked:
 		steps = append(steps, DiagnoseStep{
 			Stage: "Blocklist", Hit: true, Verdict: "block",
-			Detail: fmt.Sprintf("Matched %q from %s.", match.Rule, match.Source),
+			Detail: fmt.Sprintf("Matched %q in %s.", match.Rule, describeSource(match.Source)),
 			Rule:   match.Rule, Source: match.Source,
 		})
 		if final != "block" {
@@ -264,4 +269,22 @@ func domainGlobMatch(name, pattern string) bool {
 		return n == base || strings.HasSuffix(n, "."+base)
 	}
 	return n == p
+}
+
+// describeSource turns a match source into words: the list's name, the
+// operator's own rule, or a built-in set.
+func describeSource(src string) string {
+	switch {
+	case strings.HasPrefix(src, "local:"):
+		return "your own rules (" + strings.TrimPrefix(src, "local:") + ")"
+	case src == "config":
+		return "the configuration's deny list"
+	case src == "builtin:doh-bypass":
+		return "the built-in DNS-bypass set"
+	case src == "builtin:streaming-ads":
+		return "the built-in streaming-ads set"
+	case src == "list", src == "":
+		return "a subscribed list"
+	}
+	return "the list " + strconv.Quote(src)
 }

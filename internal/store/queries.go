@@ -291,20 +291,26 @@ func (s *Store) DeleteList(name string) error {
 
 // AllBlockDomains streams every enabled list's entries for index rebuilds:
 // kind is one of the Entry constants, important marks $important rules.
-func (s *Store) AllBlockDomains(fn func(domain, category string, kind int, important bool)) error {
-	rows, err := s.db.Query(`SELECT b.domain, COALESCE(b.category,''), b.wildcard, COALESCE(b.important,0)
-		FROM block_domains b JOIN list_meta m ON m.name = b.source WHERE m.enabled = 1`)
+func (s *Store) AllBlockDomains(fn func(domain, source, category string, kind int, important bool)) error {
+	rows, err := s.db.Query(`SELECT b.domain, b.source, COALESCE(b.category,''), b.wildcard, COALESCE(b.important,0)
+		FROM block_domains b JOIN list_meta m ON m.name = b.source WHERE m.enabled = 1 ORDER BY b.source`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+	// One string per list, not one per row: six million copies of a name
+	// would be most of the index.
+	var lastSrc, src string
 	for rows.Next() {
 		var d, c string
 		var k, imp int
-		if err := rows.Scan(&d, &c, &k, &imp); err != nil {
+		if err := rows.Scan(&d, &src, &c, &k, &imp); err != nil {
 			return err
 		}
-		fn(d, c, k, imp != 0)
+		if src != lastSrc {
+			lastSrc = src
+		}
+		fn(d, lastSrc, c, k, imp != 0)
 	}
 	return rows.Err()
 }

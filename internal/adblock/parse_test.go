@@ -31,6 +31,10 @@ func TestParseAdGuardSyntax(t *testing.T) {
 ||popup.example^$dnsrewrite=ad-block.dns.adguard.com
 ||page.example^$third-party
 ||path.example.com/ads^
+://plausible.*/api/event|
+_track_pixel.gif?
+_view_pixel&$image
+ads*.gif
 example.com##.banner
 bare.example
 |exact.example^
@@ -61,7 +65,7 @@ bare.example
 	if len(e.Regex) != 2 {
 		t.Errorf("want 2 regexes (wildcard rule + /re/), got %v", e.Regex)
 	}
-	for _, r := range []string{"dnstype", "client", "rewrite", "not-dns", "path", "cosmetic"} {
+	for _, r := range []string{"dnstype", "client", "rewrite", "not-dns", "path", "cosmetic", "url-pattern"} {
 		if e.Skipped[r] == 0 {
 			t.Errorf("expected a skipped %s entry: %v", r, e.Skipped)
 		}
@@ -138,11 +142,11 @@ func TestMatcherImportantAndListExceptions(t *testing.T) {
 	b := NewBuilder()
 	b.AddBlockImportant("tracker.example", "list", "ads", true, true)
 	b.AddBlock("ads.example", "list", "ads", true)
-	b.AddAllowFrom("ads.example", true, false)     // a list exception
-	b.AddAllowFrom("tracker.example", true, false) // a list exception that must lose to $important
-	b.AddAllow("mine.example", false)              // the operator's own
+	b.AddAllowFrom("ads.example", true, false, "l")     // a list exception
+	b.AddAllowFrom("tracker.example", true, false, "l") // a list exception that must lose to $important
+	b.AddAllow("mine.example", false)                   // the operator's own
 	b.AddBlockImportant("mine.example", "list", "ads", false, true)
-	if err := b.AddAllowRegex(`^ok[0-9]+\.example$`, false); err != nil {
+	if err := b.AddAllowRegex(`^ok[0-9]+\.example$`, false, "l"); err != nil {
 		t.Fatal(err)
 	}
 	b.AddBlock("example", "list", "ads", true)
@@ -175,6 +179,23 @@ func TestProtected(t *testing.T) {
 	for _, d := range []string{"malware-c2.evil-example.xyz", "tracking.bad-adnetwork.com"} {
 		if ok, why := Protected(d); ok {
 			t.Errorf("%s should not be protected (%s)", d, why)
+		}
+	}
+}
+
+func TestNoRegexMatchesEverything(t *testing.T) {
+	input := "://plausible.*/api/event|\n_track_pixel.gif?\n.*\n^.*$\n(.*)\n^(.*\\.)?ads\\.example$\n"
+	e, err := Parse(strings.NewReader(input), ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Regex) != 1 || e.Regex[0] != `^(.*\.)?ads\.example$` {
+		t.Errorf("only the anchored ads regex should survive, got %v (skipped %v)", e.Regex, e.Skipped)
+	}
+	for _, pat := range e.Regex {
+		re, _ := compileRegex(pat)
+		if re.MatchString("google.com") {
+			t.Errorf("%q matches google.com", pat)
 		}
 	}
 }

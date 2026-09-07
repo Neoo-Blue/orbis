@@ -152,7 +152,7 @@ func (s *Server) handleImportList(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	if n > 0 {
-		if err := s.app.Lists.Rebuild(); err != nil {
+		if err := s.app.Lists.RebuildLocal(); err != nil {
 			writeErr(w, http.StatusInternalServerError, "imported but reindex failed: "+err.Error())
 			return
 		}

@@ -25,10 +25,12 @@ type Manager struct {
 	client  *http.Client
 	log     func(string, ...any)
 
-	mu        sync.Mutex
-	updating  bool
-	lastBuild time.Time
-	lastCount int
+	mu           sync.Mutex
+	updating     bool
+	lastBuild    time.Time
+	lastCount    int
+	rebuilding   bool
+	rebuildAgain bool
 }
 
 func NewManager(st *store.Store, m *Matcher, cfg *config.Config, log func(string, ...any)) *Manager {
@@ -223,27 +225,52 @@ func skippedSummary(sk map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
-// Rebuild reconstructs the in-memory index from the database. Called after a
-// list refresh and whenever local rules change.
+// Rebuild reconstructs the list index from the database. It is the
+// expensive path (millions of entries), so it is called only when the
+// lists themselves change; a rule change goes through RebuildLocal. Calls
+// that arrive while one is running are coalesced into a single follow-up.
 func (m *Manager) Rebuild() error {
+	m.mu.Lock()
+	if m.rebuilding {
+		m.rebuildAgain = true
+		m.mu.Unlock()
+		return nil
+	}
+	m.rebuilding = true
+	m.mu.Unlock()
+	for {
+		err := m.rebuildLists()
+		m.mu.Lock()
+		again := m.rebuildAgain
+		m.rebuildAgain = false
+		if !again {
+			m.rebuilding = false
+			m.mu.Unlock()
+			return err
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) rebuildLists() error {
 	b := NewBuilder()
 	badRegex := 0
-	if err := m.st.AllBlockDomains(func(domain, category string, kind int, important bool) {
+	if err := m.st.AllBlockDomains(func(domain, source, category string, kind int, important bool) {
 		switch kind {
 		case store.EntryExact:
-			b.AddBlockImportant(domain, "list", category, false, important)
+			b.AddBlockImportant(domain, source, category, false, important)
 		case store.EntryWildcard:
-			b.AddBlockImportant(domain, "list", category, true, important)
+			b.AddBlockImportant(domain, source, category, true, important)
 		case store.EntryRegex:
-			if err := b.AddRegexImportant(domain, "list", category, important); err != nil {
+			if err := b.AddRegexImportant(domain, source, category, important); err != nil {
 				badRegex++
 			}
 		case store.EntryAllowExact:
-			b.AddAllowFrom(domain, false, false)
+			b.AddAllowFrom(domain, false, false, source)
 		case store.EntryAllowWildcard:
-			b.AddAllowFrom(domain, true, false)
+			b.AddAllowFrom(domain, true, false, source)
 		case store.EntryAllowRegex:
-			if err := b.AddAllowRegex(domain, false); err != nil {
+			if err := b.AddAllowRegex(domain, false, source); err != nil {
 				badRegex++
 			}
 		}
@@ -251,41 +278,10 @@ func (m *Manager) Rebuild() error {
 		return err
 	}
 	if badRegex > 0 {
-		m.log("adblock: %d list regex entries did not compile and were skipped", badRegex)
+		m.log("adblock: %d list regex entries were rejected (invalid or matching ordinary names)", badRegex)
 	}
 
-	// Config-level overrides come next.
 	cfg := m.cfg.Snapshot()
-	for _, d := range cfg.AdBlock.Denylist {
-		b.AddBlock(d, "config", "manual", strings.HasPrefix(d, "*."))
-	}
-	for _, d := range cfg.AdBlock.Allowlist {
-		b.AddAllow(d, strings.HasPrefix(d, "*."))
-	}
-
-	// Local rules (UI, assistant, smart capture) are authoritative and are
-	// applied last so they can override a subscribed list either way.
-	local, err := m.st.LocalRules()
-	if err != nil {
-		return err
-	}
-	for _, r := range local {
-		switch {
-		case r.Regex && r.Action == "allow":
-			if err := b.AddAllowRegex(r.Domain, true); err != nil {
-				m.log("adblock: local allow pattern %q: %v", r.Domain, err)
-			}
-		case r.Regex:
-			if err := b.AddRegex(r.Domain, "local:"+r.Origin, "manual"); err != nil {
-				m.log("adblock: local block pattern %q: %v", r.Domain, err)
-			}
-		case r.Action == "allow":
-			b.AddAllow(r.Domain, r.Wildcard)
-		default:
-			b.AddBlock(r.Domain, "local:"+r.Origin, "manual", r.Wildcard)
-		}
-	}
-
 	if cfg.AdBlock.BlockDNSBypass {
 		for _, d := range dohBypassDomains {
 			b.AddBlock(d, "builtin:doh-bypass", "bypass", true)
@@ -303,6 +299,44 @@ func (m *Manager) Rebuild() error {
 	m.lastCount = b.Count()
 	m.mu.Unlock()
 	m.log("adblock: index rebuilt, %d entries", b.Count())
+	return m.RebuildLocal()
+}
+
+// RebuildLocal republishes the operator's rules and the configuration's
+// overrides as the overlay. It reads a few hundred rows at most and is
+// what every rule change calls; the lists are untouched.
+func (m *Manager) RebuildLocal() error {
+	b := NewBuilder()
+	cfg := m.cfg.Snapshot()
+	for _, d := range cfg.AdBlock.Denylist {
+		b.AddBlock(d, "config", "manual", strings.HasPrefix(d, "*."))
+	}
+	for _, d := range cfg.AdBlock.Allowlist {
+		b.AddAllow(d, strings.HasPrefix(d, "*."))
+	}
+	local, err := m.st.LocalRules()
+	if err != nil {
+		return err
+	}
+	for _, r := range local {
+		switch {
+		case r.Regex && r.Action == "allow":
+			if err := b.AddAllowRegex(r.Domain, true, ""); err != nil {
+				m.log("adblock: local allow pattern %q: %v", r.Domain, err)
+			}
+		case r.Regex:
+			if err := b.AddRegex(r.Domain, "local:"+r.Origin, "manual"); err != nil {
+				m.log("adblock: local block pattern %q: %v", r.Domain, err)
+			}
+		case r.Action == "allow":
+			// An allow always covers subdomains: the operator allowed a
+			// site, and a site is its hostnames.
+			b.AddAllow(r.Domain, true)
+		default:
+			b.AddBlock(r.Domain, "local:"+r.Origin, "manual", r.Wildcard)
+		}
+	}
+	m.matcher.CommitOverlay(b)
 	return nil
 }
 

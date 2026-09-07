@@ -3,6 +3,13 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.28.4
+
+### Changed
+- The in-stream filter proxy now logs why a client's connection was passed through or why its
+  handshake failed, once per client and host every five minutes, so a device that will not accept
+  filtering can be understood from the journal instead of guessed at.
+
 ## v1.28.3
 
 ### Fixed

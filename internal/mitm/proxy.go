@@ -67,6 +67,9 @@ type Proxy struct {
 	// spliceLog keeps pass-through failures visible without letting a
 	// broken client flood the journal.
 	spliceLog rateLog
+
+	noteMu sync.Mutex
+	notes  map[string]time.Time
 }
 
 // spliceFallback returns the name-based IPv4 target to try when the literal
@@ -155,6 +158,28 @@ type Stats struct {
 	Errors         atomic.Int64
 	BytesIn        atomic.Int64
 	BytesOut       atomic.Int64
+}
+
+// note logs one line per (client, key) every few minutes: enough to see
+// what a device is doing without a line per connection.
+func (p *Proxy) note(client netip.Addr, key string, format string, args ...any) {
+	p.noteMu.Lock()
+	if p.notes == nil {
+		p.notes = map[string]time.Time{}
+	}
+	k := client.String() + "|" + key
+	last, seen := p.notes[k]
+	now := time.Now()
+	if seen && now.Sub(last) < 5*time.Minute {
+		p.noteMu.Unlock()
+		return
+	}
+	p.notes[k] = now
+	if len(p.notes) > 2000 {
+		p.notes = map[string]time.Time{k: now}
+	}
+	p.noteMu.Unlock()
+	p.log(format, args...)
 }
 
 // SetPinStore restores persisted pinned-app bypasses and saves new ones.
@@ -331,6 +356,7 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 		// Not TLS, or a truncated hello. Splice to the original destination
 		// rather than dropping: this path must never break a protocol we
 		// simply did not recognise.
+		p.note(clientAddr(client), "peek:"+origDst, "mitm: %s -> %s: could not read a ClientHello (%v); passing through", clientAddr(client), origDst, err)
 		p.splice(ctx, client, origDst, peeked, "")
 		return
 	}
@@ -339,6 +365,7 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 	if host == "" {
 		// No SNI: fall back to the destination address. Cannot mint a valid
 		// certificate for an unknown name, so splice.
+		p.note(clientAddr(client), "nosni:"+origDst, "mitm: %s -> %s: ClientHello without a server name (encrypted hello?); passing through", clientAddr(client), origDst)
 		p.splice(ctx, client, origDst, peeked, "")
 		return
 	}
@@ -385,7 +412,11 @@ func (p *Proxy) handleTLS(ctx context.Context, client net.Conn) {
 				p.log("mitm: %s rejects the certificate for %s (%v); splicing %s for %s. "+
 					"A pinned app, or the CA is not trusted on that device.",
 					clientIP, host, err, name, pinBypassFor)
+			} else {
+				p.note(clientIP, "hs:"+host, "mitm: %s rejected the certificate for %s (%v); counting", clientIP, host, err)
 			}
+		} else {
+			p.note(clientIP, "hsx:"+host, "mitm: handshake with %s for %s failed (%v); not counted as a rejection", clientIP, host, err)
 		}
 		return
 	}

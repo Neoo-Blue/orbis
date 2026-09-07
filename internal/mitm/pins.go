@@ -154,6 +154,9 @@ func (t *pinTracker) fail(client netip.Addr, host string, now time.Time) (string
 // certificate finish in milliseconds; only a client that decided not to
 // continue leaves the handshake hanging.
 func handshakeRejected(err error) bool {
+	if err == nil {
+		return false
+	}
 	if rejectedCertificate(err) {
 		return true
 	}
@@ -161,7 +164,21 @@ func handshakeRejected(err error) bool {
 	if errors.As(err, &ne) && ne.Timeout() {
 		return true
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "i/o timeout")
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "i/o timeout") {
+		return true
+	}
+	// The client had already sent its ClientHello, so by now it has seen our
+	// certificate. Hanging up at this point, with or without an alert, is
+	// how a pinned app on Android answers: an abrupt close, a reset, no
+	// words. Count it. The thresholds keep a one-off network blip from
+	// tripping a bypass; two closes on one host in five minutes is a verdict.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		strings.Contains(msg, "connection reset") || strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "eof") {
+		return true
+	}
+	return false
 }
 
 // pinKeys returns the exact-host key and, when the host has a parent

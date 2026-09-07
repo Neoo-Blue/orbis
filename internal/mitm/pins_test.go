@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"testing"
@@ -175,5 +176,16 @@ func TestBypassPersistsThroughStore(t *testing.T) {
 	}
 	if !fresh.bypassed(c, "youtubei.googleapis.com", now.Add(3*time.Second)) {
 		t.Fatal("restored tracker should bypass the host")
+	}
+}
+
+func TestHandshakeRejectedCountsAbruptCloses(t *testing.T) {
+	for _, err := range []error{io.EOF, io.ErrUnexpectedEOF, errors.New("read tcp 1.2.3.4:443: read: connection reset by peer"), errors.New("write: broken pipe")} {
+		if !handshakeRejected(err) {
+			t.Errorf("%v should count as a rejection", err)
+		}
+	}
+	if handshakeRejected(nil) || handshakeRejected(context.Canceled) {
+		t.Errorf("nil and cancellation are not rejections")
 	}
 }

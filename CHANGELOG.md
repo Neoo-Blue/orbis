@@ -3,6 +3,15 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.28.3
+
+### Fixed
+- **Pinned mobile apps behind the in-stream filter.** The YouTube app on a phone that is a
+  filter client closes the connection the moment it sees the proxy's certificate, without a TLS
+  alert. The proxy only counted alerts and silence as rejections, so the bypass never tripped and
+  every thumbnail request failed the same way. An abrupt close or reset after the certificate now
+  counts too; two on one host within five minutes splice that host through for a day, as before.
+
 ## v1.28.2
 
 ### Fixed

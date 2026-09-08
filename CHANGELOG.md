@@ -3,6 +3,20 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.28.6
+
+### Fixed
+- **The sponsor skip could jump the viewer forward after an ad.** The playhead is worked out
+  between the player's reports by adding the time that has passed, and the content does not
+  advance while an ad is on screen. A pod of ads was being added to the position all the same,
+  so the first check after the ads saw a playhead a pod's length ahead of the viewer and seeked
+  past a sponsor segment they had not reached yet.
+- A television that has been playing quietly sends one report on connect, naming the video and
+  giving the position together. The position was being filed under the video that came before it
+  and discarded with it, so an unskippable ad on such a set was never reloaded past.
+- Some televisions report the ad as the video they are playing. That was read as the viewer
+  moving to another video, which threw away the position the reload needs.
+
 ## v1.28.5
 
 ### Fixed

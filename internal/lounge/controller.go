@@ -389,19 +389,24 @@ func (c *Controller) handleEvent(ev event) {
 		// zero, which a television emits between the ads of a pod -- would
 		// poison the place the content is resumed at after a reload and the
 		// sponsor-segment tracking.
+		// Name the video before reading a position out of the same event. The
+		// other way round the position is filed under the video that came
+		// before and thrown away with it, so a television whose only content
+		// report is the one naming the video -- the reply to getNowPlaying on
+		// connect -- would never have a position to resume from.
+		if vid != "" && !c.isAdVideo(vid) {
+			c.onVideo(vid)
+		}
 		if t, ok := asFloat(obj["currentTime"]); ok && !aboutAd && state != "-1" &&
 			!c.adOnScreen() && !(t == 0 && dur == 0) {
 			c.updatePosition(t, state == "1")
 		}
 		c.noteContentDuration(state, dur)
-		if vid != "" {
-			c.onVideo(vid)
-		}
 	case "onVideoQualityChanged", "onSubtitlesTrackChanged":
 		// On a television nowPlaying often carries only a playlist id; these
 		// are the events that reliably name the video, which is what the
 		// SponsorBlock lookup needs.
-		if vid := asString(ev.object()["videoId"]); vid != "" {
+		if vid := asString(ev.object()["videoId"]); vid != "" && !c.isAdVideo(vid) {
 			c.onVideo(vid)
 		}
 	case "onAdStateChange":
@@ -893,6 +898,11 @@ func (c *Controller) closeAd(reason string, restore bool) {
 	if len(c.stats.Recent) > maxRecent {
 		c.stats.Recent = c.stats.Recent[:maxRecent]
 	}
+	// The content stood still while the ad was on screen, so the playhead is
+	// still where the last content report left it. Interpolation restarts
+	// from now; carrying the old mark forward would add the whole pod to the
+	// position and seek the viewer past a sponsor segment they never reached.
+	c.lastWall = c.now()
 	attempts := c.adTries
 	c.adTries = 0
 	c.adDur = 0
@@ -970,6 +980,16 @@ func (c *Controller) adOnScreen() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.adActive
+}
+
+// isAdVideo reports whether videoID names the ad on screen rather than the
+// content. Some televisions report the ad as the video they are playing; that
+// is the ad naming itself, not the viewer moving to another video, and taking
+// it for one would throw away everything known about the content.
+func (c *Controller) isAdVideo(videoID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.adActive && c.adID != "" && videoID == c.adID
 }
 
 func (c *Controller) currentPos() (pos float64, playing, adActive bool) {

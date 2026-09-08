@@ -703,3 +703,63 @@ func TestBareLoadTransitionDoesNotEraseTheContentPosition(t *testing.T) {
 		t.Fatalf("reload should resume at 301s; got %+v", cmd.args)
 	}
 }
+
+// The reply to getNowPlaying on connect names the video and gives the
+// position in one event, and on a set that has been playing quietly for
+// minutes it is the only content report there is. Reading the position out
+// of it before the video is named files it under the previous video and
+// throws it away, leaving nothing to resume from.
+func TestPositionArrivingWithItsVideoIsKept(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, ReloadUnskippable: true})
+	c.handleEvent(ev("nowPlaying", map[string]any{
+		"videoId": "content-1", "state": "1", "currentTime": "400", "duration": "1200",
+	}))
+	k.advance(time.Second)
+	c.handleEvent(adPlaying("ad-U", 30.061, false, false))
+	fake.waitFor(t, "setPlaylist", 1)
+	if cmd, _ := fake.last("setPlaylist"); cmd.args["currentTime"] != "401.0" {
+		t.Fatalf("the position came with its own video and must count; got %+v", cmd.args)
+	}
+}
+
+// A television that reports the ad as the video it is playing is naming the
+// ad, not moving the viewer to another video, and must not discard what is
+// known about the content.
+func TestAdReportedAsTheCurrentVideoIsNotAVideoChange(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, ReloadUnskippable: true})
+	c.handleEvent(ev("onVideoQualityChanged", map[string]any{"videoId": "content-1"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "451", "duration": "1382.5"}))
+	k.advance(time.Second)
+	c.handleEvent(adPlaying("ad-bumper", 6.041, false, true))
+	c.handleEvent(ev("nowPlaying", map[string]any{"videoId": "ad-bumper", "adState": "1", "adVideoId": "ad-bumper"}))
+	k.advance(30 * time.Second)
+	c.handleEvent(adPlaying("ad-mid", 30.061, false, false))
+	fake.waitFor(t, "setPlaylist", 1)
+	if cmd, _ := fake.last("setPlaylist"); cmd.args["currentTime"] != "452.0" {
+		t.Fatalf("the content position must survive the ad naming itself; got %+v", cmd.args)
+	}
+}
+
+// The content stands still while an ad is on screen. Interpolating across the
+// ad puts the playhead a whole pod ahead of the viewer, and the first tick
+// after the ad seeks past a sponsor segment they never reached.
+func TestSponsorSeekDoesNotCountAdTimeAsPlayback(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, Categories: []string{"sponsor"}})
+	c.handleEvent(ev("onVideoQualityChanged", map[string]any{"videoId": "content-1"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "300", "duration": "1200"}))
+	c.mu.Lock()
+	c.segments = []Segment{{Category: "sponsor", Action: ActionSkip, Start: 330, End: 360}}
+	c.mu.Unlock()
+
+	c.handleEvent(adPlaying("ad-1", 30.061, false, false))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "3", "currentTime": "0", "duration": "0"}))
+	k.advance(30 * time.Second)
+	// The ad ends, and the event that ends it carries no content position.
+	c.handleEvent(ev("onAdStateChange", map[string]any{"adState": "0"}))
+	c.tick()
+	c.settle()
+	if n := fake.count("seekTo"); n != 0 {
+		cmd, _ := fake.last("seekTo")
+		t.Fatalf("viewer was at 300s and the segment is [330,360]; got %d seek(s) to %q", n, cmd.args["newTime"])
+	}
+}

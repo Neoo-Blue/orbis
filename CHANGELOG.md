@@ -3,6 +3,22 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.28.5
+
+### Fixed
+- **YouTube on a television jumped back in the video.** When an unskippable ad could not be
+  skipped, Orbis reloads the content past it and asks the player to resume where the viewer was.
+  It worked out that position by adding the time since the player's last report, but a television
+  reports nothing about the content while an ad is on screen, so the seconds spent watching the
+  ad were counted as content watched. A pod of ads made it worse: each ad in the pod worked the
+  position out again from the one before, so a video the viewer had barely started was reloaded
+  several seconds in, and one they were deep into was reloaded near its beginning. The position
+  is now taken only from the content's own reports, captured once when the pod begins, and a
+  reload is only sent when Orbis actually knows where the viewer was.
+- A state report carrying neither a position nor a duration is a load transition, which a
+  television emits between the ads of a pod. It was being read as the content saying it was at
+  zero, which erased the place the viewer was.
+
 ## v1.28.4
 
 ### Changed

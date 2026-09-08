@@ -105,6 +105,12 @@ type Controller struct {
 	lastTime  float64
 	lastWall  time.Time
 	playing   bool
+	// posVideo is the video lastTime belongs to, and posFresh records that a
+	// genuine content position has arrived since the last ad captured one.
+	// Without them the later ads of a pod re-derive the content position
+	// from whatever the player last said, which during a pod is the ad.
+	posVideo string
+	posFresh bool
 
 	// Ad state. One ad at a time; a pod of several ads arrives as a sequence
 	// of adPlaying events with distinct ids and no end event between them, so
@@ -130,12 +136,22 @@ type Controller struct {
 	// a reload asks the player for that position again. A video that serves
 	// the ad back after a reload is remembered in resisted and left to the
 	// mute from then on.
-	contentPos    float64
-	adReloadTried bool
-	adReloaded    bool
-	reloadAt      time.Time
-	reloadContent string
-	resisted      map[string]bool
+	contentPos float64
+	// contentPosOK records that contentPos came from a real content report,
+	// rather than being left over from an earlier video or derived from time
+	// spent on an ad, and contentPosVideo is the video it was reported for.
+	// A reload to a position that is not the viewer's own is worse than no
+	// reload at all: it throws the video back, which is what an unguarded
+	// capture did on an Apple TV. Not every television names the video it is
+	// playing, so an unknown one does not disqualify a reload; a known one
+	// that disagrees with the ad's content video does.
+	contentPosOK    bool
+	contentPosVideo string
+	adReloadTried   bool
+	adReloaded      bool
+	reloadAt        time.Time
+	reloadContent   string
+	resisted        map[string]bool
 
 	// Volume state. mutedByUs records that Orbis, not the viewer, set the
 	// volume to zero, so a session that drops mid-ad can put it back instead
@@ -367,10 +383,14 @@ func (c *Controller) handleEvent(ev event) {
 		} else {
 			aboutAd = c.onStateChange(state, dur)
 		}
-		// Only the content's own position is worth remembering: an ad's
-		// position, or an unstarted load, would poison the place the content
-		// is resumed at after a reload and the sponsor-segment tracking.
-		if t, ok := asFloat(obj["currentTime"]); ok && !aboutAd && state != "-1" {
+		// Only the content's own position is worth remembering. An ad's
+		// position, an unstarted load, anything at all while an ad is on
+		// screen, or a bare load transition -- currentTime and duration both
+		// zero, which a television emits between the ads of a pod -- would
+		// poison the place the content is resumed at after a reload and the
+		// sponsor-segment tracking.
+		if t, ok := asFloat(obj["currentTime"]); ok && !aboutAd && state != "-1" &&
+			!c.adOnScreen() && !(t == 0 && dur == 0) {
 			c.updatePosition(t, state == "1")
 		}
 		c.noteContentDuration(state, dur)
@@ -590,6 +610,12 @@ func (c *Controller) onVideo(videoID string) {
 		c.stats.SegmentsLoaded = 0
 		c.muteSeg = nil
 		c.contentDur = 0
+		// Whatever position we were holding belongs to the video that just
+		// ended, so it is no evidence about this one.
+		if c.posVideo != videoID {
+			c.posFresh = false
+			c.contentPosOK = false
+		}
 	}
 	c.mu.Unlock()
 	if same || c.sb == nil {
@@ -699,10 +725,22 @@ func (c *Controller) onAd(info adInfo) {
 		c.adReloadTried = false
 		c.adReloaded = false
 		// Where the content was when the ad began, from the last content
-		// report plus the time since; this is where a reload resumes.
-		c.contentPos = c.lastTime
-		if c.playing && !c.lastWall.IsZero() {
-			c.contentPos += c.now().Sub(c.lastWall).Seconds()
+		// report plus the time since; this is where a reload resumes. Only a
+		// genuine content report earns a capture. The later ads of a pod have
+		// had none since the first one, so they keep the position the pod
+		// started at instead of re-deriving it, which would silently count
+		// the seconds of ad already watched as content played.
+		if c.posFresh {
+			c.contentPos = c.lastTime
+			if c.playing && !c.lastWall.IsZero() {
+				c.contentPos += c.now().Sub(c.lastWall).Seconds()
+			}
+			if c.contentDur > 0 && c.contentPos > c.contentDur {
+				c.contentPos = c.contentDur
+			}
+			c.contentPosOK = true
+			c.contentPosVideo = c.posVideo
+			c.posFresh = false
 		}
 	}
 	if info.id != "" && c.adID == "" {
@@ -751,9 +789,15 @@ func (c *Controller) onAd(info adInfo) {
 			c.reloadAt = time.Time{}
 		} else if o.ReloadUnskippable && !info.skippable && !info.skipArmed && !info.bumper &&
 			dur >= reloadMinAdSeconds && c.contentPos >= reloadMinPosition &&
-			content != "" && !c.resisted[content] {
+			c.contentPosOK && content != "" && !c.resisted[content] &&
+			(c.contentPosVideo == "" || c.contentPosVideo == content) {
 			reload = content
 			reloadPos = c.contentPos
+			// A reload consumes the captured position. If the content really
+			// does resume, its own report captures it again; if the player
+			// only serves more ads, there is nothing new to reload to and
+			// asking again would just replay the same jump.
+			c.contentPosOK = false
 			c.adReloaded = true
 			c.reloadAt = c.now()
 			c.reloadContent = content
@@ -915,8 +959,17 @@ func (c *Controller) updatePosition(t float64, playing bool) {
 	c.lastTime = t
 	c.lastWall = c.now()
 	c.playing = playing
+	c.posVideo = c.videoID
+	c.posFresh = true
 	c.stats.Position = t
 	c.mu.Unlock()
+}
+
+// adOnScreen reports whether an ad is currently open.
+func (c *Controller) adOnScreen() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.adActive
 }
 
 func (c *Controller) currentPos() (pos float64, playing, adActive bool) {

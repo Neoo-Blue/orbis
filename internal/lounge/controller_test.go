@@ -629,3 +629,77 @@ func TestAdPositionReportsDoNotMoveTheContentPosition(t *testing.T) {
 		t.Fatalf("content position must survive the ad's own reports: contentPos=%v lastTime=%v", pos, last)
 	}
 }
+
+// The two tests below replay sequences taken verbatim from an Apple TV's
+// journal, where a pod of ads made the reload throw the viewer back in the
+// video. Between the ads of a pod the television reports only its own ad
+// state, so the content's last report stays where it was while the wall
+// clock runs on. The seconds that pass are ad, not content, and counting
+// them as position is what moved the playhead.
+
+// A pod at the head of a video the viewer has not started: there is no
+// position to reload past, and the first ad's six seconds do not create one.
+func TestAdPodOnAFreshVideoDoesNotReloadToAdTime(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, ReloadUnskippable: true})
+	c.handleEvent(ev("onVideoQualityChanged", map[string]any{"videoId": "content-1", "qualityLevel": "1080"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "0.061", "duration": "515.781"}))
+
+	// A six-second bumper, and the ad's own state report while it runs.
+	c.handleEvent(adPlaying("ad-bumper", 6.041, false, true))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1081", "currentTime": "0.011", "duration": "6.041"}))
+	k.advance(6500 * time.Millisecond)
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1081", "currentTime": "0", "duration": "15"}))
+
+	// The next ad in the pod: unskippable and long enough to be worth a reload.
+	c.handleEvent(adPlaying("ad-mid", 15.041, false, false))
+	c.settle()
+
+	if n := fake.count("setPlaylist"); n != 0 {
+		cmd, _ := fake.last("setPlaylist")
+		t.Fatalf("content was at 0.1s and the rest was ad; got %d reload(s) to %q", n, cmd.args["currentTime"])
+	}
+}
+
+// A pod in the middle of a video: the reload resumes where the viewer was,
+// not that point plus the length of the pod.
+func TestMidRollPodReloadsToTheViewersPositionNotAdTime(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, ReloadUnskippable: true})
+	c.handleEvent(ev("onVideoQualityChanged", map[string]any{"videoId": "content-1", "qualityLevel": "1080"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "451", "duration": "1382.501"}))
+	k.advance(time.Second)
+
+	// A bumper opens the pod. Bumpers are never reloaded past.
+	c.handleEvent(adPlaying("ad-bumper", 6.041, false, true))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1081", "currentTime": "0.011", "duration": "6.041"}))
+	c.handleEvent(ev("nowPlaying", map[string]any{"listId": "RQ6VO4bEU1TGTdN63dMnRp"}))
+	k.advance(30 * time.Second)
+
+	// Then an unskippable ad, half a minute of pod later.
+	c.handleEvent(adPlaying("ad-mid", 30.061, false, false))
+	fake.waitFor(t, "setPlaylist", 1)
+	if cmd, _ := fake.last("setPlaylist"); cmd.args["currentTime"] != "452.0" {
+		t.Fatalf("reload should resume at 452s, where the viewer was; got %+v", cmd.args)
+	}
+	if n := fake.count("setPlaylist"); n != 1 {
+		t.Fatalf("one reload for the pod, got %d: %+v", n, fake.cmds)
+	}
+}
+
+// A state report with no position and no duration is a load transition, not
+// the content saying where it is. Taking it as a position erased the place
+// the viewer was and left the ad's elapsed time standing in for it.
+func TestBareLoadTransitionDoesNotEraseTheContentPosition(t *testing.T) {
+	c, fake, k := newTestController(t, Options{SkipAds: true, MuteAds: true, ReloadUnskippable: true})
+	c.handleEvent(ev("onVideoQualityChanged", map[string]any{"videoId": "content-1", "qualityLevel": "1080"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "1", "currentTime": "300", "duration": "1382.501"}))
+	c.handleEvent(ev("onStateChange", map[string]any{"state": "3", "currentTime": "0", "duration": "0"}))
+	if pos := c.Stats().Position; pos != 300 {
+		t.Fatalf("a bare load transition must not move the position; got %v", pos)
+	}
+	k.advance(time.Second)
+	c.handleEvent(adPlaying("ad-mid", 30.061, false, false))
+	fake.waitFor(t, "setPlaylist", 1)
+	if cmd, _ := fake.last("setPlaylist"); cmd.args["currentTime"] != "301.0" {
+		t.Fatalf("reload should resume at 301s; got %+v", cmd.args)
+	}
+}

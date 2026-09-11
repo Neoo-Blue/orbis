@@ -18,7 +18,9 @@ under "Show release notes" when it offers an update.
   sends each device the router's real address, but a Windows laptop whose connections kept working
   through Orbis never asked again and stayed half-routed for as long as it was busy. In observe
   mode Orbis now notices any device on the LAN that sends it traffic without being intercepted and
-  tells that device, and only that device, where the router is. The message to a device also names
+  tells that device, and only that device, where the router is. It spots them from the packets it
+  captures and from one-way connections in the kernel's connection table, which also catches a
+  device that only sends UDP, such as a VPN or Wi-Fi calling. The message to a device also names
   its current address, and announces the router as well as answering for it.
 - **Putting a device back on the router no longer impersonates the router to the switch.** The
   frames that tell a device where the router is carried the router's hardware address as their

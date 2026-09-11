@@ -23,6 +23,10 @@ type CTEntry struct {
 	PacketsReply int64
 	State        string
 	Timeout      int
+	// Unreplied: nothing has come back the other way through this node. A
+	// connection from a LAN device to the internet in that state means the
+	// device is sending through this node while its replies go around it.
+	Unreplied bool
 }
 
 // conntrackPaths are tried in order. nf_conntrack is the modern location;
@@ -106,6 +110,12 @@ func parseConntrackLine(line string) (CTEntry, bool, bool) {
 	if protoIdx < 0 {
 		return CTEntry{}, false, false
 	}
+	for _, f := range fields[protoIdx:] {
+		if f == "[UNREPLIED]" {
+			e.Unreplied = true
+			break
+		}
+	}
 	// The state token (ESTABLISHED, TIME_WAIT, ...) appears for TCP only.
 	for _, f := range fields[protoIdx:] {
 		if f == strings.ToUpper(f) && strings.Contains(f, "_") || f == "ESTABLISHED" {
@@ -131,6 +141,11 @@ func parseConntrackLine(line string) (CTEntry, bool, bool) {
 			addr, err := netip.ParseAddr(v)
 			if err != nil {
 				continue
+			}
+			// Without accounting there is no "bytes" to close the original
+			// group, so the second src is what starts the reply tuple.
+			if group == 0 && e.SrcIP.IsValid() {
+				group = 1
 			}
 			if group == 0 {
 				e.SrcIP = addr
@@ -192,6 +207,28 @@ type ConntrackPoller struct {
 	acctWarned bool
 	errWarned  bool
 	onWarn     func(string)
+	// onStray hears the source of every one-way connection from a local
+	// address to a public one, once per poll per address.
+	onStray func(src netip.Addr)
+}
+
+// SetStrayHook must be called before Run. It is how a device sending through
+// this node only over UDP (a VPN, Wi-Fi calling), which the capture prefilter
+// never shows, is still noticed.
+func (p *ConntrackPoller) SetStrayHook(fn func(src netip.Addr)) { p.onStray = fn }
+
+func (p *ConntrackPoller) reportStrays(entries []CTEntry) {
+	if p.onStray == nil {
+		return
+	}
+	seen := map[netip.Addr]bool{}
+	for _, e := range entries {
+		if !e.Unreplied || seen[e.SrcIP] || !p.tracker.isLocal(e.SrcIP) || p.tracker.isLocal(e.DstIP) {
+			continue
+		}
+		seen[e.SrcIP] = true
+		p.onStray(e.SrcIP)
+	}
 }
 
 func NewConntrackPoller(t *Tracker, interval time.Duration, onWarn func(string)) *ConntrackPoller {
@@ -233,6 +270,7 @@ func (p *ConntrackPoller) Run() {
 				p.acctWarned = true
 			}
 			p.tracker.SyncConntrack(entries)
+			p.reportStrays(entries)
 		}
 	}
 }

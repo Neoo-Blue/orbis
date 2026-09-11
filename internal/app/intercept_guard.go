@@ -285,7 +285,59 @@ type strayHealer struct {
 const (
 	strayEvery    = 5 * time.Second
 	strayLogEvery = 10 * time.Minute
+	// A one-way conntrack entry outlives the device's move back to the
+	// router by up to a few minutes, so that path decides less often.
+	strayConntrackEvery = 30 * time.Second
 )
+
+// noteStrayIP is the conntrack side of noteStray: a one-way connection from a
+// LAN address to the internet. Conntrack has no MAC, so it is looked up.
+func (a *App) noteStrayIP(src netip.Addr) {
+	now := time.Now()
+	key := "ct:" + src.String()
+	s := &a.stray
+	s.mu.Lock()
+	if s.seen == nil {
+		s.seen = map[string]time.Time{}
+	}
+	if now.Sub(s.seen[key]) < strayConntrackEvery {
+		s.mu.Unlock()
+		return
+	}
+	s.seen[key] = now
+	s.mu.Unlock()
+	go func() {
+		if a.Cfg.Snapshot().Mode != config.ModeObserve || (a.Intercept != nil && a.Intercept.IsTarget(src)) {
+			return
+		}
+		// This node's own unanswered connections look the same.
+		if addrs, err := net.InterfaceAddrs(); err == nil {
+			for _, ad := range addrs {
+				if ipn, ok := ad.(*net.IPNet); ok {
+					if x, ok := netip.AddrFromSlice(ipn.IP); ok && x.Unmap() == src {
+						return
+					}
+				}
+			}
+		}
+		lan := a.Cfg.Snapshot().Network.Intercept.LANInterface
+		if lan == "" {
+			lan = "eth0"
+		}
+		ctx, cancel := context.WithTimeout(a.ctx, 2*time.Second)
+		mac, ok := intercept.ProbeMAC(ctx, lan, src)
+		cancel()
+		if !ok && a.Registry != nil {
+			if c := a.Registry.ByIP(src); c != nil && c.MAC != "" {
+				mac, _ = net.ParseMAC(c.MAC)
+				ok = mac != nil
+			}
+		}
+		if ok {
+			a.healStray(src, mac.String())
+		}
+	}()
+}
 
 // noteStray runs on the capture path for packets a local device sends through
 // this node. It only rate-limits and hands the decision off.

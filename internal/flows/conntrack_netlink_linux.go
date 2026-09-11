@@ -211,12 +211,16 @@ func parseCTEntry(attrs []byte) (CTEntry, bool) {
 			}
 		case ctaStatus:
 			if len(v) >= 4 {
+				st := binary.BigEndian.Uint32(v)
 				// IPS_ASSURED (0x04) marks a connection that has seen
 				// traffic both ways, which is the useful "established"
 				// signal without decoding the full protocol state.
-				if binary.BigEndian.Uint32(v)&0x04 != 0 {
+				if st&0x04 != 0 {
 					e.State = "ASSURED"
 				}
+				// IPS_SEEN_REPLY (0x02) clear: only one direction has
+				// passed through this node.
+				e.Unreplied = st&0x02 == 0
 			}
 		}
 	})

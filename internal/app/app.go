@@ -558,6 +558,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Conntrack = flows.NewConntrackPoller(a.Tracker,
 		time.Duration(cfg.Capture.ConntrackInterval)*time.Second,
 		func(msg string) { logf("capture: %s", msg) })
+	a.Conntrack.SetStrayHook(a.noteStrayIP)
 
 	// AI.
 	a.AI = ai.NewClient(cfg, st, logf)

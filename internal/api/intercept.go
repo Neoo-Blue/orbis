@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/netip"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/go-chi/chi/v5"
@@ -82,6 +83,19 @@ func (s *Server) handleInterceptEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.IP == "" {
 		writeErr(w, http.StatusBadRequest, "ip is required")
+		return
+	}
+	// Anchor the enrolment to the device, not just its current lease, so it
+	// can be followed when the address changes.
+	if body.MAC == "" && s.app.Registry != nil {
+		if addr, err := netip.ParseAddr(body.IP); err == nil {
+			if c := s.app.Registry.ByIP(addr); c != nil {
+				body.MAC = c.MAC
+			}
+		}
+	}
+	if why := s.app.InterceptRefusal(body.IP, body.MAC); why != "" {
+		writeErr(w, http.StatusBadRequest, body.IP+" cannot be intercepted: "+why)
 		return
 	}
 	err := s.cfg.Update(func(c *config.Config) {

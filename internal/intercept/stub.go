@@ -34,6 +34,10 @@ func New(string, netip.Addr, func(string, ...any)) (*Engine, error) {
 	return nil, fmt.Errorf("ARP interception is only supported on Linux")
 }
 
+func ProbeMAC(context.Context, string, netip.Addr) (net.HardwareAddr, bool) { return nil, false }
+func Heal(string, netip.Addr, net.HardwareAddr, Target) error               { return nil }
+func (e *Engine) IsTarget(netip.Addr) bool                                  { return false }
+
 func (e *Engine) Start(context.Context) error { return nil }
 func (e *Engine) Stop()                       {}
 func (e *Engine) SetTargets([]Target)         {}

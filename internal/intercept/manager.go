@@ -184,6 +184,14 @@ func (m *Manager) Running() bool {
 	return m.running
 }
 
+// IsTarget reports whether ip is being intercepted right now.
+func (m *Manager) IsTarget(ip netip.Addr) bool {
+	m.mu.Lock()
+	eng := m.engine
+	m.mu.Unlock()
+	return eng != nil && eng.IsTarget(ip)
+}
+
 // Stop tears everything down: restore the ARP caches, remove the rules, and put
 // ip_forward back the way we found it.
 func (m *Manager) Stop() {

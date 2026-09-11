@@ -18,8 +18,8 @@
 package intercept
 
 import (
+	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"net/netip"
@@ -27,16 +27,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-)
-
-const (
-	arpHardwareEthernet = 1
-	arpProtocolIPv4     = 0x0800
-
-	arpOpReply   = 2
-	etherTypeARP = 0x0806
-	hwLen        = 6
-	protoLen     = 4
 )
 
 // Target is a device Orbis is inserting itself in front of.
@@ -112,22 +102,39 @@ func (e *Engine) SetTargets(targets []Target) {
 	e.mu.Lock()
 	old := e.targets
 	next := make(map[netip.Addr]net.HardwareAddr, len(targets))
+	var refused []string
+	isSelf := func(a netip.Addr) bool { return a == e.selfIP }
 	for _, t := range targets {
-		if t.IP.IsValid() && len(t.MAC) == hwLen {
-			next[t.IP] = t.MAC
+		if !t.IP.IsValid() || len(t.MAC) != hwLen {
+			continue
 		}
+		// The planner already drops these; this is the last line, because
+		// claiming the gateway to the gateway makes the router see its own
+		// address on another MAC.
+		if reason := Refusal(t.IP, t.MAC, e.gateway, e.gwMAC, e.selfMAC, isSelf); reason != "" {
+			refused = append(refused, fmt.Sprintf("%s (%s): %s", t.IP, t.MAC, reason))
+			continue
+		}
+		next[t.IP] = t.MAC
 	}
 	var removed []Target
 	for ip, mac := range old {
-		if _, still := next[ip]; !still {
-			removed = append(removed, Target{IP: ip, MAC: mac})
+		if _, still := next[ip]; still || macIn(next, mac) {
+			// A device that moved address is still a target; telling it
+			// the truth first would only drop it off the path until the
+			// claim below.
+			continue
 		}
+		removed = append(removed, Target{IP: ip, MAC: mac})
 	}
 	e.targets = next
 	running := e.running
 	e.stats.Targets = len(next)
 	e.mu.Unlock()
 
+	for _, r := range refused {
+		e.log("intercept: refusing to intercept %s", r)
+	}
 	if running {
 		for _, t := range removed {
 			e.restore(t)
@@ -277,43 +284,107 @@ func (e *Engine) restore(t Target) {
 	if fd < 0 || len(gwMAC) != hwLen {
 		return
 	}
-	pkt := buildARP(arpOpReply, gwMAC, e.gateway, t.MAC, t.IP)
-	e.sendTo(fd, t.MAC, pkt)
+	for _, pkt := range truthFrames(e.selfMAC, gwMAC, e.gateway, t) {
+		e.sendTo(fd, t.MAC, pkt)
+	}
 	e.mu.Lock()
 	e.stats.Restores++
 	e.mu.Unlock()
 }
 
+func macIn(set map[netip.Addr]net.HardwareAddr, mac net.HardwareAddr) bool {
+	for _, m := range set {
+		if bytes.Equal(m, mac) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTarget reports whether ip is currently being intercepted, which is the
+// only case in which a device should be sending its traffic to this node.
+func (e *Engine) IsTarget(ip netip.Addr) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	_, ok := e.targets[ip]
+	return e.running && ok
+}
+
+// Heal tells one device that is sending its traffic here, but is not being
+// intercepted, where the real gateway is. It needs no running engine: this is
+// how a device left pointing at this node by an earlier takeover, a crash, or
+// a lost restore finds its way back.
+func Heal(iface string, gateway netip.Addr, gatewayMAC net.HardwareAddr, dev Target) error {
+	if len(gatewayMAC) != hwLen || len(dev.MAC) != hwLen || !dev.IP.Is4() || !gateway.Is4() {
+		return fmt.Errorf("heal: incomplete addresses")
+	}
+	ifc, err := net.InterfaceByName(iface)
+	if err != nil {
+		return err
+	}
+	fd, err := openARPSocket(ifc.Index)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	for i := 0; i < 3; i++ {
+		for _, pkt := range truthFrames(ifc.HardwareAddr, gatewayMAC, gateway, dev) {
+			if err := sendFrame(fd, ifc.Index, dev.MAC, pkt); err != nil {
+				return err
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
+
 // resolveGatewayMAC learns the real gateway's hardware address by asking the
 // kernel's neighbour table first, and falling back to an active ARP request.
 func (e *Engine) resolveGatewayMAC(ctx context.Context) (net.HardwareAddr, error) {
-	if mac, ok := neighLookup(e.gateway, e.iface.Name); ok {
+	if mac, ok := ProbeMAC(ctx, e.iface.Name, e.gateway); ok {
 		return mac, nil
 	}
-	// Nudge the kernel into resolving it, then read the table back.
-	_ = pokeARP(e.gateway)
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if mac, ok := neighLookup(e.gateway, e.iface.Name); ok {
-			return mac, nil
-		}
-		time.Sleep(150 * time.Millisecond)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	return nil, fmt.Errorf("no ARP entry after probing")
 }
 
+// ProbeMAC reports which MAC holds an address on iface, from the kernel's
+// neighbour table, nudging the kernel into an ARP exchange when there is no
+// entry yet. The table only ever holds answers this node received itself, never
+// the claims it sends, so it is a fair witness for where a device lives.
+func ProbeMAC(ctx context.Context, iface string, ip netip.Addr) (net.HardwareAddr, bool) {
+	if mac, ok := neighLookup(ip, iface); ok {
+		return mac, true
+	}
+	_ = pokeARP(ip)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return nil, false
+		}
+		if mac, ok := neighLookup(ip, iface); ok {
+			return mac, true
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return nil, false
+}
+
 func (e *Engine) sendTo(fd int, dst net.HardwareAddr, frame []byte) {
-	var addr unix.SockaddrLinklayer
-	addr.Protocol = htons(etherTypeARP)
-	addr.Ifindex = e.iface.Index
-	addr.Halen = hwLen
-	copy(addr.Addr[:], dst)
-	if err := unix.Sendto(fd, frame, 0, &addr); err != nil {
+	if err := sendFrame(fd, e.iface.Index, dst, frame); err != nil {
 		e.log("intercept: send failed: %v", err)
 	}
+}
+
+func sendFrame(fd, ifIndex int, dst net.HardwareAddr, frame []byte) error {
+	var addr unix.SockaddrLinklayer
+	addr.Protocol = htons(etherTypeARP)
+	addr.Ifindex = ifIndex
+	addr.Halen = hwLen
+	copy(addr.Addr[:], dst)
+	return unix.Sendto(fd, frame, 0, &addr)
 }
 
 // StatsSnapshot returns a copy for the API.
@@ -328,35 +399,6 @@ func (e *Engine) Running() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.running
-}
-
-// ---- frame construction ----
-
-// buildARP builds a full Ethernet + ARP frame.
-func buildARP(op int, senderMAC net.HardwareAddr, senderIP netip.Addr,
-	targetMAC net.HardwareAddr, targetIP netip.Addr) []byte {
-
-	frame := make([]byte, 14+28)
-
-	// Ethernet header.
-	copy(frame[0:6], targetMAC)
-	copy(frame[6:12], senderMAC)
-	binary.BigEndian.PutUint16(frame[12:14], etherTypeARP)
-
-	// ARP payload.
-	p := frame[14:]
-	binary.BigEndian.PutUint16(p[0:2], arpHardwareEthernet)
-	binary.BigEndian.PutUint16(p[2:4], arpProtocolIPv4)
-	p[4] = hwLen
-	p[5] = protoLen
-	binary.BigEndian.PutUint16(p[6:8], uint16(op))
-	copy(p[8:14], senderMAC)
-	sip := senderIP.As4()
-	copy(p[14:18], sip[:])
-	copy(p[18:24], targetMAC)
-	tip := targetIP.As4()
-	copy(p[24:28], tip[:])
-	return frame
 }
 
 func firstIPv4(iface *net.Interface) (netip.Addr, bool) {

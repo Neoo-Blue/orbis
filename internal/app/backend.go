@@ -943,43 +943,36 @@ func (a *App) DefaultGateway() string {
 // SyncIntercept reconciles the ARP interception engine with configuration. It
 // resolves the gateway from the default route when the config leaves it blank,
 // and picks each enrolled device's MAC from the client registry when the config
-// stored only an address.
+// stored only an address. Devices that appear to have moved are held back
+// until reconcileIntercept confirms where they went; see intercept.MakePlan.
 func (a *App) SyncIntercept() error {
+	a.interceptMu.Lock()
+	defer a.interceptMu.Unlock()
+	return a.syncInterceptLocked()
+}
+
+func (a *App) syncInterceptLocked() error {
 	cfg := a.Cfg.Snapshot().Network.Intercept
-	gw := cfg.Gateway
-	if gw == "" {
-		gw = a.DefaultGateway()
-	}
-	gwAddr, err := netip.ParseAddr(gw)
+	env, err := a.interceptEnv(cfg)
 	if err != nil {
-		return fmt.Errorf("no usable gateway (%q): %w", gw, err)
+		return err
 	}
+	gwAddr, lan := env.gateway, env.lan
 
-	lan := cfg.LANInterface
-	if lan == "" {
-		lan = a.Cfg.Snapshot().Firewall.WANInterface // the node's primary LAN nic
-	}
-	if lan == "" {
-		lan = "eth0"
-	}
-
-	// Fill in any missing MACs from what the registry has observed, so the
-	// operator can enrol a device by address alone.
-	pairs := map[string]string{}
-	for ip, mac := range cfg.Clients {
-		if mac == "" {
-			if addr, err := netip.ParseAddr(ip); err == nil {
-				if c := a.Registry.ByIP(addr); c != nil {
-					mac = c.MAC
-				}
-			}
+	plan := a.interceptPlan(cfg, env, nil)
+	if cfg.Enabled {
+		for ip, why := range plan.Drops {
+			a.log("intercept: skipping %s: %s", ip, why)
 		}
-		if mac != "" {
-			pairs[ip] = mac
+		for ip, why := range plan.Held {
+			a.log("intercept: holding %s back: %s", ip, why)
 		}
 	}
-
-	targets := intercept.ResolveTargets(pairs)
+	a.interceptApplied = ""
+	if cfg.Enabled {
+		a.interceptApplied = planKey(plan)
+	}
+	targets := plan.Targets
 
 	// The web redirect is narrowed to the devices the proxy is allowed to
 	// intercept (mitm.only_clients), when that list is set: those are the

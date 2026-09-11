@@ -143,6 +143,15 @@ type App struct {
 	reportMu   sync.Mutex
 	lastReport string
 
+	// interceptMu serialises applying the enrolled set; interceptKick asks
+	// the intercept loop to reconcile now (an enrolled device changed
+	// address); interceptApplied is the planKey last applied.
+	interceptMu      sync.Mutex
+	interceptKick    chan struct{}
+	interceptApplied string
+	interceptLoad    loadGuard
+	stray            strayHealer
+
 	startedAt time.Time
 }
 
@@ -178,10 +187,11 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a := &App{
 		Cfg: cfg, Store: st, Geo: geo, Self: self, log: logf,
 		ctx: ctx, stop: cancel,
-		Bus:       NewBus(1024),
-		policies:  map[string]*store.Policy{},
-		startedAt: time.Now(),
-		logRing:   ring,
+		Bus:           NewBus(1024),
+		policies:      map[string]*store.Policy{},
+		startedAt:     time.Now(),
+		logRing:       ring,
+		interceptKick: make(chan struct{}, 1),
 	}
 
 	// Flow tracking.
@@ -231,6 +241,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Registry.SetOnNew(func(c *store.Client) {
 		a.Bus.Publish(Event{Type: "client.new", Data: c})
 	})
+	a.Registry.SetOnMove(a.noteClientMoved)
 
 	// Ad blocking.
 	a.Matcher = adblock.New()
@@ -543,6 +554,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		a.Smart.ObserveRequest(req.Host, adblock.ClientKeyFor(clientIP),
 			dpi.RefererHost(req.Referer), req.Path, 0, "")
 	})
+	a.Capture.SetStrayHook(a.noteStray)
 	a.Conntrack = flows.NewConntrackPoller(a.Tracker,
 		time.Duration(cfg.Capture.ConntrackInterval)*time.Second,
 		func(msg string) { logf("capture: %s", msg) })
@@ -807,6 +819,8 @@ func (a *App) Start() {
 
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.maintenanceLoop() }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.interceptLoop() }()
 
 	a.log("orbis: started in %s mode", cfg.Mode)
 }

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -38,12 +39,36 @@ type Store struct {
 	dnsBuf  []DNSQuery
 
 	closed chan struct{}
-	wg     sync.WaitGroup
+	// kick wakes flushLoop when a buffer hits maxBatch. Capacity 1 so
+	// QueueFlow/QueueDNS never block on the writer.
+	kick chan struct{}
+	wg   sync.WaitGroup
+
+	dropped       atomic.Uint64
+	flushes       atomic.Uint64
+	failedFlushes atomic.Uint64
+	lastFlushOK   atomic.Int64 // UnixNano of last committed flow/DNS batch
+	dropWarnCount atomic.Uint64
+	lastDropWarn  atomic.Int64 // UnixNano of last "writer is behind" line
+
+	// busy is time spent writing log batches. A write still running counts
+	// up to now, so a two-minute catch-up transaction reads as two busy
+	// minutes to a once-a-minute sampler rather than an idle one and a
+	// doubly busy one.
+	busyMu    sync.Mutex
+	busyNanos uint64
+	busySince time.Time // zero when no batch is being written
 }
 
 const (
 	flushInterval = 2 * time.Second
 	maxBatch      = 2000
+	// maxPending bounds RAM if the writer falls behind (SD card, blocklist
+	// refresh holding writeMu). Past this, new rows are dropped.
+	maxPending = 50000
+	// insertChunk rows per Exec so a catch-up flush is one SQL round-trip
+	// per handful of rows, not one per row.
+	insertChunk = 64
 )
 
 func Open(path string) (*Store, error) {
@@ -72,7 +97,7 @@ func Open(path string) (*Store, error) {
 	}
 	applyMigrations(db)
 
-	s := &Store{db: db, closed: make(chan struct{})}
+	s := &Store{db: db, closed: make(chan struct{}), kick: make(chan struct{}, 1)}
 	s.wg.Add(1)
 	go s.flushLoop()
 	return s, nil
@@ -119,7 +144,16 @@ func (s *Store) flushLoop() {
 			return
 		case <-t.C:
 			s.flush()
+		case <-s.kick:
+			s.flush()
 		}
+	}
+}
+
+func (s *Store) kickFlush() {
+	select {
+	case s.kick <- struct{}{}:
+	default:
 	}
 }
 
@@ -229,50 +263,166 @@ func (s *Store) DeleteClient(id string) error {
 
 // ---------- flows ----------
 
-// QueueFlow buffers a flow upsert. Safe to call from the packet path.
+// WriteStats reports how hard the log writer is working, for the overload
+// guard and /metrics. Counters are cumulative since Open.
+type WriteStats struct {
+	Pending       int       // flow + DNS rows waiting in memory
+	Dropped       uint64    // rows discarded: queue full or failed batch
+	BusyNanos     uint64    // time spent writing flow/DNS batches, lock wait excluded
+	Flushes       uint64    // flow/DNS batches committed
+	FailedFlushes uint64    // flow/DNS batches whose commit failed
+	LastFlushOK   time.Time // when a flow or DNS batch last committed
+}
+
+func (s *Store) WriteStats() WriteStats {
+	s.mu.Lock()
+	pending := len(s.flowBuf) + len(s.dnsBuf)
+	s.mu.Unlock()
+	var last time.Time
+	if ns := s.lastFlushOK.Load(); ns != 0 {
+		last = time.Unix(0, ns)
+	}
+	return WriteStats{
+		Pending:       pending,
+		Dropped:       s.dropped.Load(),
+		BusyNanos:     s.busyTotal(),
+		Flushes:       s.flushes.Load(),
+		FailedFlushes: s.failedFlushes.Load(),
+		LastFlushOK:   last,
+	}
+}
+
+// QueueFlow buffers a flow upsert. Safe to call from the packet path: it
+// never waits on disk or writeMu. A full buffer wakes flushLoop instead.
 func (s *Store) QueueFlow(f Flow) {
 	s.mu.Lock()
+	if len(s.flowBuf) >= maxPending {
+		s.mu.Unlock()
+		s.noteDropped(1)
+		return
+	}
 	s.flowBuf = append(s.flowBuf, f)
 	n := len(s.flowBuf)
 	s.mu.Unlock()
 	if n >= maxBatch {
-		s.flush()
+		s.kickFlush()
 	}
 }
 
 func (s *Store) QueueDNS(q DNSQuery) {
 	s.mu.Lock()
+	if len(s.dnsBuf) >= maxPending {
+		s.mu.Unlock()
+		s.noteDropped(1)
+		return
+	}
 	s.dnsBuf = append(s.dnsBuf, q)
 	n := len(s.dnsBuf)
 	s.mu.Unlock()
 	if n >= maxBatch {
-		s.flush()
+		s.kickFlush()
 	}
 }
 
+func (s *Store) noteDropped(n uint64) {
+	if n == 0 {
+		return
+	}
+	s.dropped.Add(n)
+	s.dropWarnCount.Add(n)
+	now := time.Now().UnixNano()
+	last := s.lastDropWarn.Load()
+	if last != 0 && now-last < int64(time.Minute) {
+		return
+	}
+	if !s.lastDropWarn.CompareAndSwap(last, now) {
+		return
+	}
+	reported := s.dropWarnCount.Swap(0)
+	if reported == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "store: log writer is behind, dropped %d row(s) in the last minute\n", reported)
+}
+
 func (s *Store) flush() {
+	// Take writeMu before draining so a blocked writer (blocklist refresh)
+	// cannot pull rows out of the in-memory cap. Queue* stays within
+	// maxPending and Pending stays accurate.
+	s.mu.Lock()
+	if len(s.flowBuf) == 0 && len(s.dnsBuf) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	s.writeMu.Lock()
 	s.mu.Lock()
 	flows := s.flowBuf
 	dns := s.dnsBuf
 	s.flowBuf = nil
 	s.dnsBuf = nil
 	s.mu.Unlock()
+	s.writeMu.Unlock()
 
 	if len(flows) > 0 {
 		if err := s.writeFlows(flows); err != nil {
 			fmt.Fprintf(os.Stderr, "store: flow flush failed: %v\n", err)
+			s.noteDropped(uint64(len(flows)))
+			s.failedFlushes.Add(1)
+		} else {
+			s.flushes.Add(1)
+			s.lastFlushOK.Store(time.Now().UnixNano())
 		}
 	}
 	if len(dns) > 0 {
 		if err := s.writeDNS(dns); err != nil {
 			fmt.Fprintf(os.Stderr, "store: dns flush failed: %v\n", err)
+			s.noteDropped(uint64(len(dns)))
+			s.failedFlushes.Add(1)
+		} else {
+			s.flushes.Add(1)
+			s.lastFlushOK.Store(time.Now().UnixNano())
 		}
 	}
+}
+
+// busyStart and busyEnd bracket the disk work of one log batch, after writeMu
+// is held, so time spent waiting behind another writer is not counted.
+func (s *Store) busyStart() {
+	s.busyMu.Lock()
+	s.busySince = time.Now()
+	s.busyMu.Unlock()
+}
+
+func (s *Store) busyEnd() {
+	s.busyMu.Lock()
+	if !s.busySince.IsZero() {
+		if d := time.Since(s.busySince); d > 0 {
+			s.busyNanos += uint64(d)
+		}
+		s.busySince = time.Time{}
+	}
+	s.busyMu.Unlock()
+}
+
+func (s *Store) busyTotal() uint64 {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	total := s.busyNanos
+	if !s.busySince.IsZero() {
+		if d := time.Since(s.busySince); d > 0 {
+			total += uint64(d)
+		}
+	}
+	return total
 }
 
 func (s *Store) writeFlows(flows []Flow) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	s.busyStart()
+	defer s.busyEnd()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -307,12 +457,11 @@ func (s *Store) writeFlows(flows []Flow) error {
 		if f.EndedAt != nil {
 			ended = f.EndedAt.Unix()
 		}
-		tags, _ := json.Marshal(f.Tags)
 		if _, err := stmt.Exec(f.ID, nz(f.ClientID), f.StartedAt.Unix(), ended, f.LastSeen.Unix(),
 			f.Proto, f.SrcIP, f.SrcPort, f.DstIP, f.DstPort, f.Direction, f.Hostname, f.SNI,
 			f.App, f.JA4, f.PacketsIn, f.PacketsOut, f.BytesIn, f.BytesOut, f.Verdict,
 			nz(f.RuleID), f.Reason, f.Country, f.City, f.Lat, f.Lon, f.ASN, f.ASOrg, f.Risk,
-			string(tags)); err != nil {
+			jsonStrings(f.Tags)); err != nil {
 			return err
 		}
 	}
@@ -322,26 +471,32 @@ func (s *Store) writeFlows(flows []Flow) error {
 func (s *Store) writeDNS(qs []DNSQuery) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	s.busyStart()
+	defer s.busyEnd()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT INTO dns_queries
-		(ts, client_id, client_ip, name, qtype, rcode, blocked, block_source, cname_chain, answer, upstream, latency_ms, cached)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, q := range qs {
-		chain, _ := json.Marshal(q.CNAMEChain)
-		ans, _ := json.Marshal(q.Answer)
-		if _, err := stmt.Exec(q.TS.Unix(), nz(q.ClientID), q.ClientIP, q.Name, q.QType, q.RCode,
-			b2i(q.Blocked), q.BlockSource, string(chain), string(ans), q.Upstream, q.LatencyMS,
-			b2i(q.Cached)); err != nil {
+	const dnsCols = 13
+	for i := 0; i < len(qs); {
+		n := insertChunk
+		if len(qs)-i < n {
+			n = len(qs) - i
+		}
+		args := make([]any, 0, n*dnsCols)
+		for _, q := range qs[i : i+n] {
+			args = append(args, q.TS.Unix(), nz(q.ClientID), q.ClientIP, q.Name, q.QType, q.RCode,
+				b2i(q.Blocked), q.BlockSource, jsonStrings(q.CNAMEChain), jsonStrings(q.Answer),
+				q.Upstream, q.LatencyMS, b2i(q.Cached))
+		}
+		q := `INSERT INTO dns_queries
+			(ts, client_id, client_ip, name, qtype, rcode, blocked, block_source, cname_chain, answer, upstream, latency_ms, cached)
+			VALUES ` + sqlValues(n, dnsCols)
+		if _, err := tx.Exec(q, args...); err != nil {
 			return err
 		}
+		i += n
 	}
 	return tx.Commit()
 }
@@ -668,6 +823,33 @@ func clampInt(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// jsonStrings matches json.Marshal for []string, but skips the encoder
+// on the nil path that log rows hit on every insert.
+func jsonStrings(v []string) string {
+	if v == nil {
+		return "null"
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// sqlValues returns n tuples of cols placeholders: "(?,?,?),(?,?,?)".
+func sqlValues(n, cols int) string {
+	row := "(" + strings.Repeat("?,", cols-1) + "?)"
+	if n == 1 {
+		return row
+	}
+	var b strings.Builder
+	b.Grow((len(row) + 1) * n)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(row)
+	}
+	return b.String()
 }
 
 // applyMigrations runs each idempotent migration, ignoring the "duplicate

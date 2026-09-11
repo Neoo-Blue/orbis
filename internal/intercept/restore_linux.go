@@ -39,8 +39,9 @@ func Restore(ctx context.Context, ifaceName string, gateway netip.Addr, targets 
 	sent := 0
 	for i := 0; i < 3; i++ {
 		for _, t := range targets {
-			pkt := buildARP(arpOpReply, gwMAC, gateway, t.MAC, t.IP)
-			e.sendTo(fd, t.MAC, pkt)
+			for _, pkt := range truthFrames(e.selfMAC, gwMAC, gateway, t) {
+				e.sendTo(fd, t.MAC, pkt)
+			}
 			sent++
 		}
 		time.Sleep(150 * time.Millisecond)

@@ -138,6 +138,24 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		m.counter("orbis_quic_decrypted_total", "QUIC Initials decrypted.", float64(t.QUICDecrypted))
 	}
 
+	// The log writer: whether the disk keeps up with flows and lookups. The
+	// intercept load guard turns interception off on the same numbers.
+	if app.Store != nil {
+		ws := app.Store.WriteStats()
+		m.gauge("orbis_store_pending_rows", "Flow and DNS rows waiting in memory for the disk.", float64(ws.Pending))
+		m.counter("orbis_store_dropped_rows_total", "Rows discarded because the writer fell behind or a batch failed.", float64(ws.Dropped))
+		m.counter("orbis_store_busy_seconds_total", "Time spent writing flow and DNS batches.", float64(ws.BusyNanos)/1e9)
+		m.counter("orbis_store_flushes_total", "Flow and DNS batches committed.", float64(ws.Flushes))
+		m.counter("orbis_store_failed_flushes_total", "Flow and DNS batches whose commit failed.", float64(ws.FailedFlushes))
+	}
+
+	// Interception.
+	if app.Intercept != nil {
+		st := app.Intercept.Stats()
+		m.gauge("orbis_intercept_running", "1 when ARP interception is active.", b2f(st.Running))
+		m.gauge("orbis_intercept_targets", "Devices currently intercepted.", float64(st.Targets))
+	}
+
 	// Devices. Online is defined the same way the dashboard defines it, so the
 	// scraped number and the displayed number cannot disagree.
 	if app.Registry != nil {

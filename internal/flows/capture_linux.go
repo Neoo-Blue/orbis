@@ -30,6 +30,11 @@ type Capturer struct {
 	// onDNS/onHTTP let the ad-block pipeline observe cleartext requests
 	// without the capture layer importing it.
 	onHTTP func(clientIP netip.Addr, req *dpi.HTTPRequest)
+	// onStray hears about local devices using this node as their gateway:
+	// frames addressed to one of our MACs, from someone else's, carrying a
+	// packet from a local address to a public one. selfMACs is set with it.
+	onStray  func(src netip.Addr, srcMAC string)
+	selfMACs map[string]bool
 
 	mu       sync.Mutex
 	socks    []int
@@ -63,6 +68,21 @@ func NewCapturer(t *Tracker, snapLen int, ifaces []string, log func(string, ...a
 }
 
 func (c *Capturer) SetHTTPHook(fn func(netip.Addr, *dpi.HTTPRequest)) { c.onHTTP = fn }
+
+// SetStrayHook must be called before Start. The callback runs on the capture
+// path for every such packet, so it must be cheap and must not block.
+func (c *Capturer) SetStrayHook(fn func(src netip.Addr, srcMAC string)) {
+	macs := map[string]bool{}
+	if ifs, err := net.Interfaces(); err == nil {
+		for _, ifc := range ifs {
+			if len(ifc.HardwareAddr) == 6 {
+				macs[ifc.HardwareAddr.String()] = true
+			}
+		}
+	}
+	c.selfMACs = macs
+	c.onStray = fn
+}
 
 // AddInterfaces starts capturing on interfaces that appeared after startup —
 // a WireGuard or Tailscale device is created when the tunnel comes up, long
@@ -340,6 +360,10 @@ func (c *Capturer) handleIPv4(b []byte, srcMAC, dstMAC string, wireLen int) {
 	dst, ok2 := netip.AddrFromSlice(b[16:20])
 	if !ok1 || !ok2 {
 		return
+	}
+	if c.onStray != nil && c.selfMACs[dstMAC] && !c.selfMACs[srcMAC] &&
+		!c.tracker.isLocal(dst) && c.tracker.isLocal(src) {
+		c.onStray(src, srcMAC)
 	}
 	c.handleL4(proto, src, dst, b[ihl:], srcMAC, dstMAC, wireLen)
 }

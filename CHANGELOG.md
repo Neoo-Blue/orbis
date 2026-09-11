@@ -3,6 +3,47 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.29.0
+
+### Fixed
+- **An intercepted device that took a new address was left half-routed.** Interception tells a
+  device, by its hardware address, that Orbis is the gateway, but brings its replies back and
+  filters its lookups by its IP address. When the router handed an enrolled laptop a new lease,
+  Orbis kept pulling the laptop's traffic in while matching only the old address, so its requests
+  went out through Orbis and its answers came back around it. Sites failed to load and sign-ins
+  such as Duo timed out, which looked like a DNS problem. Orbis now follows the device: when it
+  shows up at a new address and answers for it, the enrolment moves with it, and until then the
+  device is sent back to the router rather than intercepted on a guess.
+- **A device left pointing at Orbis finds its way back to the router.** Turning interception off
+  sends each device the router's real address, but a Windows laptop whose connections kept working
+  through Orbis never asked again and stayed half-routed for as long as it was busy. In observe
+  mode Orbis now notices any device on the LAN that sends it traffic without being intercepted and
+  tells that device, and only that device, where the router is. The message to a device also names
+  its current address, and announces the router as well as answering for it.
+- **Putting a device back on the router no longer impersonates the router to the switch.** The
+  frames that tell a device where the router is carried the router's hardware address as their
+  Ethernet source, which teaches a switch that the router lives on Orbis's port and sends
+  everyone's gateway traffic there until the router next speaks. They now come from Orbis's own
+  address; the router's is only in the part the device reads.
+- **The router and the Orbis node itself can no longer be enrolled.** Intercepting the gateway
+  made the router see its own address on another machine. Existing entries for either are removed
+  with an event saying so, and the enrol button refuses them.
+- **Logging lookups and connections never waits for the disk.** When the queue of rows to write
+  filled up, the connection tracker and the DNS handlers wrote it out themselves and waited behind
+  whatever held the database, which on a Raspberry Pi could be a blocklist refresh for minutes.
+  Rows now wait in memory for the writer; if the disk falls far behind, the newest are dropped and
+  counted instead.
+
+### Added
+- **Interception turns itself off when the node cannot keep up.** Every intercepted device's
+  connections are written to the database, and enrolling storage and servers can bury a small
+  node's disk until the whole daemon stalls. If the writer is busy more than 60% of the time for
+  five minutes in a row, or has to drop rows, while interception is on, Orbis sends every device
+  back to the router, saves interception as off, and raises a critical event explaining why.
+- `/metrics` reports the log writer (`orbis_store_pending_rows`, `orbis_store_busy_seconds_total`,
+  `orbis_store_dropped_rows_total`, flush counts) and interception (`orbis_intercept_running`,
+  `orbis_intercept_targets`).
+
 ## v1.28.6
 
 ### Fixed

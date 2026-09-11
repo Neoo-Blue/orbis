@@ -25,6 +25,7 @@ type ClientRegistry struct {
 	st      *store.Store
 	tracker *Tracker
 	onNew   func(*store.Client)
+	onMove  func(mac string, from, to netip.Addr)
 	stop    chan struct{}
 	wg      sync.WaitGroup
 }
@@ -42,6 +43,10 @@ func NewClientRegistry(st *store.Store, t *Tracker) *ClientRegistry {
 }
 
 func (r *ClientRegistry) SetOnNew(fn func(*store.Client)) { r.onNew = fn }
+
+// SetOnMove is called when a known device (by MAC) turns up at a new address.
+// It runs on the capture path, so it must return quickly.
+func (r *ClientRegistry) SetOnMove(fn func(mac string, from, to netip.Addr)) { r.onMove = fn }
 
 // Load restores known devices at boot so history and labels survive restarts.
 func (r *ClientRegistry) Load() error {
@@ -133,9 +138,13 @@ func (r *ClientRegistry) Observe(ip netip.Addr, mac, hostname string) *store.Cli
 	}
 	// An address change is normal (DHCP renew into a new lease); keep the
 	// identity and move the index.
+	var movedFrom netip.Addr
 	if c.IP != ip.String() {
 		if old, err := netip.ParseAddr(c.IP); err == nil {
 			delete(r.byIP, old)
+			if !isNew && c.MAC != "" {
+				movedFrom = old
+			}
 		}
 		c.IP = ip.String()
 	}
@@ -160,7 +169,21 @@ func (r *ClientRegistry) Observe(ip netip.Addr, mac, hostname string) *store.Cli
 			r.onNew(&snapshot)
 		}
 	}
+	if movedFrom.IsValid() && r.onMove != nil {
+		r.onMove(snapshot.MAC, movedFrom, ip)
+	}
 	return c
+}
+
+// ByMAC returns the device with this hardware address, if known.
+func (r *ClientRegistry) ByMAC(mac string) *store.Client {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if c, ok := r.byMAC[strings.ToLower(strings.TrimSpace(mac))]; ok {
+		cp := *c
+		return &cp
+	}
+	return nil
 }
 
 // NoteUserAgent refines the OS guess when a cleartext User-Agent shows up.

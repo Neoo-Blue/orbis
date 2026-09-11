@@ -24,9 +24,12 @@ const (
 	// strainDuty is the share of wall time the log writer may spend on the
 	// disk before it counts as saturated. A healthy node sits in single digits.
 	strainDuty = 0.6
-	// strainMinutes of strain in a row turn interception off. A blocklist
-	// refresh can keep the disk busy for a few minutes on its own.
+	// strainMinutes of strain in a row turn interception off.
 	strainMinutes = 5
+	// strainSettle after a start is not judged: the index rebuild and the
+	// first list refresh kept a Pi's writer 60-100% busy for about ten
+	// minutes with nothing intercepted at all.
+	strainSettle = 10 * time.Minute
 )
 
 // guardInterceptLoad samples the store's writer once a minute.
@@ -43,6 +46,12 @@ func (a *App) guardInterceptLoad(now time.Time) {
 
 	if a.Intercept == nil || !a.Intercept.Running() {
 		g.strained = 0
+		return
+	}
+	// Startup and blocklist refreshes load the disk whether or not anything
+	// is intercepted. Those minutes neither count nor clear the streak, so a
+	// real overload that spans a refresh still turns interception off.
+	if a.Uptime() < strainSettle || (a.Lists != nil && a.Lists.Busy()) {
 		return
 	}
 	if duty < strainDuty && dropped == 0 {

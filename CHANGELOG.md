@@ -3,6 +3,15 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+## v1.29.1
+
+### Fixed
+- **The interception load guard no longer blames interception for a restart.** On a Raspberry Pi
+  the index rebuild and the first blocklist refresh after a start keep the database writer 60-100%
+  busy for about ten minutes with nothing intercepted, which would have turned interception off
+  after every restart. The guard now ignores the first ten minutes after a start and any time a
+  blocklist refresh is running; those minutes neither count toward the five nor reset them.
+
 ## v1.29.0
 
 ### Fixed

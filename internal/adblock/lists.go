@@ -352,6 +352,14 @@ func (m *Manager) RebuildLocal() error {
 	return nil
 }
 
+// Busy reports whether lists are being refreshed or the index rebuilt, which
+// keeps the database writer and the disk busy on their own.
+func (m *Manager) Busy() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.updating || m.rebuilding
+}
+
 func (m *Manager) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()

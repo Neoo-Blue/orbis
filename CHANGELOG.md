@@ -21,7 +21,10 @@ under "Show release notes" when it offers an update.
   tells that device, and only that device, where the router is. It spots them from the packets it
   captures and from one-way connections in the kernel's connection table, which also catches a
   device that only sends UDP, such as a VPN or Wi-Fi calling. The message to a device also names
-  its current address, and announces the router as well as answering for it.
+  its current address, and announces the router as well as answering for it. A device that keeps
+  coming back is told less and less often, down to every 15 minutes: a sleeping Android phone's
+  Wi-Fi chip replays its Wi-Fi-calling keepalive with the address it learned before, and nothing
+  on the network reaches it until the phone wakes.
 - **Putting a device back on the router no longer impersonates the router to the switch.** The
   frames that tell a device where the router is carried the router's hardware address as their
   Ethernet source, which teaches a switch that the router lives on Orbis's port and sends

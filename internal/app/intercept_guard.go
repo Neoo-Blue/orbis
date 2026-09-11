@@ -274,12 +274,22 @@ func (a *App) reconcileIntercept() {
 	}
 }
 
-// strayHealer rate-limits the stray-device check per MAC, so a device sending
-// thousands of packets costs one decision every few seconds.
+// strayHealer rate-limits the stray-device check per device, so one sending
+// thousands of packets costs one decision every few seconds, and backs off a
+// device that keeps coming back: a sleeping Android phone's Wi-Fi chip replays
+// its Wi-Fi-calling keepalive from a template that still carries the MAC it
+// resolved while it was intercepted, and no ARP reaches that template until the
+// phone wakes. Telling it every 30 s forever would only be noise.
 type strayHealer struct {
 	mu     sync.Mutex
-	seen   map[string]time.Time // mac -> last decision
+	marks  map[string]*strayMark
 	logged map[string]time.Time // mac -> last log line
+}
+
+type strayMark struct {
+	next time.Time // no decision before this
+	last time.Time // last time the device was seen straying
+	n    int       // decisions since it last went quiet
 }
 
 const (
@@ -288,24 +298,53 @@ const (
 	// A one-way conntrack entry outlives the device's move back to the
 	// router by up to a few minutes, so that path decides less often.
 	strayConntrackEvery = 30 * time.Second
+	strayMaxBackoff     = 15 * time.Minute
+	strayQuiet          = 10 * time.Minute // this long unseen starts it over
 )
+
+// allow says whether key may be decided on now, doubling the wait after each
+// decision up to strayMaxBackoff.
+func (s *strayHealer) allow(key string, base time.Duration, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.marks == nil {
+		s.marks = map[string]*strayMark{}
+	}
+	m := s.marks[key]
+	if m == nil {
+		if len(s.marks) > 4096 {
+			for k, old := range s.marks {
+				if now.Sub(old.last) > strayQuiet {
+					delete(s.marks, k)
+				}
+			}
+		}
+		m = &strayMark{}
+		s.marks[key] = m
+	}
+	if now.Sub(m.last) > strayQuiet {
+		m.n = 0
+		m.next = time.Time{}
+	}
+	m.last = now
+	if now.Before(m.next) {
+		return false
+	}
+	wait := base << min(m.n, 8)
+	if wait > strayMaxBackoff {
+		wait = strayMaxBackoff
+	}
+	m.n++
+	m.next = now.Add(wait)
+	return true
+}
 
 // noteStrayIP is the conntrack side of noteStray: a one-way connection from a
 // LAN address to the internet. Conntrack has no MAC, so it is looked up.
 func (a *App) noteStrayIP(src netip.Addr) {
-	now := time.Now()
-	key := "ct:" + src.String()
-	s := &a.stray
-	s.mu.Lock()
-	if s.seen == nil {
-		s.seen = map[string]time.Time{}
-	}
-	if now.Sub(s.seen[key]) < strayConntrackEvery {
-		s.mu.Unlock()
+	if !a.stray.allow("ct:"+src.String(), strayConntrackEvery, time.Now()) {
 		return
 	}
-	s.seen[key] = now
-	s.mu.Unlock()
 	go func() {
 		if a.Cfg.Snapshot().Mode != config.ModeObserve || (a.Intercept != nil && a.Intercept.IsTarget(src)) {
 			return
@@ -342,25 +381,9 @@ func (a *App) noteStrayIP(src netip.Addr) {
 // noteStray runs on the capture path for packets a local device sends through
 // this node. It only rate-limits and hands the decision off.
 func (a *App) noteStray(src netip.Addr, mac string) {
-	now := time.Now()
-	s := &a.stray
-	s.mu.Lock()
-	if s.seen == nil {
-		s.seen = map[string]time.Time{}
-	}
-	if now.Sub(s.seen[mac]) < strayEvery {
-		s.mu.Unlock()
+	if !a.stray.allow(mac, strayEvery, time.Now()) {
 		return
 	}
-	s.seen[mac] = now
-	if len(s.seen) > 4096 {
-		for k, t := range s.seen {
-			if now.Sub(t) > time.Minute {
-				delete(s.seen, k)
-			}
-		}
-	}
-	s.mu.Unlock()
 	go a.healStray(src, mac)
 }
 

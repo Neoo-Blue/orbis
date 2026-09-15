@@ -26,6 +26,20 @@ export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorized = fn
 }
 
+/** A slow assistant action answers 202 {running: true} and finishes in the
+ *  background; ask again every few seconds until the result is handed back.
+ *  Cloudflare's edge gives up on a request long before a free model chain
+ *  does, so the request itself must never be the long part. */
+async function untilDone<T>(call: () => Promise<T | { running: true }>, everyMs = 3000, maxMs = 6 * 60 * 1000): Promise<T> {
+  const t0 = Date.now()
+  for (;;) {
+    const r = await call()
+    if (!(r && typeof r === 'object' && (r as { running?: boolean }).running === true)) return r as T
+    if (Date.now() - t0 > maxMs) throw new ApiError(504, 'the assistant is taking too long; try again in a minute')
+    await new Promise((res) => setTimeout(res, everyMs))
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     credentials: 'same-origin',
@@ -327,22 +341,22 @@ export const api = {
     models: () => get<AIModelsStatus>('/ai/models'),
     probe: () => post<{ started: boolean }>('/ai/probe'),
     briefs: (limit = 10) => get<{ briefs: AIBrief[] }>(`/ai/briefs${qs({ limit })}`),
-    runBrief: (hours?: number) => post<AIBrief>('/ai/briefs/run', hours ? { hours } : {}),
+    runBrief: (hours?: number) => untilDone(() => post<AIBrief | { running: true }>('/ai/briefs/run', hours ? { hours } : {})),
     recommendations: (status = '') =>
       get<{ recommendations: Recommendation[]; review: { enabled: boolean; interval_hours: number } }>(`/ai/recommendations${qs({ status })}`),
     decide: (id: string, decision: 'accept' | 'dismiss' | 'reopen') =>
       post<{ recommendation: Recommendation }>(`/ai/recommendations/${id}`, { decision }),
-    runReview: (hours?: number) => post<{ added: Recommendation[] }>('/ai/review/run', hours ? { hours } : {}),
+    runReview: (hours?: number) => untilDone(() => post<{ added: Recommendation[] } | { running: true }>('/ai/review/run', hours ? { hours } : {})),
     notes: () => get<{ notes: AINote[] }>('/ai/notes'),
     addNote: (note: string) => post<{ note: AINote }>('/ai/notes', { note }),
     deleteNote: (id: string) => del<{ ok: boolean }>(`/ai/notes/${id}`),
     intel: (limit = 5) => get<IntelStatus>(`/ai/intel${qs({ limit })}`),
-    runIntel: (hours?: number) => post<{ assessment: AIIntel; actions: AIAction[] }>('/ai/intel/run', hours ? { hours } : {}),
+    runIntel: (hours?: number) => untilDone(() => post<{ assessment: AIIntel; actions: AIAction[] } | { running: true }>('/ai/intel/run', hours ? { hours } : {})),
     decideAction: (id: string, decision: 'apply' | 'dismiss' | 'undo') =>
       post<{ action: AIAction }>(`/ai/actions/${id}`, { decision }),
     explain: (kind: 'event' | 'alert' | 'ip' | 'domain', key: string) =>
-      post<{ explanation: Explanation }>('/ai/explain', { kind, key }),
-    judge: (domain: string) => post<DomainJudgement>('/ai/judge', { domain }),
+      untilDone(() => post<{ explanation: Explanation } | { running: true }>('/ai/explain', { kind, key })),
+    judge: (domain: string) => untilDone(() => post<DomainJudgement | { running: true }>('/ai/judge', { domain })),
   },
 
   shortcuts: {

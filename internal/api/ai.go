@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"net/http"
 
+	"context"
+	"encoding/json"
 	"github.com/go-chi/chi/v5"
+	"time"
 )
 
 // The assistant's plumbing: which models are in play, how much of the free
@@ -44,13 +47,14 @@ func (s *Server) handleIntelRun(w http.ResponseWriter, r *http.Request) {
 	if req.Hours <= 0 {
 		req.Hours = s.cfg.Snapshot().AI.Intel.IntervalHours
 	}
-	out, err := s.app.RunIntel(r.Context(), req.Hours)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	s.app.Store.Audit(r.RemoteAddr, "ai.intel", "", "", fmt.Sprint(req.Hours), "ok")
-	writeOK(w, out)
+	actor, hours := r.RemoteAddr, req.Hours
+	s.runJob(w, "intel", 10*time.Minute, func(ctx context.Context) (any, error) {
+		out, err := s.app.RunIntel(ctx, hours)
+		if err == nil {
+			s.app.Store.Audit(actor, "ai.intel", "", "", fmt.Sprint(hours), "ok")
+		}
+		return out, err
+	})
 }
 
 func (s *Server) handleAIActionDecide(w http.ResponseWriter, r *http.Request) {
@@ -78,12 +82,10 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	out, err := s.app.Explain(r.Context(), req.Kind, req.Key)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeOK(w, out)
+	kind, key := req.Kind, req.Key
+	s.runJob(w, "explain|"+kind+"|"+key, 5*time.Minute, func(ctx context.Context) (any, error) {
+		return s.app.Explain(ctx, kind, key)
+	})
 }
 
 func (s *Server) handleJudge(w http.ResponseWriter, r *http.Request) {
@@ -94,12 +96,10 @@ func (s *Server) handleJudge(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	out, err := s.app.JudgeDomain(r.Context(), req.Domain)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	writeOK(w, out)
+	domain := req.Domain
+	s.runJob(w, "judge|"+domain, 5*time.Minute, func(ctx context.Context) (any, error) {
+		return s.app.JudgeDomain(ctx, domain)
+	})
 }
 
 func (s *Server) handleRecommendations(w http.ResponseWriter, r *http.Request) {
@@ -140,13 +140,15 @@ func (s *Server) handleReviewRun(w http.ResponseWriter, r *http.Request) {
 	if req.Hours <= 0 {
 		req.Hours = s.cfg.Snapshot().AI.Review.IntervalHours
 	}
-	recs, err := s.app.Reviewer.Review(r.Context(), req.Hours)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	s.app.Store.Audit(r.RemoteAddr, "ai.review", "", "", fmt.Sprint(len(recs)), "ok")
-	writeOK(w, map[string]any{"added": recs})
+	actor, hours := r.RemoteAddr, req.Hours
+	s.runJob(w, "review", 10*time.Minute, func(ctx context.Context) (any, error) {
+		recs, err := s.app.Reviewer.Review(ctx, hours)
+		if err != nil {
+			return nil, err
+		}
+		s.app.Store.Audit(actor, "ai.review", "", "", fmt.Sprint(len(recs)), "ok")
+		return map[string]any{"added": recs}, nil
+	})
 }
 
 func (s *Server) handleNotes(w http.ResponseWriter, r *http.Request) {
@@ -227,11 +229,30 @@ func (s *Server) handleAIBriefRun(w http.ResponseWriter, r *http.Request) {
 	if req.Hours <= 0 {
 		req.Hours = s.cfg.Snapshot().AI.Brief.IntervalHours
 	}
-	brief, err := s.app.Briefer.Generate(r.Context(), req.Hours)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+	actor, hours := r.RemoteAddr, req.Hours
+	s.runJob(w, "brief", 10*time.Minute, func(ctx context.Context) (any, error) {
+		brief, err := s.app.Briefer.Generate(ctx, hours)
+		if err != nil {
+			return nil, err
+		}
+		s.app.Store.Audit(actor, "ai.brief", "", "", brief.Headline, "ok")
+		return brief, nil
+	})
+}
+
+// runJob answers a slow assistant action from the job table: 202 with
+// {"running": true} while it works, the result once, an error once.
+func (s *Server) runJob(w http.ResponseWriter, key string, timeout time.Duration, fn func(ctx context.Context) (any, error)) {
+	st := s.jobs.get(key, timeout, fn)
+	if st.Running {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{"running": true, "started": st.Started})
 		return
 	}
-	s.app.Store.Audit(r.RemoteAddr, "ai.brief", "", "", brief.Headline, "ok")
-	writeOK(w, brief)
+	if st.Err != nil {
+		writeErr(w, http.StatusBadGateway, st.Err.Error())
+		return
+	}
+	writeOK(w, st.Result)
 }

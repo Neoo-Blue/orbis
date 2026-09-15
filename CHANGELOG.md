@@ -4,6 +4,16 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.32.1
+
+### Fixed
+- **Explain, Ask about a domain, Run review, Write a brief and Run an assessment no longer fail
+  through the tunnel.** Each ran the model chain inside the request, up to two minutes on the
+  free models, longer than Cloudflare waits for an origin, so from outside the LAN they came
+  back as a 502 page. They now start in the background, the page asks again every few seconds,
+  and the answer is handed back when it is ready. A client that gives up no longer cancels the
+  work, and a second click while one runs joins it instead of starting another.
+
 ## v1.32.0
 
 ### Added

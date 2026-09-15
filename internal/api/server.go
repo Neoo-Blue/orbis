@@ -23,6 +23,8 @@ import (
 )
 
 type Server struct {
+	// jobs runs the slow assistant actions off the request; see jobs.go.
+	jobs jobs
 	app  *app.App
 	cfg  *config.Config
 	http *http.Server

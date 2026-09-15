@@ -4,10 +4,19 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.30.6
+
+### Fixed
+- **Applying the kernel settings really persists them now.** 1.30.5 wrote the files but the
+  daemon's hardened unit mounts `/etc` read-only, so the write failed silently while Apply
+  reported success. The unit now allows `/etc/sysctl.d` and `/etc/modules-load.d` (a drop-in
+  on already-installed nodes: `ReadWritePaths=/etc/sysctl.d /etc/modules-load.d`), and Apply
+  reports `persisted` with the reason when it could not.
+
 ## v1.30.5
 
 ### Fixed
-- **Applying the kernel settings now survives a reboot.** The Apply button wrote the live values
+- **Applying the kernel settings survives a reboot.** The Apply button wrote the live values
   only, so the "kernel settings need attention" warning came back after every restart of the
   node. It now also writes `/etc/sysctl.d/99-orbis.conf` and asks the boot process to load
   `nf_conntrack` first, since the connection-tracking settings do not exist until it is loaded.

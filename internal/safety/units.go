@@ -69,7 +69,9 @@ func MainUnit(o UnitOptions) string {
 	w("ProtectSystem=strict")
 	w("ProtectHome=yes")
 	w("PrivateTmp=yes")
-	w("ReadWritePaths=/var/lib/orbis /etc/orbis /etc/resolv.conf")
+	// sysctl.d and modules-load.d: applying the kernel settings persists
+	// them there, so the warning does not return after a reboot.
+	w("ReadWritePaths=/var/lib/orbis /etc/orbis /etc/resolv.conf /etc/sysctl.d /etc/modules-load.d")
 	w("ProtectKernelLogs=yes")
 	w("ProtectControlGroups=yes")
 	w("RestrictRealtime=yes")

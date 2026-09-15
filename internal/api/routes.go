@@ -912,8 +912,13 @@ func (s *Server) handleSysctl(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleApplySysctl(w http.ResponseWriter, r *http.Request) {
 	result := firewall.ApplySysctls()
-	s.app.Store.Audit(r.RemoteAddr, "sysctl.apply", "", "", "", "ok")
-	writeOK(w, map[string]any{"sysctl": result})
+	out := map[string]any{"sysctl": result, "persisted": true}
+	if err := firewall.PersistSysctls(); err != nil {
+		out["persisted"] = false
+		out["persist_error"] = err.Error()
+	}
+	s.app.Store.Audit(r.RemoteAddr, "sysctl.apply", "", "", fmt.Sprint(out["persist_error"]), "ok")
+	writeOK(w, out)
 }
 
 // ---- policies ----

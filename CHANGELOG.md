@@ -4,6 +4,29 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.32.0
+
+### Added
+- **A guided first run.** The first screen after install sets everything a new node needs, in
+  eleven short steps with a sensible default at each: the admin password (now, or skip and set
+  it later), the node's name, time zone and location, simple or advanced interface, watch-only
+  or gateway, what to run, the upstream resolvers, blocklist presets, the optional assistant and
+  notifications, and finally the node's address to point the router at, with the placement check
+  updating live as devices start using it. Optional steps can be skipped, a reload resumes where
+  you were, and nothing secret is kept in the browser between reloads.
+- **The one-line installer installs the latest release** rather than the nightly build
+  (`CHANNEL=nightly` keeps the old behaviour), handles Arch, Fedora and openSUSE package names as
+  well as Debian and Ubuntu, refuses cleanly on hosts without systemd with a pointer to the
+  Docker path, warns on WSL where the node cannot see the LAN, persists every kernel setting the
+  daemon needs and loads `nf_conntrack` at boot so they apply, waits for the service to answer
+  before claiming success, and ends with the address to open and what the guided setup will do.
+
+### Fixed
+- **A request no longer waits behind a blocklist import to write its audit entry.** On a fresh
+  node the default lists import for a minute or more; every step of the wizard, and any other
+  audited action, waited on that lock for five seconds or more. Audit rows are written off the
+  request now.
+
 ## v1.31.0
 
 ### Added

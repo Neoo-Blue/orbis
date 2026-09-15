@@ -199,6 +199,11 @@ To roll back after a bad update: `sudo cp /usr/local/bin/orbisd.prev /usr/local/
 
 ## The first hour
 
+0. **Finish the guided setup.** The first screen after install walks through everything a new
+   node needs, with a sensible default at every step: a password (now or later), the node's name
+   and time zone, watch-only or gateway, what to run, upstream resolvers, blocklists, the optional
+   assistant and notifications, and finally the node's address to point your router at, with the
+   placement check turning green on its own as devices start using it.
 1. **Point devices at it.** Set your router's DHCP DNS to the node, or just the devices you want
    to start with. Everything on the DNS layer works from here: lists, profiles, safe search,
    service bundles, country refusal, shortcuts.
@@ -273,8 +278,11 @@ by default so YouTube falls back to TCP where the proxy can see it.
 **A full resolver.** LRU cache with a TTL floor, upstreams over plain, DoT and DoH (encrypted by
 default), and a DoT/DoH server for your own devices so a phone keeps using it off the LAN. Local
 authoritative records with wildcards, rewrites, conditional forwarding, rate limiting, rebinding
-protection. Turn the cache up and the TTL floor to an hour and it is a drop-in for unbound in
-front of a home network.
+protection. A name asked for in the last tenth of its TTL is refreshed in the background while
+the cached answer is served, so the names a household asks for constantly never wait on an
+upstream again. Answer latency is measured (`orbis_dns_answer_seconds` on `/metrics`), so "is
+DNS slow" is a number, not a feeling. Turn the cache up and the TTL floor to an hour and it is
+a drop-in for unbound in front of a home network.
 
 **Lists from anywhere.** Any list AdGuard Home or Pi-hole accepts works here, with the same
 meaning: hosts files, plain domains, AdGuard rules with exceptions, `$important`, `$denyallow`,
@@ -394,10 +402,15 @@ carry identity, so each connection gets a hostname, an application, a network op
 country and a coordinate at a fraction of the traffic's cost. Conntrack over netlink supplies
 the byte counters.
 
-**The globe.** A 3D globe and a flat map of live and historical connections. Every arc carries
-two crest trains, cool for bytes leaving the network and warm for bytes arriving, so a download
-and an upload on the same connection are both visible; an arc that something outside opened is
-tinted so an unsolicited inbound connection stands out. Countries light up by traffic.
+**The globe.** A 3D globe and a flat map of live and historical connections, coloured by what
+each connection is for: streaming, social and messaging, gaming, web, DNS, other, worked out
+from the service, app, name and port. A blocked connection is red in every colouring, so a
+rejected connection is always visible as one; a toggle switches to colouring by verdict
+(allowed, blocked, filtered). Every arc carries two crest trains, cool for bytes leaving the
+network and warm for bytes arriving, so a download and an upload on the same connection are both
+visible; an arc that something outside opened is tinted so an unsolicited inbound connection
+stands out. Countries light up by traffic. Tapping an arc names the connection, its kind, the
+device, the network operator and the bytes each way.
 
 **Services.** Traffic grouped into the applications a person recognises (Netflix, YouTube,
 TikTok, Windows Update, a smart TV's telemetry) from a catalogue of a few hundred hostnames;
@@ -431,13 +444,18 @@ webhook or email, scheduled reports, Prometheus metrics.
 ## Operating it: two interfaces and the assistant
 
 **Simple** is seven screens in plain words for a household: Home (is everything fine, ask a
-question), Devices (pause internet with a timer, pick a profile, rename), Protection (every
-filter as a sentence and a switch, fix or block a site, block known-bad addresses, block
-countries, pair a TV), Usage, Ask, Alerts, Settings. **Advanced** is every page and setting.
-Both write the same configuration, so nothing done in one is invisible in the other. On a phone
-both become a bottom tab bar; every page has been laid out and checked at phone width
-([docs/UX-AUDIT.md](docs/UX-AUDIT.md) records the audit). Settings has search, a glossary
-explains every term in one sentence, and ⌘K jumps to any page, device or setting.
+question, requests waiting for your OK), Devices (pause internet with a timer, pick a profile,
+rename), Protection (every filter as a sentence and a switch, fix or block a site, block
+known-bad addresses, block countries, pair a TV), Usage, Ask, Alerts, Settings. **Advanced** is
+every page and setting; its Devices page has the same timed pause on every row and in the device
+drawer, and the Overview's busiest devices, most-blocked names, heaviest connections and recent
+events are all buttons. Both write the same configuration, so nothing done in one is invisible in
+the other. On a phone both become a bottom tab bar; every page has been laid out and checked at
+phone width ([docs/UX-AUDIT.md](docs/UX-AUDIT.md) records the audit). Destructive actions
+confirm in the app, not with the browser's dialog. Settings has search, a glossary explains every
+term in one sentence, and ⌘K jumps to any page, device or setting and lands on it: a setting
+opens its section, a device opens its drawer, and `#/clients/<id>` is a link you can share. Pages
+load on demand, so the first screen downloads a third of what it used to.
 
 **With the assistant configured, the network gets an analyst.** A scheduled **threat check**
 reads the window's attacks, threat-feed hits, anomalies, bans, blocked lookups and busiest

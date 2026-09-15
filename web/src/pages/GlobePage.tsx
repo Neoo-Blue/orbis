@@ -4,6 +4,7 @@ import { api } from '../api'
 import { usePoll, useLocalStorage, type LiveEvent } from '../hooks'
 import { Globe } from '../globe/Globe'
 import { FlatMap } from '../globe/FlatMap'
+import { KINDS, BLOCKED_COLOR, arcKind, kindColor, kindLabel, type ColorBy } from '../globe/kind'
 import { Banner, Icons, Segmented, useToast } from '../ui'
 import { bytes, clientName, countryFlag, compact, flowTarget } from '../format'
 import type { Client, Flow, GlobeArc } from '../types'
@@ -21,6 +22,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
   const [hours, setHours] = useLocalStorage<number>('orbis.globe.hours', 24)
   const [clientFilter, setClientFilter] = useState<string>('')
   const [projection, setProjection] = useLocalStorage<Projection>('orbis.globe.projection', 'globe')
+  const [colorBy, setColorBy] = useLocalStorage<ColorBy>('orbis.globe.colour', 'kind')
   const [autoRotate, setAutoRotate] = useState(true)
   const [selected, setSelected] = useState<GlobeArc | null>(null)
   const [focus, setFocus] = useState<{ lat: number; lng: number } | null>(null)
@@ -165,6 +167,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
           onSelect={onSelect}
           focus={focus}
           autoRotate={autoRotate}
+          colorBy={colorBy}
         />
       ) : (
         <FlatMap
@@ -172,6 +175,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
           liveArcs={mode === 'live' ? liveArcs : []}
           onSelect={onSelect}
           autoAnimate={autoRotate}
+          colorBy={colorBy}
         />
       )}
 
@@ -190,9 +194,18 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
         )}
         <div className="globe-legend-row" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap', flex: 'none' }}>
           <div className="globe-legend">
-            <span><i style={{ background: 'var(--accent)' }} />allowed</span>
-            <span><i style={{ background: 'var(--red)' }} />blocked</span>
-            <span><i style={{ background: 'var(--violet)' }} />filtered</span>
+            {colorBy === 'kind' ? (
+              <>
+                {KINDS.map((k) => <span key={k.id}><i style={{ background: k.color }} />{k.label}</span>)}
+                <span title="A rejected connection is red whichever colouring is chosen"><i style={{ background: BLOCKED_COLOR }} />blocked</span>
+              </>
+            ) : (
+              <>
+                <span><i style={{ background: 'var(--accent)' }} />allowed</span>
+                <span><i style={{ background: 'var(--red)' }} />blocked</span>
+                <span><i style={{ background: 'var(--violet)' }} />filtered</span>
+              </>
+            )}
             <span><i style={{ background: 'var(--blue)' }} />this network</span>
             <span><i style={{ background: 'var(--amber)' }} />inbound connection</span>
             <span title="Bytes leaving the network run toward the far end"><i style={{ background: '#eafffb' }} />sent</span>
@@ -210,6 +223,11 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
             value={mode}
             onChange={(v) => setMode(v)}
             options={[{ value: 'live', label: 'Live' }, { value: 'history', label: 'History' }]}
+          />
+          <Segmented
+            value={colorBy}
+            onChange={(v) => setColorBy(v)}
+            options={[{ value: 'kind', label: 'By kind' }, { value: 'verdict', label: 'By verdict' }]}
           />
           {mode === 'history' && (
             <Segmented
@@ -342,6 +360,11 @@ function ArcDetail({ arc, onClose, onBlock }: { arc: GlobeArc; onClose: () => vo
           {!arc.hostname && !arc.service && (
             <><dt>Name</dt><dd className="hint">not visible: no DNS lookup seen and the handshake is encrypted</dd></>
           )}
+          <dt>Kind</dt><dd>
+            <i style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, marginRight: 6, verticalAlign: 'middle',
+              background: arc.verdict === 'block' ? BLOCKED_COLOR : kindColor(arcKind(arc)) }} />
+            {kindLabel(arcKind(arc))}{arc.verdict === 'block' ? ', blocked' : ''}
+          </dd>
           <dt>Address</dt><dd>{arc.dst}:{arc.port}</dd>
           <dt>Protocol</dt><dd>{arc.proto}</dd>
           {arc.app && <><dt>Application</dt><dd>{arc.app}</dd></>}

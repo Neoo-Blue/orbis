@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { GlobeScene, type ArcSpec, type PointSpec } from './scene'
 import type { GlobeArc, GlobeData } from '../types'
+import { arcKind, type ColorBy } from './kind'
 import { bytes, countryFlag } from '../format'
 
 interface Props {
@@ -11,9 +12,10 @@ interface Props {
   focus?: { lat: number; lng: number } | null
   autoRotate?: boolean
   className?: string
+  colorBy?: ColorBy
 }
 
-export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, className }: Props) {
+export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, className, colorBy = 'kind' }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<GlobeScene | null>(null)
   const [hover, setHover] = useState<{ arc: GlobeArc; x: number; y: number } | null>(null)
@@ -45,6 +47,10 @@ export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, clas
   }, [autoRotate])
 
   useEffect(() => {
+    sceneRef.current?.setColorBy(colorBy)
+  }, [colorBy])
+
+  useEffect(() => {
     if (focus && sceneRef.current) sceneRef.current.focusOn(focus.lat, focus.lng)
   }, [focus])
 
@@ -66,7 +72,7 @@ export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, clas
       id: a.id,
       startLat: a.start_lat, startLng: a.start_lng,
       endLat: a.end_lat, endLng: a.end_lng,
-      verdict: a.verdict, bytes: a.bytes, risk: a.risk, active: a.active,
+      verdict: a.verdict, kind: arcKind(a), bytes: a.bytes, risk: a.risk, active: a.active,
       label: a.label, direction: a.direction ?? 'out', meta: {},
       bytesIn: a.bytes_in ?? 0, bytesOut: a.bytes_out ?? 0,
     }))

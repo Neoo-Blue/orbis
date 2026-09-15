@@ -4,6 +4,16 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.31.0
+
+### Added
+- **The globe colours connections by what they are for.** Streaming, social and messaging,
+  gaming, web, DNS and other each have their own colour, chosen from the connection's service,
+  app, name and port, so a household can see at a glance what the network is doing. The legend
+  and the connection card name the kind. A blocked connection stays red in every colouring, so a
+  rejected connection is always visible as one. The old colouring by verdict (allowed, blocked,
+  filtered) is a toggle in the globe controls, and the choice is remembered.
+
 ## v1.30.6
 
 ### Fixed

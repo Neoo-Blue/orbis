@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import landRings from '../data/land.json'
 import countryShapes from '../data/countries.json'
 import type { GlobeArc, GlobeData } from '../types'
+import { arcKind, kindColor, type ColorBy } from './kind'
 
 /** One ring of one country, tagged with its ISO 3166-1 alpha-2 code. */
 interface CountryShape { c: string; n: string; r: number[] }
@@ -25,6 +26,7 @@ interface Props {
   liveArcs?: GlobeArc[]
   onSelect?: (arc: GlobeArc | null) => void
   autoAnimate?: boolean
+  colorBy?: ColorBy
 }
 
 const COLORS = {
@@ -46,11 +48,13 @@ function verdictColor(v: string): string {
   return (COLORS as Record<string, string>)[v] ?? COLORS.allow
 }
 
-/** Verdict stays the primary colour encoding; inbound arcs are tinted toward
- *  the inbound hue so direction is readable with the animation paused. */
-function arcColor(a: { verdict: string; direction?: string }): string {
-  if (a.direction !== 'in') return verdictColor(a.verdict)
-  return mix(verdictColor(a.verdict), COLORS.inbound, 0.45)
+/** The verdict, or the kind of traffic when that colouring is chosen; a
+ *  blocked connection is red either way. Inbound arcs are tinted toward the
+ *  inbound hue so direction is readable with the animation paused. */
+function arcColor(a: GlobeArc, by: ColorBy): string {
+  const base = by === 'kind' && a.verdict !== 'block' ? kindColor(arcKind(a)) : verdictColor(a.verdict)
+  if (a.direction !== 'in') return base
+  return mix(base, COLORS.inbound, 0.45)
 }
 
 function mix(a: string, b: string, t: number): string {
@@ -70,8 +74,11 @@ interface View {
   offsetY: number
 }
 
-export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props) {
+export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true, colorBy = 'kind' }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  // Read from the draw loop without re-creating it when the choice changes.
+  const colorByRef = useRef<ColorBy>(colorBy)
+  colorByRef.current = colorBy
   const wrapRef = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<{ arc: GlobeArc; x: number; y: number } | null>(null)
 
@@ -277,7 +284,7 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true }: Props)
 
         const weight = Math.min(1, Math.log10(Math.max(a.bytes, 1)) / 8)
         const isHovered = hoverRef.current?.id === a.id
-        ctx.strokeStyle = arcColor(a)
+        ctx.strokeStyle = arcColor(a, colorByRef.current)
         ctx.globalAlpha = isHovered ? 0.95 : 0.16 + weight * 0.4
         ctx.lineWidth = isHovered ? 2.2 : 0.7 + weight * 1.1
         ctx.beginPath()

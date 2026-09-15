@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { kindColor, type ColorBy } from './kind'
 import landRings from '../data/land.json'
 import countryShapes from '../data/countries.json'
 
@@ -25,6 +26,9 @@ export interface ArcSpec {
   endLat: number
   endLng: number
   verdict: string
+  /** What the connection is for (see globe/kind.ts); the colouring by kind
+   *  reads this. */
+  kind: string
   bytes: number
   risk: number
   active: boolean
@@ -109,11 +113,25 @@ function verdictColor(v: string): THREE.Color {
   return COLORS[v as keyof typeof COLORS] ?? COLORS.allow
 }
 
-/** arcColor keeps verdict as the primary encoding but tints inbound arcs
+// The active colouring. A module variable rather than a parameter so every
+// place that builds or refreshes an arc reads the same choice.
+let colorBy: ColorBy = 'kind'
+const kindColors = new Map<string, THREE.Color>()
+
+/** arcColor encodes the verdict, or the kind of traffic when that colouring
+ *  is chosen; a blocked connection is red either way. Inbound arcs are tinted
  *  toward the inbound hue, so direction survives a paused animation and is
  *  legible to anyone who cannot perceive the motion. */
-function arcColor(spec: { verdict: string; direction: string }): THREE.Color {
-  const base = verdictColor(spec.verdict)
+function arcColor(spec: { verdict: string; direction: string; kind?: string }): THREE.Color {
+  let base: THREE.Color
+  if (colorBy === 'kind' && spec.verdict !== 'block') {
+    const k = spec.kind ?? 'other'
+    let c = kindColors.get(k)
+    if (!c) { c = new THREE.Color(kindColor(k)); kindColors.set(k, c) }
+    base = c
+  } else {
+    base = verdictColor(spec.verdict)
+  }
   if (spec.direction !== 'in') return base
   return base.clone().lerp(COLORS.inbound, 0.45)
 }
@@ -526,6 +544,17 @@ export class GlobeScene {
    * animation every poll — the flicker that causes is the fastest way to make
    * a live view feel broken.
    */
+  /** setColorBy switches between verdict and kind colouring and recolours
+   *  every arc in place, without rebuilding geometry. */
+  setColorBy(mode: ColorBy) {
+    if (mode === colorBy) return
+    colorBy = mode
+    for (const entry of this.arcs) {
+      const mat = entry.line.material as THREE.ShaderMaterial
+      mat.uniforms.uBase.value = arcColor(entry.spec)
+    }
+  }
+
   setArcs(specs: ArcSpec[]) {
     if (this.disposed) return
     const now = this.clock.getElapsedTime()

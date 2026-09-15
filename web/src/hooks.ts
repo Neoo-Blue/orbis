@@ -13,11 +13,13 @@ export function usePoll<T>(
   const [loading, setLoading] = useState(true)
   const fnRef = useRef(fn)
   fnRef.current = fn
+  const inFlightRef = useRef(false)
   const [tick, setTick] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     const run = async () => {
+      inFlightRef.current = true
       try {
         const result = await fnRef.current()
         if (!cancelled) {
@@ -31,15 +33,35 @@ export function usePoll<T>(
           setError(e instanceof Error ? e.message : String(e))
         }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          inFlightRef.current = false
+          setLoading(false)
+        }
       }
     }
     run()
-    if (intervalMs <= 0) return () => { cancelled = true }
-    const id = setInterval(run, intervalMs)
+    if (intervalMs <= 0) {
+      return () => {
+        cancelled = true
+        inFlightRef.current = false
+      }
+    }
+    const onTick = () => {
+      if (document.hidden || inFlightRef.current) return
+      run()
+    }
+    const onVisibility = () => {
+      if (!document.hidden && !inFlightRef.current) {
+        run()
+      }
+    }
+    const id = setInterval(onTick, intervalMs)
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       cancelled = true
+      inFlightRef.current = false
       clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intervalMs, tick, ...deps])

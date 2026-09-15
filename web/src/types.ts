@@ -1228,6 +1228,21 @@ export interface OnboardingState {
   dhcp_enabled: boolean
   adblock: boolean
   lounge_enabled: boolean
+  timezone?: string
+  addresses?: string[]
+}
+
+export interface OnboardingApplyParams {
+  mode?: 'simple' | 'advanced'
+  node_name?: string
+  placement?: 'observe' | 'inline'
+  wan_interface?: string
+  enable_dns?: boolean
+  enable_adblock?: boolean
+  enable_dhcp?: boolean
+  enable_youtube?: boolean
+  upstreams?: string[]
+  finish?: boolean
 }
 
 // ---- topology ----

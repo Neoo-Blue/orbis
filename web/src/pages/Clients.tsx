@@ -10,7 +10,16 @@ import type { Client, DNSQuery, Flow, Policy } from '../types'
 export function ClientsPage() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<'all' | 'online' | 'blocked'>('all')
-  const [selected, setSelected] = useState<string | null>(null)
+  const clientFromHash = (): string | null => {
+    const parts = location.hash.replace(/^#\/?/, '').split('/')
+    return parts[0] === 'clients' && parts[1] ? decodeURIComponent(parts[1]) : null
+  }
+  const [selected, setSelected] = useState<string | null>(clientFromHash)
+  useEffect(() => {
+    const onHash = () => { const id = clientFromHash(); if (id) setSelected(id) }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
   const debounced = useDebounced(query, 200)
 
   const { data, refresh } = usePoll(() => api.clients.list(), 8000)

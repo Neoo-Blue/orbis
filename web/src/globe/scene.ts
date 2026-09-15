@@ -741,6 +741,7 @@ export class GlobeScene {
     window.addEventListener('pointerup', this.onPointerUp)
     el.addEventListener('wheel', this.onWheel, { passive: false })
     window.addEventListener('resize', this.onResize)
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
   }
 
   private onPointerDown = (e: PointerEvent) => {
@@ -834,8 +835,25 @@ export class GlobeScene {
 
   // ---- loop ----
 
-  private animate = () => {
+  private onVisibilityChange = () => {
     if (this.disposed) return
+    if (document.hidden) {
+      if (this.frameId) {
+        cancelAnimationFrame(this.frameId)
+        this.frameId = 0
+      }
+    } else {
+      if (!this.frameId) {
+        this.frameId = requestAnimationFrame(this.animate)
+      }
+    }
+  }
+
+  private animate = () => {
+    if (this.disposed || document.hidden) {
+      this.frameId = 0
+      return
+    }
     this.frameId = requestAnimationFrame(this.animate)
     const t = this.clock.getElapsedTime()
 
@@ -870,6 +888,7 @@ export class GlobeScene {
   dispose() {
     this.disposed = true
     cancelAnimationFrame(this.frameId)
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
     const el = this.renderer.domElement
     el.removeEventListener('pointerdown', this.onPointerDown)
     window.removeEventListener('pointermove', this.onPointerMove)

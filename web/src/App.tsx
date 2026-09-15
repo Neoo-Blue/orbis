@@ -1,46 +1,47 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from 'react'
 import { api, setUnauthorizedHandler } from './api'
 import { usePoll, useLive, useLocalStorage, useMediaQuery, type LiveEvent } from './hooks'
 import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast, Drawer } from './ui'
 import type { AppConfig, SystemStatus, Summary } from './types'
 import { Dashboard } from './pages/Dashboard'
 import { UpdateBanner } from './pages/UpdateCard'
-import { GlobePage } from './pages/GlobePage'
-import { AnalyticsPage } from './pages/Analytics'
-import { AlertsPage } from './pages/Alerts'
-import { ReportsPage } from './pages/Reports'
-import { ClientsPage } from './pages/Clients'
-import { FlowsPage } from './pages/Flows'
-import { DNSPage } from './pages/DNS'
-import { AdBlockPage } from './pages/AdBlock'
-import { YouTubePage } from './pages/YouTube'
-import { DNSToolsPage } from './pages/DNSTools'
-import { TopologyPage } from './pages/Topology'
-import { InterceptPage } from './pages/Intercept'
-import { GatewayPage } from './pages/Gateway'
-import { ConsentPage } from './pages/Consent'
-import { FirewallPage } from './pages/Firewall'
-import { NetworkPage } from './pages/Network'
-import { VPNPage } from './pages/VPN'
-import { AssistantPage } from './pages/Assistant'
-import { ProblemsPage } from './pages/Problems'
-import { ThreatsPage } from './pages/Threats'
-import { HostedPage } from './pages/Hosted'
-import { LinksPage } from './pages/Links'
-import { ServicesPage } from './pages/Services'
-import { ProfilesPage } from './pages/Profiles'
 import { SimpleHome } from './simple/Home'
 import { SimpleDevices } from './simple/Devices'
 import { SimpleProtection } from './simple/Protection'
 import { SimpleAlerts } from './simple/Alerts'
 import { SimpleSettings } from './simple/SettingsSimple'
-import { EventsPage } from './pages/Events'
-import { SettingsPage } from './pages/Settings'
 import { Login } from './pages/Login'
 import { Onboarding } from './pages/Onboarding'
 import { ErrorBoundary } from './ErrorBoundary'
 import { CommandPalette } from './CommandPalette'
 import { GlossaryButton } from './Glossary'
+
+const GlobePage = lazy(() => import('./pages/GlobePage').then(m => ({ default: m.GlobePage })))
+const AnalyticsPage = lazy(() => import('./pages/Analytics').then(m => ({ default: m.AnalyticsPage })))
+const AlertsPage = lazy(() => import('./pages/Alerts').then(m => ({ default: m.AlertsPage })))
+const ReportsPage = lazy(() => import('./pages/Reports').then(m => ({ default: m.ReportsPage })))
+const ClientsPage = lazy(() => import('./pages/Clients').then(m => ({ default: m.ClientsPage })))
+const FlowsPage = lazy(() => import('./pages/Flows').then(m => ({ default: m.FlowsPage })))
+const DNSPage = lazy(() => import('./pages/DNS').then(m => ({ default: m.DNSPage })))
+const AdBlockPage = lazy(() => import('./pages/AdBlock').then(m => ({ default: m.AdBlockPage })))
+const YouTubePage = lazy(() => import('./pages/YouTube').then(m => ({ default: m.YouTubePage })))
+const DNSToolsPage = lazy(() => import('./pages/DNSTools').then(m => ({ default: m.DNSToolsPage })))
+const TopologyPage = lazy(() => import('./pages/Topology').then(m => ({ default: m.TopologyPage })))
+const InterceptPage = lazy(() => import('./pages/Intercept').then(m => ({ default: m.InterceptPage })))
+const GatewayPage = lazy(() => import('./pages/Gateway').then(m => ({ default: m.GatewayPage })))
+const ConsentPage = lazy(() => import('./pages/Consent').then(m => ({ default: m.ConsentPage })))
+const FirewallPage = lazy(() => import('./pages/Firewall').then(m => ({ default: m.FirewallPage })))
+const NetworkPage = lazy(() => import('./pages/Network').then(m => ({ default: m.NetworkPage })))
+const VPNPage = lazy(() => import('./pages/VPN').then(m => ({ default: m.VPNPage })))
+const AssistantPage = lazy(() => import('./pages/Assistant').then(m => ({ default: m.AssistantPage })))
+const ProblemsPage = lazy(() => import('./pages/Problems').then(m => ({ default: m.ProblemsPage })))
+const ThreatsPage = lazy(() => import('./pages/Threats').then(m => ({ default: m.ThreatsPage })))
+const HostedPage = lazy(() => import('./pages/Hosted').then(m => ({ default: m.HostedPage })))
+const LinksPage = lazy(() => import('./pages/Links').then(m => ({ default: m.LinksPage })))
+const ServicesPage = lazy(() => import('./pages/Services').then(m => ({ default: m.ServicesPage })))
+const ProfilesPage = lazy(() => import('./pages/Profiles').then(m => ({ default: m.ProfilesPage })))
+const EventsPage = lazy(() => import('./pages/Events').then(m => ({ default: m.EventsPage })))
+const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })))
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
@@ -166,7 +167,9 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   }, [])
 
   const navigate = useCallback((r: Route) => {
-    location.hash = `#/${r}`
+    if (routeFromHash() !== r) {
+      location.hash = `#/${r}`
+    }
     setRoute(r)
   }, [])
 
@@ -195,13 +198,34 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   // One socket for the whole app; pages subscribe to the shared feed rather
   // than each opening their own.
   const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([])
-  const onEvent = useCallback((ev: LiveEvent) => {
+  const eventBuffer = useRef<LiveEvent[]>([])
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const flushEvents = useCallback(() => {
+    flushTimer.current = null
+    if (eventBuffer.current.length === 0) return
+    const batch = eventBuffer.current
+    eventBuffer.current = []
     setLiveEvents((prev) => {
-      const next = [...prev, ev]
+      const next = [...prev, ...batch]
       // A bounded ring: the pages that need history keep their own copy.
       return next.length > 600 ? next.slice(-400) : next
     })
   }, [])
+
+  const onEvent = useCallback((ev: LiveEvent) => {
+    eventBuffer.current.push(ev)
+    if (!flushTimer.current) {
+      flushTimer.current = setTimeout(flushEvents, 250)
+    }
+  }, [flushEvents])
+
+  useEffect(() => {
+    return () => {
+      if (flushTimer.current) clearTimeout(flushTimer.current)
+    }
+  }, [])
+
   const connected = useLive(onEvent)
 
   const mode = status?.mode ?? 'observe'
@@ -228,14 +252,12 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   useEffect(() => { setMoreOpen(false) }, [route, narrow])
   const navRoutes = ui === 'simple' ? SIMPLE_ROUTES : narrow ? ROUTES.filter((r) => MOBILE_PRIMARY.includes(r.id)) : ROUTES
   const grouped = useMemo(() => {
-    const out: Array<{ group?: string; items: NavRoute[] }> = []
-    let current: { group?: string; items: NavRoute[] } | null = null
+    const out: Array<{ group: string; items: NavRoute[] }> = []
     for (const r of navRoutes) {
-      if (r.group || !current) {
-        current = { group: r.group, items: [] }
-        out.push(current)
-      }
-      current.items.push(r)
+      const g = r.group ?? (out.length ? out[out.length - 1].group : '')
+      let b = out.find((x) => x.group === g)
+      if (!b) { b = { group: g, items: [] }; out.push(b) }
+      b.items.push(r)
     }
     return out
   }, [navRoutes])
@@ -328,7 +350,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
               {(() => {
                 const out: Array<{ group: string; items: NavRoute[] }> = []
                 for (const r of ROUTES) {
-                  const g = r.group ?? (out.length ? out[out.length - 1].group : 'Observe')
+                  const g = r.group ?? (out.length ? out[out.length - 1].group : '')
                   let b = out.find((x) => x.group === g)
                   if (!b) { b = { group: g, items: [] }; out.push(b) }
                   b.items.push(r)
@@ -381,47 +403,49 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
           )}
 
           <ErrorBoundary name={title} key={shown}>
-          {shown === 'dashboard' && <Dashboard status={status} summary={summary} events={liveEvents} onNavigate={navigate} />}
-          {route === 'globe' && <GlobePage events={liveEvents} />}
-          {route === 'flows' && <FlowsPage events={liveEvents} />}
-          {route === 'analytics' && <AnalyticsPage />}
-          {route === 'clients' && <ClientsPage />}
-          {route === 'topology' && <TopologyPage events={liveEvents} />}
-          {route === 'dns' && <DNSPage events={liveEvents} />}
-          {route === 'adblock' && <AdBlockPage />}
-          {route === 'dnstools' && <DNSToolsPage />}
-          {route === 'youtube' && <YouTubePage />}
-          {route === 'consent' && <ConsentPage />}
-          {route === 'gateway' && <GatewayPage />}
-          {route === 'intercept' && <InterceptPage />}
-          {route === 'firewall' && <FirewallPage status={status} />}
-          {route === 'network' && <NetworkPage status={status} />}
-          {route === 'vpn' && <VPNPage />}
-          {route === 'assistant' && <AssistantPage initialQuestion={pendingQuestion ?? undefined} onConsumed={() => setPendingQuestion(null)} />}
-          {route === 'profiles' && <ProfilesPage />}
-          {shown === 's-home' && <SimpleHome onNavigate={go} onAsk={onAsk} />}
-          {shown === 's-devices' && <SimpleDevices onNavigate={go} />}
-          {shown === 's-protection' && (config ? <SimpleProtection config={config} save={saveConfig} onNavigate={go} /> : <Spinner />)}
-          {shown === 's-usage' && (
-            <div style={{ display: 'grid', gap: 14 }}>
-              <div className="hint" style={{ fontSize: 13.5, lineHeight: 1.6, maxWidth: 760 }}>
-                What is using the internet, by app and by device. Devices marked "DNS only" are seen but not measured;
-                press Intercept on one to measure it.
-              </div>
-              <ServicesPage onNavigate={(r) => navigate(r)} />
-            </div>
-          )}
-          {shown === 's-alerts' && <SimpleAlerts onNavigate={go} />}
-          {shown === 's-settings' && (config ? <SimpleSettings config={config} status={status} save={saveConfig} uiMode={ui} setUIMode={(m) => setUIPref(m)} onNavigate={go} /> : <Spinner />)}
-          {route === 'problems' && <ProblemsPage />}
-          {route === 'threats' && <ThreatsPage />}
-          {route === 'hosted' && <HostedPage />}
-          {route === 'links' && <LinksPage />}
-          {route === 'services' && <ServicesPage onNavigate={(r) => setRoute(r)} />}
-          {route === 'events' && <EventsPage />}
-          {route === 'alerts' && <AlertsPage />}
-          {route === 'reports' && <ReportsPage />}
-          {route === 'settings' && <SettingsPage status={status} onAuthChange={onAuthChange} />}
+            <Suspense fallback={<Spinner />}>
+              {shown === 'dashboard' && <Dashboard status={status} summary={summary} events={liveEvents} onNavigate={navigate} />}
+              {route === 'globe' && <GlobePage events={liveEvents} />}
+              {route === 'flows' && <FlowsPage events={liveEvents} />}
+              {route === 'analytics' && <AnalyticsPage />}
+              {route === 'clients' && <ClientsPage />}
+              {route === 'topology' && <TopologyPage events={liveEvents} />}
+              {route === 'dns' && <DNSPage events={liveEvents} />}
+              {route === 'adblock' && <AdBlockPage />}
+              {route === 'dnstools' && <DNSToolsPage />}
+              {route === 'youtube' && <YouTubePage />}
+              {route === 'consent' && <ConsentPage />}
+              {route === 'gateway' && <GatewayPage />}
+              {route === 'intercept' && <InterceptPage />}
+              {route === 'firewall' && <FirewallPage status={status} />}
+              {route === 'network' && <NetworkPage status={status} />}
+              {route === 'vpn' && <VPNPage />}
+              {route === 'assistant' && <AssistantPage initialQuestion={pendingQuestion ?? undefined} onConsumed={() => setPendingQuestion(null)} />}
+              {route === 'profiles' && <ProfilesPage />}
+              {shown === 's-home' && <SimpleHome onNavigate={go} onAsk={onAsk} />}
+              {shown === 's-devices' && <SimpleDevices onNavigate={go} />}
+              {shown === 's-protection' && (config ? <SimpleProtection config={config} save={saveConfig} onNavigate={go} /> : <Spinner />)}
+              {shown === 's-usage' && (
+                <div style={{ display: 'grid', gap: 14 }}>
+                  <div className="hint" style={{ fontSize: 13.5, lineHeight: 1.6, maxWidth: 760 }}>
+                    What is using the internet, by app and by device. Devices marked "DNS only" are seen but not measured;
+                    press Intercept on one to measure it.
+                  </div>
+                  <ServicesPage onNavigate={(r) => navigate(r)} />
+                </div>
+              )}
+              {shown === 's-alerts' && <SimpleAlerts onNavigate={go} />}
+              {shown === 's-settings' && (config ? <SimpleSettings config={config} status={status} save={saveConfig} uiMode={ui} setUIMode={(m) => setUIPref(m)} onNavigate={go} /> : <Spinner />)}
+              {route === 'problems' && <ProblemsPage />}
+              {route === 'threats' && <ThreatsPage />}
+              {route === 'hosted' && <HostedPage />}
+              {route === 'links' && <LinksPage />}
+              {route === 'services' && <ServicesPage onNavigate={(r) => setRoute(r)} />}
+              {route === 'events' && <EventsPage />}
+              {route === 'alerts' && <AlertsPage />}
+              {route === 'reports' && <ReportsPage />}
+              {route === 'settings' && <SettingsPage status={status} onAuthChange={onAuthChange} />}
+            </Suspense>
           </ErrorBoundary>
         </div>
       </main>

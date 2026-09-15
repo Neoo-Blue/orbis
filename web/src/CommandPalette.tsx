@@ -68,7 +68,7 @@ export function CommandPalette({ pages, onNavigate }: {
     }
     for (const d of devices) {
       list.push({ id: `dev:${d.id}`, title: d.label, subtitle: d.ip, group: 'Devices',
-        icon: 'devices', run: () => { location.hash = `#/clients`; onNavigate('clients') } })
+        icon: 'devices', run: () => { location.hash = `#/clients/${d.id}`; onNavigate('clients') } })
     }
     // Every setting the index knows, by its on-screen label.
     for (const e of SETTINGS_INDEX) {

@@ -100,6 +100,8 @@ One line, on a Debian/Ubuntu host, VM or existing LXC, on a Raspberry Pi, or on 
 curl -fsSL https://raw.githubusercontent.com/Neoo-Blue/orbis/main/deploy/bootstrap.sh | sudo bash
 ```
 
+The one-liner installs the latest tagged release (`CHANNEL=nightly` for the nightly build).
+
 On a **Proxmox host** it creates a privileged LXC and installs Orbis inside it. On a
 **Debian/Ubuntu** host, VM, container or Pi it installs in place: dependencies (nftables,
 conntrack, WireGuard tools, hostapd, iw), the prebuilt binary for amd64 or arm64, a systemd
@@ -107,9 +109,18 @@ service, and the GeoIP databases. It never changes how the network behaves; the 
 in observe mode. Overrides are documented at the top of
 [deploy/bootstrap.sh](deploy/bootstrap.sh) (`CTID`, `BRIDGE`, `IP`, `STORAGE`, `SKIP_GEOIP`).
 
-Then open `http://<host>:8080`. A first-run wizard asks how the node should sit on the network,
-pre-fills the internet-facing interface from what the cables say, and checks whether the node can
-actually see your traffic.
+Then open `http://<host>:8080`. The first screen is a guided setup: it sets a password, names
+the node and its time zone, and asks whether it should watch only or be the gateway. It then
+picks what to run, the upstream resolvers and blocklists, optional assistant and notifications,
+and shows you how to point devices at the node with a live check.
+
+### Where it runs
+
+Debian, Ubuntu, Raspberry Pi OS and derivatives: the one-liner. A Proxmox host: the same
+one-liner, which creates an LXC. Arch, Fedora and openSUSE: the one-liner; package names
+differ and are handled. WSL: runs with systemd on; cannot see the LAN, for trying the
+interface only. Anything without systemd, or another OS: Docker, see
+[docs/DOCKER.md](docs/DOCKER.md).
 
 ### Replacing AdGuard Home or Pi-hole on a Raspberry Pi
 

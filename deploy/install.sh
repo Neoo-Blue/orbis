@@ -16,16 +16,35 @@ say()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m warn\033[0m %s\n' "$*"; }
 die()  { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
 
+install_deps() {
+  # nftables: the firewall engine. conntrack: flow termination + byte counters.
+  # wireguard-tools: the VPN. iproute2: policy routing for VPN steering.
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends \
+      nftables conntrack wireguard-tools iproute2 hostapd iw ca-certificates curl >/dev/null
+  elif command -v pacman >/dev/null 2>&1; then
+    # On Arch a package install is a system update: -Sy alone (refresh, then
+    # install against the new database) is the partial upgrade the wiki warns about.
+    pacman -Syu --noconfirm --needed \
+      nftables conntrack-tools wireguard-tools iproute2 hostapd iw ca-certificates curl >/dev/null
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y \
+      nftables conntrack-tools wireguard-tools iproute hostapd iw ca-certificates curl >/dev/null
+  elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install \
+      nftables conntrack-tools wireguard-tools iproute2 hostapd iw ca-certificates curl >/dev/null
+  else
+    warn "dependencies were not installed (no apt-get, pacman, dnf or zypper): nftables conntrack wireguard-tools iproute2 hostapd iw ca-certificates curl"
+  fi
+}
+
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [ -f "$BIN_SRC" ] || die "binary not found at $BIN_SRC"
 
 say "Installing dependencies"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-# nftables: the firewall engine. conntrack: flow termination + byte counters.
-# wireguard-tools: the VPN. iproute2: policy routing for VPN steering.
-apt-get install -y -qq --no-install-recommends \
-  nftables conntrack wireguard-tools iproute2 hostapd iw ca-certificates curl >/dev/null
+install_deps
 
 say "Installing orbisd to $PREFIX"
 install -m 0755 "$BIN_SRC" "$PREFIX/orbisd"
@@ -167,11 +186,19 @@ UNIT
 fi
 
 say "Applying kernel settings"
+install -d /etc/sysctl.d /etc/modules-load.d
+# The net.netfilter keys only exist once nf_conntrack is loaded, and at boot
+# systemd-sysctl runs after systemd-modules-load.
+printf 'nf_conntrack\n' > /etc/modules-load.d/orbis.conf
 cat > /etc/sysctl.d/99-orbis.conf <<'SYSCTL'
 # Byte counters per connection, which the flow table reads.
 net.netfilter.nf_conntrack_acct = 1
 net.netfilter.nf_conntrack_timestamp = 1
 net.netfilter.nf_conntrack_max = 262144
+# Loose RPF: strict mode breaks policy routing (VPN steering).
+net.ipv4.conf.all.rp_filter = 2
+# Lets the transparent proxy redirect to a listener on loopback.
+net.ipv4.conf.all.route_localnet = 1
 SYSCTL
 # Forwarding is deliberately NOT set here: turning it on is part of becoming
 # a gateway, and that belongs to the inline-mode decision, not the installer.
@@ -181,22 +208,61 @@ sysctl -q --system 2>/dev/null || warn "some sysctls could not be applied"
 systemctl daemon-reload
 systemctl enable --now orbis.service
 
-say "Waiting for the service"
+# api.listen looks like ":8080" or "0.0.0.0:8080".
+ui_port=8080
+if [ -f "$CONFIG" ]; then
+  listen="$(awk '
+    $1 == "api:" { inapi=1; next }
+    inapi && /^[^[:space:]#]/ { exit }
+    inapi && $1 == "listen:" { print $2; exit }
+  ' "$CONFIG" 2>/dev/null || true)"
+  listen="${listen#[\"\']}"
+  listen="${listen%[\"\']}"
+  p="${listen##*:}"
+  case "$p" in
+    ''|*[!0-9]*) ;;
+    *) ui_port="$p" ;;
+  esac
+fi
+
+# The one-liner is the whole setup before the browser; do not claim success
+# if the service never answers.
+ready=0
 for _ in $(seq 1 20); do
-  if curl -fsS --max-time 2 http://127.0.0.1:8080/api/status >/dev/null 2>&1; then
+  if curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:${ui_port}/api/auth/status" 2>/dev/null; then
+    ready=1
     break
   fi
-  sleep 0.5
+  sleep 1
 done
+if [ "$ready" -ne 1 ]; then
+  echo "Orbis did not start: run journalctl -u orbis -n 50" >&2
+  exit 1
+fi
 
-ADDR="$(hostname -I 2>/dev/null | awk '{print $1}')"
+addrs="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)" || true
+[ -n "$addrs" ] || addrs="$(hostname -I 2>/dev/null || true)"
+
 echo
-say "Orbis is installed and running in observe mode."
-echo "    UI:      http://${ADDR:-127.0.0.1}:8080"
+say "Orbis is up."
+ui_printed=0
+# Word-split: each token is one address from ip or hostname -I.
+# shellcheck disable=SC2086
+for a in $addrs; do
+  case "$a" in
+    *:*) continue ;;
+  esac
+  if [ "$ui_printed" -eq 0 ]; then
+    echo "    UI:      http://${a}:${ui_port}"
+    ui_printed=1
+  else
+    echo "             http://${a}:${ui_port}"
+  fi
+done
+if [ "$ui_printed" -eq 0 ]; then
+  echo "    UI:      http://127.0.0.1:${ui_port}"
+fi
 echo "    Config:  $CONFIG"
 echo "    Logs:    journalctl -u orbis -f"
 echo
-echo "  Nothing is routed through this node yet. Next steps, in the UI:"
-echo "    1. Set an admin password (you are prompted on first load)."
-echo "    2. Optionally point a device's DNS at ${ADDR:-this host} to see filtering work."
-echo "    3. Switch to inline mode only when you want it to be the gateway."
+echo "  Open it in a browser. The first screen is a guided setup: it sets a password, names the node, picks what to run, the upstream resolvers and blocklists, and shows you how to point your router at it. About five minutes."

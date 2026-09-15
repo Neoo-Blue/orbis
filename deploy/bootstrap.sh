@@ -14,7 +14,7 @@
 # It never changes how the network behaves. The node comes up in observe mode.
 #
 # Overrides (all optional), e.g.  curl ... | CTID=130 BRIDGE=vmbr0 sudo -E bash
-#   CHANNEL     nightly (default) | stable
+#   CHANNEL=nightly  rolling nightly build (default: latest tagged release)
 #   CTID        LXC id on Proxmox (default: next free)
 #   HOSTNAME    LXC hostname (default: orbis)
 #   BRIDGE      LXC bridge (default: vmbr0)
@@ -29,13 +29,25 @@ set -euo pipefail
 
 REPO="Neoo-Blue/orbis"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
-CHANNEL="${CHANNEL:-nightly}"
+CHANNEL="${CHANNEL:-stable}"
 
 c_say()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 c_warn() { printf '\033[33m warn\033[0m %s\n' "$*"; }
 c_die()  { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || c_die "run as root (pipe into 'sudo bash')"
+
+on_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
+
+if on_wsl; then
+  c_warn "WSL: the node sits behind Windows' virtual network, so it cannot see the LAN's traffic, cannot intercept devices, and other devices cannot reach its resolver unless WSL is in mirrored networking mode and Windows forwards port 53."
+  c_warn "systemd must be enabled in /etc/wsl.conf for the service to run. Fine for looking at the interface and filtering the Windows host itself."
+  if [ ! -d /run/systemd/system ]; then
+    c_die "WSL has no systemd; add [boot] systemd=true to /etc/wsl.conf, then from Windows run wsl --shutdown and start this distro again"
+  fi
+elif [ ! -d /run/systemd/system ]; then
+  c_die "Orbis needs systemd for the service and the safety net; without it, run docker compose up -d with the repo's docker-compose.yml (host networking, NET_ADMIN and NET_RAW)"
+fi
 
 arch() {
   case "$(uname -m)" in
@@ -45,21 +57,43 @@ arch() {
   esac
 }
 
-binary_url() { echo "https://github.com/${REPO}/releases/download/${CHANNEL}/orbisd-linux-$(arch)"; }
+# stable follows GitHub's latest-release redirect; nightly is a rolling tag.
+binary_url() {
+  local a; a="$(arch)"
+  if [ "$CHANNEL" = "stable" ]; then
+    echo "https://github.com/${REPO}/releases/latest/download/orbisd-linux-${a}"
+  else
+    echo "https://github.com/${REPO}/releases/download/${CHANNEL}/orbisd-linux-${a}"
+  fi
+}
+
+install_deps() {
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq --no-install-recommends \
+      nftables conntrack wireguard-tools iproute2 tcpdump hostapd iw ca-certificates curl >/dev/null
+  elif command -v pacman >/dev/null 2>&1; then
+    # On Arch a package install is a system update: -Sy alone (refresh, then
+    # install against the new database) is the partial upgrade the wiki warns about.
+    pacman -Syu --noconfirm --needed \
+      nftables conntrack-tools wireguard-tools iproute2 hostapd iw ca-certificates curl >/dev/null
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y \
+      nftables conntrack-tools wireguard-tools iproute hostapd iw ca-certificates curl >/dev/null
+  elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install \
+      nftables conntrack-tools wireguard-tools iproute2 hostapd iw ca-certificates curl >/dev/null
+  else
+    c_warn "dependencies were not installed (no apt-get, pacman, dnf or zypper): nftables conntrack wireguard-tools iproute2 tcpdump hostapd iw ca-certificates curl"
+  fi
+}
 
 # ---- in-place install (host / VM / container) --------------------------------
 
 install_inplace() {
   c_say "Installing Orbis in place ($(arch), ${CHANNEL} channel)"
-  export DEBIAN_FRONTEND=noninteractive
-
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq
-    apt-get install -y -qq --no-install-recommends \
-      nftables conntrack wireguard-tools iproute2 tcpdump hostapd iw ca-certificates curl >/dev/null
-  else
-    c_warn "apt-get not found; assuming dependencies (nftables, iproute2, conntrack) are present"
-  fi
+  install_deps
 
   local tmp; tmp="$(mktemp -d)"
   trap 'rm -rf "${tmp:-}"' EXIT
@@ -161,7 +195,7 @@ LXCCONF
     sleep 2
   done
 
-  c_say "Installing Orbis inside the container"
+  c_say "Installing Orbis inside the container (${CHANNEL} channel)"
   pct exec "$ctid" -- bash -c "apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null 2>&1 || true"
   pct exec "$ctid" -- bash -c \
     "curl -fsSL ${RAW}/deploy/bootstrap.sh | CHANNEL='${CHANNEL}' SKIP_GEOIP='${SKIP_GEOIP:-0}' FORCE_INPLACE=1 bash"

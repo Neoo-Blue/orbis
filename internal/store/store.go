@@ -137,9 +137,23 @@ func Open(path string) (*Store, error) {
 			return
 		default:
 		}
+		// A shutdown mid-build must interrupt the statement: Close waits
+		// for this goroutine before its final flush, and systemd kills the
+		// daemon after 25 s, which would lose every queued row. The driver
+		// interrupts SQLite when the context is cancelled; the half-built
+		// index is rolled back and the next start tries again.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-s.closed:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 		started := time.Now()
 		fmt.Fprintln(os.Stderr, "store: building block source index")
-		if _, err = tx.Exec("CREATE INDEX IF NOT EXISTS idx_block_source ON block_domains(source)"); err == nil {
+		if _, err = tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_block_source ON block_domains(source)"); err == nil {
 			err = tx.Commit()
 		}
 		if err != nil {

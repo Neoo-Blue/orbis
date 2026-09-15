@@ -195,7 +195,12 @@ export function ClientsPage() {
         <ClientDrawer
           id={selected}
           until={pauseMap[selected]}
-          onClose={() => setSelected(null)}
+          onClose={() => {
+            setSelected(null)
+            // Leave a plain #/clients behind so the drawer does not reopen
+            // on the next visit; replaceState fires no hashchange.
+            if (location.hash.startsWith('#/clients/')) history.replaceState(null, '', '#/clients')
+          }}
           onChanged={() => { refresh(); refreshPauses() }}
         />
       )}

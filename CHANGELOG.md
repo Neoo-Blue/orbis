@@ -77,6 +77,19 @@ under "Show release notes" when it offers an update.
   list, not the device. Both now open the exact target, and `#/clients/<id>` is a link.
 - **Each sidebar heading appears once.** Assistant and Problems, both in the Operate group, were
   rendered as two sections.
+- **Timed pause on the advanced Devices page.** The 30 min / 1 h / 3 h / until-resumed pause that
+  the simple interface had is on every device row and in the device drawer, with the time it
+  lifts shown on the device and a Resume button while it is paused.
+- **Overview rows act.** A busiest device opens that device, a blocked name opens Ad blocking, a
+  heavy connection opens Connections, an event opens Events.
+- **Destructive actions confirm in the app**, not with the browser's dialog: a titled sheet with
+  Cancel and a red confirm, Escape cancels, focus returns to where it was.
+- **Labels are attached to their fields, search has a name, drawers take focus when they open,
+  and text inputs keep a visible focus ring.** Buttons and tabs are at least 36 px tall on a
+  phone.
+- **Empty states say what to do next** instead of only that there is nothing.
+- **Ask-first requests show on the simple Home** as "N requests waiting for your OK" when there
+  are any, linking to the inbox.
 
 ## v1.29.1
 

@@ -853,9 +853,18 @@ func (s *Store) AckEvent(id string) error {
 
 // ---------- audit ----------
 
+// Audit records an operator action. The insert runs off the request: while
+// a blocklist import holds the write lock (minutes on a small node), every
+// handler that audited waited behind it, which made each step of the
+// first-run wizard take five seconds or more.
 func (s *Store) Audit(actor, action, target, before, after, result string) {
-	_, _ = s.db.Exec(`INSERT INTO audit_log (ts, actor, action, target, before, after, result)
-		VALUES (?,?,?,?,?,?,?)`, time.Now().Unix(), actor, action, target, before, after, result)
+	ts := time.Now().Unix()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		_, _ = s.db.Exec(`INSERT INTO audit_log (ts, actor, action, target, before, after, result)
+			VALUES (?,?,?,?,?,?,?)`, ts, actor, action, target, before, after, result)
+	}()
 }
 
 func (s *Store) AuditLog(limit int) ([]AuditEntry, error) {

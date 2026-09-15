@@ -1155,14 +1155,11 @@ func (a *App) BuildReport(window string, since time.Time) *report.Report {
 		rep.Node = "orbis"
 	}
 
-	// DNS totals from the query log.
-	if rows, err := a.Store.DNSLog(since, "", false, "", 100000); err == nil {
-		rep.DNSQueries = int64(len(rows))
-		for _, q := range rows {
-			if q.Blocked {
-				rep.DNSBlocked++
-			}
-		}
+	// DNS totals. The summary already counts them (and is cached); pulling
+	// a hundred thousand log rows to count them took 15 s on a Raspberry Pi.
+	if sum, err := a.Store.Summary(since); err == nil {
+		rep.DNSQueries, _ = sum["dns_queries"].(int64)
+		rep.DNSBlocked, _ = sum["dns_blocked"].(int64)
 		if rep.DNSQueries > 0 {
 			rep.BlockRate = 100 * float64(rep.DNSBlocked) / float64(rep.DNSQueries)
 		}

@@ -22,6 +22,10 @@ under "Show release notes" when it offers an update.
   statistics stay current.
 - **The Reports page no longer crashes on a day with nothing to rank.** An empty list arrived as
   `null` and the page read its first element.
+- **A report no longer takes fifteen seconds to build.** It pulled up to a hundred thousand
+  lookup rows to count them; it now reads the cached summary.
+- **Loading the interface no longer forces a cable rescan.** The onboarding state asked the link
+  watcher to rescan on every load; it now reads the scan the watcher already keeps fresh.
 
 ## v1.30.0
 

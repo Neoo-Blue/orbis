@@ -233,6 +233,8 @@ func onboardingLinks(s *Server) map[string]any {
 	if s.app.Links == nil {
 		return nil
 	}
-	ls, sug := s.app.Links.Refresh()
+	// The watcher rescans every few seconds on its own; forcing a rescan
+	// here made every load of the interface wait on it.
+	ls, sug, _ := s.app.Links.Current()
 	return map[string]any{"links": ls, "suggestion": sug}
 }

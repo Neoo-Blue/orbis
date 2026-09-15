@@ -8,7 +8,8 @@ import { Section, Tile } from './common'
 export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => void; onAsk: (q: string) => void }) {
   const { data: health, refresh } = usePoll(() => api.simple.health(), 15000)
   const { data: consent } = usePoll(() => api.consent.status(), 15000)
-  const pending = consent?.pending.length ?? 0
+  // With ask-first off the status carries no queue at all.
+  const pending = consent?.pending?.length ?? 0
   const [question, setQuestion] = useState('')
   const [checking, setChecking] = useState(false)
   const toast = useToast()
@@ -34,9 +35,9 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
           {health.devices_online} of {health.devices_total} devices are online.
           {' '}{health.protection_on ? `${num(health.blocked_today)} ads and trackers were blocked today.` : 'Protection is switched off.'}
         </div>
-        {health.points.length > 0 && (
+        {(health.points ?? []).length > 0 && (
           <div className="hero-points">
-            {health.points.map((p, i) => (
+            {(health.points ?? []).map((p, i) => (
               <div key={i}><Dot state={p.level === 'problem' ? 'err' : p.level === 'attention' ? 'warn' : 'on'} /><span>{p.text}</span></div>
             ))}
           </div>

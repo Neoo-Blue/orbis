@@ -14,10 +14,12 @@ import (
 func (s *Server) mountSimple(r chi.Router) {
 	r.Get("/health", s.handleHealth)
 	r.Get("/dns/services", s.handleServiceBundles)
-	r.Route("/clients/{id}", func(r chi.Router) {
-		r.Post("/pause", s.handleClientPause)
-		r.Post("/resume", s.handleClientResume)
-	})
+	// Plain routes, not a mounted sub-router: a router mounted at
+	// /clients/{id} carries its own catch-all, which swallowed every other
+	// device path (/clients/{id}, /flows, /destinations, /dns) and answered
+	// them with the interface's HTML page.
+	r.Post("/clients/{id}/pause", s.handleClientPause)
+	r.Post("/clients/{id}/resume", s.handleClientResume)
 	r.Get("/pauses", s.handlePauses)
 }
 

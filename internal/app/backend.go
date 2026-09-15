@@ -601,7 +601,9 @@ func (a *App) liftExpiredPauses(now time.Time) {
 func (a *App) Health() map[string]any {
 	cfg := a.Cfg.Snapshot()
 	level := "ok"
-	var points []map[string]any
+	// An empty list, not a nil one: a healthy node sends "points": [] and
+	// the simple Home indexes it.
+	points := []map[string]any{}
 	worse := func(l string) {
 		rank := map[string]int{"ok": 0, "attention": 1, "problem": 2}
 		if rank[l] > rank[level] {

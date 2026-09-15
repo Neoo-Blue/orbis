@@ -48,6 +48,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       body = text
     }
   }
+  // An HTML page in an API answer is a routing fall-through, never data; a
+  // page that treated it as a record crashed on the first field it read.
+  if (res.ok && typeof body === 'string' && /^\s*<!doctype html|^\s*<html/i.test(body)) {
+    throw new ApiError(res.status, `no such API route: ${path}`)
+  }
   if (!res.ok) {
     const msg =
       body && typeof body === 'object' && 'error' in body

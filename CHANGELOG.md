@@ -4,6 +4,21 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.30.2
+
+### Fixed
+- **Opening a device no longer crashes the Devices page.** The simple interface's pause and
+  resume routes were mounted as their own router at `/clients/{id}`, and that router's catch-all
+  answered every other device path (`/clients/{id}`, `/flows`, `/destinations`, `/dns`) with the
+  interface's HTML page. The drawer took the page for a device record and died on the first
+  field it read. The routes are plain routes now, and the API client refuses an HTML body as
+  data so a fall-through can only ever show an error, never crash a page. This predates 1.30.0
+  but the clickable Overview rows led straight into it.
+- **The simple Home no longer crashes on a node with nothing to report.** A clean bill of health
+  arrived as `null` instead of an empty list.
+- **The simple Home no longer crashes when ask-first is off.** Its new request counter read a
+  queue the status does not carry when the feature is disabled.
+
 ## v1.30.1
 
 ### Fixed

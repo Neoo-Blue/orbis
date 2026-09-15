@@ -44,17 +44,20 @@ func (s *Server) Start() error {
 	cfg := s.cfg.Snapshot()
 	r := chi.NewRouter()
 
-	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(120 * time.Second))
+	r.Use(s.requestTimeout)
 	r.Use(s.securityHeaders)
 
 	if cfg.API.AllowCORS {
+		// Credentials cannot be combined with AllowedOrigins "*": browsers
+		// reject the response, and echoing "*" would also let any page
+		// make credentialed calls. CORS is for a remote UI that sends
+		// X-Orbis-Token / Authorization, not the session cookie.
 		r.Use(cors.Handler(cors.Options{
 			AllowedOrigins:   []string{"*"},
 			AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Orbis-Token"},
-			AllowCredentials: true,
+			AllowCredentials: false,
 			MaxAge:           300,
 		}))
 	}
@@ -107,6 +110,32 @@ func (s *Server) Stop() error {
 		return nil
 	}
 	return s.http.Close()
+}
+
+// requestTimeout cancels ordinary API calls after two minutes so a stuck
+// handler cannot hold a connection forever. The live event stream and the
+// assistant SSE turn are long-lived on purpose; chi's Timeout middleware
+// would close them (and then try to write 504 onto a hijacked WebSocket).
+func (s *Server) requestTimeout(next http.Handler) http.Handler {
+	limited := middleware.Timeout(120 * time.Second)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if longLivedPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		limited.ServeHTTP(w, r)
+	})
+}
+
+func longLivedPath(path string) bool {
+	switch {
+	case strings.HasSuffix(path, "/stream"):
+		return true
+	case strings.HasSuffix(path, "/chat/ask"):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {

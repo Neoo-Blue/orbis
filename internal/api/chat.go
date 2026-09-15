@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/ai"
@@ -69,11 +70,17 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
+	// The assistant callback and the keepalive ticker both write to the
+	// same ResponseWriter; concurrent writes interleave frames and can
+	// panic inside the server's bufio writer.
+	var writeMu sync.Mutex
 	send := func(event string, payload any) {
 		data, err := json.Marshal(payload)
 		if err != nil {
 			return
 		}
+		writeMu.Lock()
+		defer writeMu.Unlock()
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
 		flusher.Flush()
 	}
@@ -105,8 +112,10 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-keepalive.C:
+			writeMu.Lock()
 			fmt.Fprint(w, ": keepalive\n\n")
 			flusher.Flush()
+			writeMu.Unlock()
 		}
 	}
 }

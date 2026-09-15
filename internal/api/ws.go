@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/app"
@@ -29,6 +30,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// is far more than any control message needs.
 	conn.SetReadLimit(1 << 20)
 
+	var filterMu sync.Mutex
 	filter := parseFilter(r.URL.Query().Get("types"))
 	ch, unsubscribe := s.app.Bus.Subscribe()
 	defer unsubscribe()
@@ -52,7 +54,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if msg.Action == "subscribe" {
-				filter = toSet(msg.Types)
+				next := toSet(msg.Types)
+				filterMu.Lock()
+				filter = next
+				filterMu.Unlock()
 			}
 		}
 	}()
@@ -90,7 +95,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				conn.Close(websocket.StatusNormalClosure, "server shutting down")
 				return
 			}
-			if filter != nil && !filter[ev.Type] {
+			filterMu.Lock()
+			skip := filter != nil && !filter[ev.Type]
+			filterMu.Unlock()
+			if skip {
 				continue
 			}
 			if err := writeWS(ctx, conn, ev); err != nil {

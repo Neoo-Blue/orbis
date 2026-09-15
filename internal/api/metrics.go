@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"sort"
@@ -63,7 +64,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.Snapshot()
 	if tok := cfg.API.MetricsToken; tok != "" {
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if got != tok {
+		if subtle.ConstantTimeCompare([]byte(got), []byte(tok)) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

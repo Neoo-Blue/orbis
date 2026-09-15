@@ -3,6 +3,18 @@
 Each release on GitHub carries the section below that matches its tag. Orbis shows the same text
 under "Show release notes" when it offers an update.
 
+
+## Unreleased
+
+### Fixed
+- **The live UI no longer drops every two minutes.** A global request timeout cancelled the event WebSocket (and then tried to write a 504 onto the hijacked connection) and cut assistant replies that ran longer than 120 seconds. Those paths are now exempt; ordinary API calls still time out.
+- **A live-event filter change no longer races the writer.** Updating the WebSocket subscription wrote the filter map from a second goroutine while events were being looked up in it.
+- **Assistant replies no longer interleave with keepalive comments.** The SSE callback and the keepalive ticker both wrote to the same response; concurrent writes can tear frames and panic the server writer. They now share a lock.
+- **Changing the admin password signs every other session out.** Sessions are HMAC cookies with no revocation table, so a stolen cookie stayed valid for 30 days after a password change. Setting a new password now rotates the signing key.
+- **Login brute-force tracking no longer trusts `X-Forwarded-For`.** chi's RealIP middleware rewrites `RemoteAddr` from request headers, which chi itself documents as spoofable. Five failed logins attributed to a public address would ban that address for an hour. The TCP peer is used instead.
+- **CORS, when enabled, no longer claims credentials against `*`.** Browsers reject that combination, so a remote UI could not call the API. CORS is for token headers, not the session cookie.
+- **The setup password button stays disabled until the password is long enough.** The API already requires 10 characters; the form submitted shorter ones and showed the error afterwards.
+
 ## v1.29.1
 
 ### Fixed

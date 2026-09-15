@@ -167,15 +167,21 @@ func (s *Server) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if _, err := ensureSessionKey(s.cfg); err != nil {
+	// A new signing key invalidates every existing session. Changing the
+	// password would otherwise leave a stolen cookie valid for 30 days.
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.cfg.Update(func(c *config.Config) { c.API.AdminHash = string(hash) }); err != nil {
+	key := base64.StdEncoding.EncodeToString(raw)
+	if err := s.cfg.Update(func(c *config.Config) {
+		c.API.AdminHash = string(hash)
+		c.API.SessionKey = key
+	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	key := s.cfg.Snapshot().API.SessionKey
 	token, err := newSession(key)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

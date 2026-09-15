@@ -68,7 +68,7 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
               </Field>
             )}
             {error && <div style={{ color: 'var(--red)', fontSize: 12.5 }}>{error}</div>}
-            <button className="btn primary" type="submit" disabled={busy || password.length < 1}>
+            <button className="btn primary" type="submit" disabled={busy || password.length < 1 || (setup && password.length < 10)}>
               {busy ? 'Working…' : setup ? 'Set password' : 'Sign in'}
             </button>
           </form>

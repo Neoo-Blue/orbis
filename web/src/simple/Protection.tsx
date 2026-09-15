@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Banner, Field, Loading, Spinner, useToast } from '../ui'
+import { Banner, Field, Loading, Spinner, useConfirm, useToast } from '../ui'
 import type { AppConfig } from '../types'
 import { BigSwitch, Section } from './common'
 import { ShortcutsCard } from '../Shortcuts'
@@ -17,6 +17,7 @@ export function SimpleProtection({ config, save, onNavigate }: {
   const { data: lists, refresh: refreshLists } = usePoll(() => api.adblock.lists(), 60000)
   const { data: yt, refresh: refreshYT } = usePoll(() => api.youtube.status(), 20000)
   const toast = useToast()
+  const confirm = useConfirm()
   const [domain, setDomain] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -94,7 +95,7 @@ export function SimpleProtection({ config, save, onNavigate }: {
             <BigSwitch icon="🤖" title="Let the assistant block threats on its own" checked={config.ai.intel.active_blocking}
               desc="When it is confident, it bans an attacking address or blocks a malicious host at once. Limited, logged, and undoable below."
               onChange={async (v) => {
-                if (v && !confirm('The assistant will ban addresses and block hosts on its own when it is confident. Continue?')) return
+                if (v && !(await confirm('The assistant will ban addresses and block hosts on its own when it is confident. Continue?'))) return
                 await save({ 'ai.intel.active_blocking': v })
               }} />
             <IntelTab compact onToggleActive={async (v) => { await save({ 'ai.intel.active_blocking': v }) }} />

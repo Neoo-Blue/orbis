@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import {
-  Banner, Card, Drawer, Empty, Field, Icons, Loading, Segmented, Stat, Switch, useToast,
+  Banner, Card, Drawer, Empty, Field, Icons, Loading, Segmented, Stat, Switch, useConfirm, useToast,
 } from '../ui'
 import { ago, bytes, compact, dateTime } from '../format'
 import type { SystemStatus } from '../types'
@@ -181,6 +181,7 @@ function VLANTab() {
   const { data: config } = usePoll(() => api.config.get(), 0)
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null)
   const toast = useToast()
+  const confirm = useConfirm()
 
   if (!data) return <Loading what="VLANs" />
 
@@ -266,7 +267,7 @@ function VLANTab() {
                     }} />
                     <button className="btn sm" onClick={() => setEditing({ ...v })}>Edit</button>
                     <button className="btn icon" title="Remove" onClick={async () => {
-                      if (!confirm(`Remove ${v.name}? Devices on this VLAN lose their gateway.`)) return
+                      if (!(await confirm(`Remove ${v.name}? Devices on this VLAN lose their gateway.`))) return
                       await api.network.deleteVLAN(v.name)
                       toast('VLAN removed', 'ok')
                       refresh()

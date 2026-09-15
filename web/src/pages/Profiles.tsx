@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Banner, Card, Drawer, Empty, Field, Loading, Spinner, Switch, useToast } from '../ui'
+import { Banner, Card, Drawer, Empty, Field, Loading, Spinner, Switch, useConfirm, useToast } from '../ui'
 import type { Policy } from '../types'
 import { PRESETS } from '../simple/common'
 
@@ -17,6 +17,7 @@ export function ProfilesPage() {
   const [editing, setEditing] = useState<Partial<Policy> | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const toast = useToast()
+  const confirm = useConfirm()
 
   const usedBy = (id: string) => (clients?.clients ?? []).filter((c) => c.policy_id === id).length
 
@@ -76,7 +77,7 @@ export function ProfilesPage() {
                 <div className="actions">
                   <button className="btn sm" onClick={() => setEditing(p)}>Edit</button>
                   <button className="btn sm danger" disabled={usedBy(p.id) > 0} title={usedBy(p.id) > 0 ? 'Unassign it from its devices first' : 'Delete'}
-                    onClick={async () => { if (!confirm(`Delete the ${p.name} profile?`)) return; try { await api.policies.remove(p.id); toast('Deleted', 'ok'); refresh() } catch (e) { toast(e instanceof Error ? e.message : 'Could not delete', 'err') } }}>Delete</button>
+                    onClick={async () => { if (!(await confirm(`Delete the ${p.name} profile?`))) return; try { await api.policies.remove(p.id); toast('Deleted', 'ok'); refresh() } catch (e) { toast(e instanceof Error ? e.message : 'Could not delete', 'err') } }}>Delete</button>
                 </div>
               </div>
             ))}

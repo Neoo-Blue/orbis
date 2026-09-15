@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Banner, Bar, Card, Drawer, Empty, Loading, Search, Segmented, Sparkline, Spinner, useToast } from '../ui'
+import { Banner, Bar, Card, Drawer, Empty, Loading, Search, Segmented, Sparkline, Spinner, useConfirm, useToast } from '../ui'
 import { bytes, num } from '../format'
 import type { ServiceDetail, ServiceDevice, ServicePoint, ServiceTotal } from '../types'
 
@@ -25,6 +25,7 @@ export function ServicesPage({ onNavigate }: { onNavigate: (r: 'clients' | 'inte
   const [openService, setOpenService] = useState<string | null>(null)
   const [openDevice, setOpenDevice] = useState<string | null>(null)
   const toast = useToast()
+  const confirm = useConfirm()
 
   const { data, loading } = usePoll(() => api.services.list(hours), 30000, [hours])
   const { data: byDevice } = usePoll(() => (view === 'device' ? api.services.devices(hours) : Promise.resolve(null)), 30000, [hours, view])
@@ -101,14 +102,14 @@ export function ServicesPage({ onNavigate }: { onNavigate: (r: 'clients' | 'inte
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
           {!byDevice ? <Loading what="devices" /> : byDevice.devices.length === 0 ? (
-            <Card><Empty title="No device activity in this window" /></Card>
+            <Card><Empty title="No device activity in this window">Try a longer time range, or wait for devices to use the internet.</Empty></Card>
           ) : (
             [...byDevice.devices]
               .filter((d) => !query.trim() || d.name.toLowerCase().includes(query.trim().toLowerCase()) || (d.ip ?? '').includes(query.trim()))
               .sort((a, b) => (b.bytes_in + b.bytes_out) - (a.bytes_in + a.bytes_out) || b.lookups - a.lookups)
               .map((d) => <DeviceRow key={d.client_id} d={d} onOpen={() => setOpenDevice(d.client_id)} onIntercept={async () => {
                 if (!d.ip || !d.mac) { toast('This device has no MAC recorded yet; wait for it to be seen on the LAN.', 'err'); return }
-                if (!confirm(`Pull ${d.name}'s traffic through this node by ARP interception? Its connections will flow via Orbis from now on.`)) return
+                if (!(await confirm(`Pull ${d.name}'s traffic through this node by ARP interception? Its connections will flow via Orbis from now on.`))) return
                 try {
                   await api.intercept.enroll(d.ip, d.mac)
                   toast(`${d.name} is now intercepted; bytes appear within a minute`, 'ok')
@@ -262,7 +263,7 @@ function DeviceDrawer({ clientID, hours, onClose, onNavigate }: {
               </tbody>
             </table>
           </div>
-          {data.services.length === 0 && <Empty title="Nothing in this window" />}
+          {data.services.length === 0 && <Empty title="Nothing in this window">This device has no recorded service use in the selected period.</Empty>}
           <span style={{ display: 'none' }}><Spinner /></span>
         </div>
       )}

@@ -42,7 +42,7 @@ export function SimpleAlerts({ onNavigate }: { onNavigate: (r: string) => void }
         <button className="btn sm" onClick={() => onNavigate('events')}>Full log</button>
       </div>
       <Section title="Needs a look" hint={important.length ? undefined : 'Nothing serious.'}>
-        {important.length ? <div>{important.map(row)}</div> : <Empty title="All quiet" />}
+        {important.length ? <div>{important.map(row)}</div> : <Empty title="All quiet">Nothing needs a look in this period. Report a problem or open the full log if you want to check.</Empty>}
       </Section>
       <Section title="Network checks" hint="The assistant reads the network every few hours and writes a short note.">
         {checks.length ? <div>{checks.map(row)}</div> : <Empty title="No checks yet">Turn on scheduled checks in Settings, or press Check now on the home page.</Empty>}

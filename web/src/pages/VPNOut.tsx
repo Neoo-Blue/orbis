@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Banner, Card, Drawer, Empty, Field, Icons, Loading, Search, Switch, useToast } from '../ui'
+import { Banner, Card, Drawer, Empty, Field, Icons, Loading, Search, Switch, useConfirm, useToast } from '../ui'
 import { bytes, clientName } from '../format'
 import type { Client } from '../types'
 
@@ -19,6 +19,7 @@ export function VPNOutPage() {
   const [importing, setImporting] = useState(false)
   const [query, setQuery] = useState('')
   const toast = useToast()
+  const confirm = useConfirm()
 
   const routeFor = useMemo(() => {
     const m = new Map<string, string>()
@@ -113,7 +114,7 @@ export function VPNOutPage() {
                         }
                       }}>{t.enabled ? 'Stop' : 'Start'}</button>
                       <button className="btn icon" title="Remove" onClick={async () => {
-                        if (!confirm(`Remove ${t.name}? Devices routed through it go back to the WAN.`)) return
+                        if (!(await confirm(`Remove ${t.name}? Devices routed through it go back to the WAN.`))) return
                         await api.egress.deleteTunnel(t.name)
                         refresh()
                       }}><Icons.trash size={13} /></button>
@@ -159,7 +160,7 @@ export function VPNOutPage() {
       </div>
 
       <Card flush>
-        {visible.length === 0 ? <Empty title="No devices match" /> : (
+        {visible.length === 0 ? <Empty title="No devices match">Clear the search to see every device.</Empty> : (
           <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 480px)', minHeight: 220 }}>
             <table className="t">
               <thead>

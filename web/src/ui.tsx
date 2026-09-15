@@ -1,6 +1,6 @@
 import {
-  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
-  type ReactNode,
+  Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useMemo, useRef, useState,
+  type ReactElement, type ReactNode,
 } from 'react'
 
 /* ---------- icons ----------
@@ -68,20 +68,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   return (
     <ToastCtx.Provider value={push}>
-      {children}
-      <div className="toast-stack" role="status" aria-live="polite">
-        {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.tone}`}>
-            <span>{t.message}</span>
-            {t.action && (
-              <button className="btn sm" style={{ marginLeft: 10 }} onClick={() => {
-                setToasts((all) => all.filter((x) => x.id !== t.id))
-                void t.action!.onClick()
-              }}>{t.action.label}</button>
-            )}
-          </div>
-        ))}
-      </div>
+      <ConfirmProvider>
+        {children}
+        <div className="toast-stack" role="status" aria-live="polite">
+          {toasts.map((t) => (
+            <div key={t.id} className={`toast ${t.tone}`}>
+              <span>{t.message}</span>
+              {t.action && (
+                <button className="btn sm" style={{ marginLeft: 10 }} onClick={() => {
+                  setToasts((all) => all.filter((x) => x.id !== t.id))
+                  void t.action!.onClick()
+                }}>{t.action.label}</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </ConfirmProvider>
     </ToastCtx.Provider>
   )
 }
@@ -162,13 +164,45 @@ export function Switch({ checked, onChange, label, disabled }: {
 }
 
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  const id = useId()
   return (
     <div className="field">
-      <label>{label}</label>
-      {children}
+      <label htmlFor={id}>{label}</label>
+      {bindControlId(children, id)}
       {hint && <div className="hint">{hint}</div>}
     </div>
   )
+}
+
+const CONTROL_TAGS = new Set(['input', 'select', 'textarea'])
+
+function bindControlId(children: ReactNode, id: string): ReactNode {
+  const items = Children.toArray(children)
+  let bound = false
+  return items.map((child) => {
+    if (bound || !isValidElement(child)) return child
+    const tagged = tagControl(child, id)
+    if (tagged !== child) bound = true
+    return tagged
+  })
+}
+
+function tagControl(node: ReactElement, id: string): ReactElement {
+  if (typeof node.type === 'string' && CONTROL_TAGS.has(node.type)) {
+    const el = node as ReactElement<{ id?: string }>
+    return el.props.id ? el : cloneElement(el, { id })
+  }
+  const nested = (node.props as { children?: ReactNode }).children
+  if (nested == null) return node
+  const kids = Children.toArray(nested)
+  let changed = false
+  const next = kids.map((k) => {
+    if (changed || !isValidElement(k)) return k
+    const t = tagControl(k, id)
+    if (t !== k) changed = true
+    return t
+  })
+  return changed ? cloneElement(node, { children: next } as { children: ReactNode }) : node
 }
 
 export function Segmented<T extends string>({ value, options, onChange }: {
@@ -191,7 +225,7 @@ export function Search({ value, onChange, placeholder = 'Search…' }: {
   return (
     <div className="search">
       <Icons.search />
-      <input className="input" value={value} placeholder={placeholder}
+      <input className="input" value={value} placeholder={placeholder} aria-label={placeholder}
         onChange={(e) => onChange(e.target.value)} />
     </div>
   )
@@ -222,6 +256,18 @@ export function Banner({ tone = 'info', icon = true, children, action }: {
 export function Drawer({ title, onClose, children, actions }: {
   title: ReactNode; onClose: () => void; children: ReactNode; actions?: ReactNode
 }) {
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const prevFocus = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    prevFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    closeRef.current?.focus()
+    return () => {
+      const el = prevFocus.current
+      if (el && document.contains(el)) el.focus()
+    }
+  }, [])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -235,7 +281,7 @@ export function Drawer({ title, onClose, children, actions }: {
         <header className="drawer-head">
           <h2 style={{ flex: 1, fontSize: 14 }}>{title}</h2>
           {actions}
-          <button className="btn icon" onClick={onClose} aria-label="Close"><Icons.close /></button>
+          <button ref={closeRef} type="button" className="btn icon" onClick={onClose} aria-label="Close"><Icons.close /></button>
         </header>
         <div className="drawer-body">{children}</div>
       </aside>
@@ -256,8 +302,80 @@ export function Dot({ state, label }: { state: 'on' | 'off' | 'warn' | 'err'; la
 /** Confirm is a lightweight destructive-action guard. Blocking on a real
  *  dialog for "block this device" is friction; doing it with no confirmation
  *  at all is how someone kicks their own laptop off the network. */
+type ConfirmFn = (message: string) => Promise<boolean>
+const ConfirmCtx = createContext<ConfirmFn>((message) => Promise.resolve(window.confirm(message)))
+
 export function useConfirm() {
-  return useCallback((message: string) => window.confirm(message), [])
+  return useContext(ConfirmCtx)
+}
+
+function ConfirmProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const prevFocus = useRef<HTMLElement | null>(null)
+
+  const ask = useCallback<ConfirmFn>((message) => {
+    return new Promise<boolean>((resolve) => {
+      setState((current) => {
+        if (current) {
+          current.resolve(false)
+        }
+        prevFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        return { message, resolve }
+      })
+    })
+  }, [])
+
+  const close = useCallback((ok: boolean) => {
+    setState((s) => {
+      s?.resolve(ok)
+      return null
+    })
+    const el = prevFocus.current
+    if (el && document.contains(el)) el.focus()
+  }, [])
+
+  useEffect(() => {
+    if (!state) return
+    panelRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      close(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [state, close])
+
+  return (
+    <ConfirmCtx.Provider value={ask}>
+      {children}
+      {state && (
+        <>
+          <div className="scrim confirm-scrim" onClick={() => close(false)} />
+          <div className="confirm-dialog">
+            <div
+              ref={panelRef}
+              className="confirm-panel"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="confirm-title"
+              aria-describedby="confirm-body"
+              tabIndex={-1}
+            >
+              <h2 id="confirm-title">Confirm</h2>
+              <p id="confirm-body">{state.message}</p>
+              <div className="confirm-actions">
+                <button type="button" className="btn" onClick={() => close(false)}>Cancel</button>
+                <button type="button" className="btn danger" onClick={() => close(true)}>Confirm</button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </ConfirmCtx.Provider>
+  )
 }
 
 /** CopyButton gives feedback in place rather than via a toast, so the user's

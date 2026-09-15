@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { useMediaQuery, usePoll, useDebounced } from '../hooks'
+import { PauseMenu, pauseOkMessage, pauseUntilLabel } from '../PauseMenu'
 import {
   Bar, Card, CopyButton, Drawer, Empty, Icons, Loading, Search, Segmented, Switch, useToast,
 } from '../ui'
@@ -14,7 +15,52 @@ export function ClientsPage() {
   const debounced = useDebounced(query, 200)
 
   const { data, refresh } = usePoll(() => api.clients.list(), 8000)
+  const { data: pauses, refresh: refreshPauses } = usePoll(() => api.simple.pauses(), 15000)
+  const [busy, setBusy] = useState<string | null>(null)
+  const toast = useToast()
   const clients = data?.clients ?? []
+  const pauseMap = pauses?.pauses ?? {}
+
+  const pauseAct = async (c: Client, fn: () => Promise<unknown>, ok: string, undo?: () => Promise<unknown>) => {
+    setBusy(c.id)
+    try {
+      await fn()
+      toast(ok, 'ok', undo ? {
+        label: 'Undo',
+        onClick: async () => { try { await undo(); refresh(); refreshPauses() } catch { /* state refreshes anyway */ } },
+      } : undefined)
+      refresh(); refreshPauses()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not change access', 'err')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const pauseDevice = (c: Client, minutes: number) =>
+    pauseAct(c, () => api.simple.pause(c.id, minutes), pauseOkMessage(clientName(c), minutes), () => api.simple.resume(c.id))
+  const resumeDevice = (c: Client) =>
+    pauseAct(c, () => api.simple.resume(c.id), `${clientName(c)} is back online`)
+
+  const pauseControls = (c: Client) => (
+    <div className="actions" onClick={(e) => e.stopPropagation()}>
+      {c.blocked ? (
+        <button type="button" className="btn sm primary" disabled={busy === c.id}
+          onClick={() => resumeDevice(c)}>
+          Resume
+        </button>
+      ) : (
+        <PauseMenu disabled={busy === c.id} onPick={(min) => pauseDevice(c, min)} />
+      )}
+    </div>
+  )
+
+  const accessTag = (c: Client) => {
+    const until = pauseMap[c.id]
+    if (until) return <span className="tag block">{pauseUntilLabel(until)}</span>
+    if (c.blocked) return <span className="tag block">blocked</span>
+    return null
+  }
 
   const visible = useMemo(() => {
     const q = debounced.toLowerCase()
@@ -67,7 +113,7 @@ export function ClientsPage() {
                   <div className="name">
                     <span className={`dot ${c.online ? 'on' : 'off'}`} />
                     <span className="truncate">{clientName(c)}</span>
-                    {c.blocked && <span className="tag block">blocked</span>}
+                    {accessTag(c)}
                   </div>
                   <div className="meta">
                     <span className="mono">{c.ip}</span>
@@ -75,6 +121,7 @@ export function ClientsPage() {
                     {c.rate_in + c.rate_out > 1000 ? ` · ${bits(c.rate_in + c.rate_out)}` : ''} · {ago(c.last_seen)}
                   </div>
                 </div>
+                {pauseControls(c)}
               </div>
             ))}
           </div>
@@ -91,6 +138,7 @@ export function ClientsPage() {
                   <th style={{ width: 130 }}>Throughput</th>
                   <th className="num">Total</th>
                   <th>Seen</th>
+                  <th style={{ width: 130 }} />
                 </tr>
               </thead>
               <tbody>
@@ -104,7 +152,7 @@ export function ClientsPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                         <span className={`dot ${c.online ? 'on' : 'off'}`} />
                         <span className="truncate" style={{ maxWidth: 220 }}>{clientName(c)}</span>
-                        {c.blocked && <span className="tag block">blocked</span>}
+                        {accessTag(c)}
                         {c.meta?.randomized_mac && (
                           <span className="tag" title="This device rotates its MAC address, so it may reappear as a new device">
                             random MAC
@@ -125,6 +173,7 @@ export function ClientsPage() {
                     </td>
                     <td className="num">{bytes(c.rx_bytes + c.tx_bytes)}</td>
                     <td style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{ago(c.last_seen)}</td>
+                    <td>{pauseControls(c)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -136,15 +185,16 @@ export function ClientsPage() {
       {selected && (
         <ClientDrawer
           id={selected}
+          until={pauseMap[selected]}
           onClose={() => setSelected(null)}
-          onChanged={refresh}
+          onChanged={() => { refresh(); refreshPauses() }}
         />
       )}
     </>
   )
 }
 
-function ClientDrawer({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
+function ClientDrawer({ id, until, onClose, onChanged }: { id: string; until?: string; onClose: () => void; onChanged: () => void }) {
   const [tab, setTab] = useState<'activity' | 'dns' | 'settings'>('activity')
   const { data: client } = usePoll(() => api.clients.get(id), 8000, [id])
   const { data: flows } = usePoll(
@@ -167,7 +217,8 @@ function ClientDrawer({ id, onClose, onChanged }: { id: string; onClose: () => v
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className={`dot ${client.online ? 'on' : 'off'}`} />
           {clientName(client)}
-          {client.blocked && <span className="tag block">blocked</span>}
+          {until ? <span className="tag block">{pauseUntilLabel(until)}</span>
+            : client.blocked ? <span className="tag block">blocked</span> : null}
         </span>
       }
       onClose={onClose}
@@ -197,7 +248,7 @@ function ClientDrawer({ id, onClose, onChanged }: { id: string; onClose: () => v
         {tab === 'activity' && (
           <>
             <Card title="Talks to most (24h)" flush>
-              {!dests?.destinations.length ? <Empty title="No destinations yet" /> : (
+              {!dests?.destinations.length ? <Empty title="No destinations yet">They appear after this device talks to the internet.</Empty> : (
                 <div className="table-wrap">
                   <table className="t">
                     <thead><tr><th>Host</th><th className="num">Conns</th><th className="num">Bytes</th></tr></thead>
@@ -226,7 +277,7 @@ function ClientDrawer({ id, onClose, onChanged }: { id: string; onClose: () => v
         {tab === 'dns' && <Card title="Recent lookups" flush><DNSList queries={dns?.queries ?? []} /></Card>}
 
         {tab === 'settings' && (
-          <ClientSettings client={client} onChanged={() => { onChanged() }} />
+          <ClientSettings client={client} until={until} onChanged={onChanged} />
         )}
       </div>
     </Drawer>
@@ -234,7 +285,7 @@ function ClientDrawer({ id, onClose, onChanged }: { id: string; onClose: () => v
 }
 
 function FlowList({ flows }: { flows: Flow[] }) {
-  if (!flows.length) return <Empty title="No connections recorded" />
+  if (!flows.length) return <Empty title="No connections recorded">Connections show up once this device is active.</Empty>
   return (
     <div className="table-wrap" style={{ maxHeight: 340 }}>
       <table className="t">
@@ -259,7 +310,7 @@ function FlowList({ flows }: { flows: Flow[] }) {
 }
 
 function DNSList({ queries }: { queries: DNSQuery[] }) {
-  if (!queries.length) return <Empty title="No lookups recorded" />
+  if (!queries.length) return <Empty title="No lookups recorded">Lookups appear as this device asks for names.</Empty>
   return (
     <div className="table-wrap" style={{ maxHeight: 380 }}>
       <table className="t">
@@ -283,7 +334,7 @@ function DNSList({ queries }: { queries: DNSQuery[] }) {
   )
 }
 
-function ClientSettings({ client, onChanged }: { client: Client; onChanged: () => void }) {
+function ClientSettings({ client, until, onChanged }: { client: Client; until?: string; onChanged: () => void }) {
   const [label, setLabel] = useState(client.label ?? '')
   const [zone, setZone] = useState(client.zone ?? '')
   const [notes, setNotes] = useState(client.notes ?? '')
@@ -315,16 +366,34 @@ function ClientSettings({ client, onChanged }: { client: Client; onChanged: () =
   const toggleBlock = async () => {
     const wasBlocked = client.blocked
     try {
-      await api.clients.update(client.id, { blocked: !wasBlocked })
+      if (wasBlocked) await api.simple.resume(client.id)
+      else await api.clients.update(client.id, { blocked: true })
       toast(wasBlocked ? 'Device restored' : 'Device blocked', 'ok', {
         label: 'Undo',
         onClick: async () => {
-          try { await api.clients.update(client.id, { blocked: wasBlocked }); onChanged() } catch { /* the drawer shows the real state */ }
+          try {
+            if (wasBlocked) await api.clients.update(client.id, { blocked: true })
+            else await api.simple.resume(client.id)
+            onChanged()
+          } catch { /* the drawer shows the real state */ }
         },
       })
       onChanged()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not change access', 'err')
+    }
+  }
+
+  const timedPause = async (minutes: number) => {
+    try {
+      await api.simple.pause(client.id, minutes)
+      toast(pauseOkMessage(clientName(client), minutes), 'ok', {
+        label: 'Undo',
+        onClick: async () => { try { await api.simple.resume(client.id); onChanged() } catch { /* state refreshes anyway */ } },
+      })
+      onChanged()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not pause', 'err')
     }
   }
 
@@ -363,12 +432,13 @@ function ClientSettings({ client, onChanged }: { client: Client; onChanged: () =
           placeholder="Anything worth remembering about this device" />
       </div>
 
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button className="btn primary" onClick={save} disabled={saving}>
           {saving ? 'Saving…' : 'Save'}
         </button>
         <div style={{ flex: 1 }} />
         <CopyButton text={client.mac || client.ip} label="Copy MAC" />
+        {!client.blocked && <PauseMenu disabled={saving} onPick={timedPause} />}
         <button className={`btn ${client.blocked ? '' : 'danger'}`} onClick={toggleBlock}>
           {client.blocked ? 'Restore access' : 'Block device'}
         </button>
@@ -376,7 +446,9 @@ function ClientSettings({ client, onChanged }: { client: Client; onChanged: () =
 
       <div style={{ borderTop: '1px solid var(--line-soft)', paddingTop: 12 }}>
         <Switch checked={client.blocked} onChange={toggleBlock}
-          label={client.blocked ? 'Blocked from the network' : 'Has network access'} />
+          label={client.blocked
+            ? (until ? `Paused from the network · ${pauseUntilLabel(until)}` : 'Blocked from the network')
+            : 'Has network access'} />
       </div>
     </div>
   )

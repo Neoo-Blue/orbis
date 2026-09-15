@@ -37,6 +37,26 @@ under "Show release notes" when it offers an update.
 - **Smart capture no longer runs one statement per sighting.** A domain seen 50 times in a pass
   was written 50 times; it is now one additive write.
 
+- **A cached answer no longer serialises every lookup behind a deep copy.** The resolver copied
+  the cached message while holding the cache lock; concurrent queries for anything waited for it.
+  The copy now happens after the lock is released.
+- **Resolver and event-bus counters are atomic.** They were plain integers incremented from every
+  listener goroutine and read by the API, a data race the race detector flags.
+- **A panic while forwarding can no longer wedge a name.** Duplicate concurrent lookups collapse
+  onto one upstream call; if that call panicked, every later lookup for the name waited forever.
+
+### Added
+- **Answers are refreshed before they expire.** When a cached name is asked for in the last tenth
+  of its TTL, Orbis serves the cached answer and fetches a new one in the background, so a name the
+  network asks for constantly never pays the upstream round trip again. Answers shorter than ten
+  seconds are left alone. The cache reports `prefetches`.
+- **DNS answer latency is measured.** `/metrics` exposes `orbis_dns_answer_seconds`, a histogram
+  of every answer from 1 ms to 1 s, and the resolver status carries the same buckets. "Is DNS
+  slow" was a guess before.
+- **API responses are gzip-compressed**, including the hashed interface assets. A day of
+  connections was several megabytes of repetitive JSON over Wi-Fi. The live event stream and the
+  assistant's reply stream are left uncompressed so they are never buffered.
+
 ### Changed
 - **SQLite is tuned for an SD card.** Commits use `synchronous=NORMAL` under the write-ahead log
   (a power cut can lose the last moments of traffic log; the database stays consistent), each

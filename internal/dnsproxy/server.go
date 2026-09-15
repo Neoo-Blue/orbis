@@ -417,6 +417,9 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 			return
 		}
 		s.noteAnswers(cached, name)
+		if s.cache.Prefetchable(q, dnssecOK) {
+			go s.prefetch(r.Copy(), q, name, dnssecOK, cfg)
+		}
 		s.finish(w, cached, logEntry, cfg)
 		return
 	}
@@ -488,6 +491,30 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	s.noteAnswers(resp, name)
 	s.finish(w, resp, logEntry, cfg)
+}
+
+// prefetch refreshes a cached answer that is about to expire, off the query
+// path. The new answer gets the same rebinding strip as a foreground lookup.
+// Block, policy and country rules are applied per query on the way out, as
+// they are for every cached answer, so only a CNAME chain that the global
+// lists block is left uncached: the next real query forwards and judges it
+// for that client.
+func (s *Server) prefetch(r *dns.Msg, q dns.Question, name string, dnssecOK bool, cfg config.Config) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, _, err := s.resolve(ctx, r, q, name, dnssecOK)
+	if err != nil || resp == nil {
+		return
+	}
+	if cfg.AdBlock.Enabled && cfg.AdBlock.CNAMEUncloak {
+		if chain := cnameChain(resp); len(chain) > 0 && s.matcher.LookupChain(chain).Blocked {
+			return
+		}
+	}
+	if cfg.DNS.RebindProtection && !RebindAllowed(name, cfg.DNS.LocalDomain, cfg.DNS.RebindAllowlist) {
+		StripRebind(resp)
+	}
+	s.cache.Put(q, dnssecOK, resp, cfg.DNS.MinTTL, cfg.DNS.MaxTTL)
 }
 
 // countryBlocked applies the country rules to an answer. The upstream reply

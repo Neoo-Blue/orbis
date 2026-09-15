@@ -23,6 +23,8 @@ type Cache struct {
 	// stale counts answers served past their TTL while a refresh was in
 	// flight, which is a feature (serve-stale) and worth surfacing.
 	stale int64
+	// prefetches counts answers refreshed ahead of expiry.
+	prefetches int64
 }
 
 type cacheEntry struct {
@@ -33,6 +35,9 @@ type cacheEntry struct {
 	// upstream is failing, which keeps a network usable during an outage.
 	staleUntil time.Time
 	inserted   time.Time
+	// prefetching is set once a refresh has been started for this entry so
+	// a burst of queries near expiry does not start a burst of refreshes.
+	prefetching bool
 }
 
 func NewCache(capacity int) *Cache {
@@ -99,6 +104,34 @@ func (c *Cache) Get(q dns.Question, dnssecOK bool) (*dns.Msg, bool, bool) {
 	msg := src.Copy()
 	adjustTTL(msg, elapsed)
 	return msg, true, fresh
+}
+
+// Prefetchable reports, once per entry, that a fresh answer is inside the
+// last tenth of its life. The caller refreshes it in the background so a
+// name the network asks for constantly is always answered from cache and
+// never pays the upstream round trip when its TTL runs out. Short-lived
+// answers are left alone: refreshing a 5-second record every 4 seconds is
+// query volume, not a saving.
+func (c *Cache) Prefetchable(q dns.Question, dnssecOK bool) bool {
+	key := cacheKey(q, dnssecOK)
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.entries[key]
+	if !ok {
+		return false
+	}
+	e := el.Value.(*cacheEntry)
+	if e.prefetching || now.After(e.expires) {
+		return false
+	}
+	life := e.expires.Sub(e.inserted)
+	if life < 10*time.Second || e.expires.Sub(now) > life/10 {
+		return false
+	}
+	e.prefetching = true
+	c.prefetches++
+	return true
 }
 
 // adjustTTL walks every section so a client caching downstream does not hold
@@ -227,7 +260,7 @@ func (c *Cache) Stats() map[string]any {
 	}
 	return map[string]any{
 		"size": c.order.Len(), "capacity": c.capacity,
-		"hits": c.hits, "misses": c.misses, "stale_served": c.stale,
+		"hits": c.hits, "misses": c.misses, "stale_served": c.stale, "prefetches": c.prefetches,
 		"hit_rate": rate,
 	}
 }

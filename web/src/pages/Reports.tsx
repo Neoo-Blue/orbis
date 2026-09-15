@@ -62,13 +62,13 @@ export function ReportsPage() {
       <div className="grid c2">
         <RankCard title="Top countries" rows={data.top_countries} render={(v) => `${compact(v)} conns`} />
         <Card title="New devices">
-          {data.new_devices.length === 0 ? (
+          {(data.new_devices ?? []).length === 0 ? (
             <div style={{ fontSize: 12.5, color: 'var(--text-faint)', padding: '8px 0' }}>
               None joined in this window.
             </div>
           ) : (
             <div style={{ display: 'grid', gap: 5 }}>
-              {data.new_devices.map((d) => (
+              {(data.new_devices ?? []).map((d) => (
                 <div key={d} style={{ fontSize: 12.5, display: 'flex', gap: 8, alignItems: 'center' }}>
                   <Icons.plus size={12} /> {d}
                 </div>

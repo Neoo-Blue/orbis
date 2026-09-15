@@ -1150,6 +1150,8 @@ func (a *App) BuildReport(window string, since time.Time) *report.Report {
 	rep := &report.Report{
 		Node: a.Cfg.Snapshot().Node.Name, GeneratedAt: time.Now(),
 		Since: since, Window: window,
+		// Empty lists, not nulls: the page indexes them.
+		NewDevices: []string{}, TopTalkers: []report.Row{}, TopBlocked: []report.Row{}, TopCountries: []report.Row{},
 	}
 	if rep.Node == "" {
 		rep.Node = "orbis"
@@ -1194,7 +1196,9 @@ func (a *App) BuildReport(window string, since time.Time) *report.Report {
 			rep.BytesOut += c.TxBytes
 		}
 	}
-	rep.TopTalkers = report.SortRows(talkers, 10)
+	if top := report.SortRows(talkers, 10); top != nil {
+		rep.TopTalkers = top
+	}
 
 	// Most-blocked domains.
 	if tb, err := a.Store.TopBlocked(since, 10); err == nil {
@@ -1229,7 +1233,9 @@ func (a *App) BuildReport(window string, since time.Time) *report.Report {
 				rows = append(rows, report.Row{Label: name, Value: n})
 			}
 		}
-		rep.TopCountries = report.SortRows(rows, 10)
+		if top := report.SortRows(rows, 10); top != nil {
+			rep.TopCountries = top
+		}
 	}
 	return rep
 }

@@ -567,6 +567,30 @@ func (s *Store) writeDNS(qs []DNSQuery) error {
 // Flows runs a filtered history query. Filters are composed into a single
 // statement rather than post-filtered so a 30-day table stays usable.
 func (s *Store) Flows(q FlowQuery) ([]Flow, error) {
+	// A sort by bytes or risk has to read every row in the window before
+	// it can pick the top few, which is seconds of SD-card I/O for a day of
+	// flows; the overview polls exactly that every 30 s. Memoise those.
+	if q.OrderBy == "bytes" || q.OrderBy == "risk" {
+		key := fmt.Sprintf("flows|%s|%s|%s|%s|%s|%s|%d|%d|%t|%s|%s|%d|%d",
+			bucketPtr(q.Since), bucketPtr(q.Until), q.ClientID, q.Verdict, q.Country, q.Proto,
+			q.Port, q.MinBytes, q.ActiveOnly, q.Search, q.OrderBy, q.Limit, q.Offset)
+		v, err := s.aggregates.get(key, 30*time.Second, func() (any, error) { return s.flows(q) })
+		if err != nil {
+			return nil, err
+		}
+		return v.([]Flow), nil
+	}
+	return s.flows(q)
+}
+
+func bucketPtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return bucket(*t, 30*time.Second)
+}
+
+func (s *Store) flows(q FlowQuery) ([]Flow, error) {
 	var where []string
 	var args []any
 	if q.Since != nil {
@@ -667,6 +691,15 @@ func scanFlows(rows *sql.Rows) ([]Flow, error) {
 
 // TopDestinations powers the "who is my network talking to" panels.
 func (s *Store) TopDestinations(since time.Time, clientID string, limit int) ([]map[string]any, error) {
+	key := fmt.Sprintf("topdest|%s|%s|%d", bucket(since, time.Minute), clientID, limit)
+	v, err := s.aggregates.get(key, time.Minute, func() (any, error) { return s.topDestinations(since, clientID, limit) })
+	if err != nil {
+		return nil, err
+	}
+	return v.([]map[string]any), nil
+}
+
+func (s *Store) topDestinations(since time.Time, clientID string, limit int) ([]map[string]any, error) {
 	args := []any{since.Unix()}
 	q := `SELECT COALESCE(NULLIF(hostname,''), dst_ip) AS host, COALESCE(country,'') AS country,
 		COALESCE(as_org,'') AS org, COUNT(*) AS conns, SUM(bytes_in+bytes_out) AS bytes,

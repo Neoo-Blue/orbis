@@ -14,6 +14,49 @@ under "Show release notes" when it offers an update.
 - **Login brute-force tracking no longer trusts `X-Forwarded-For`.** chi's RealIP middleware rewrites `RemoteAddr` from request headers, which chi itself documents as spoofable. Five failed logins attributed to a public address would ban that address for an hour. The TCP peer is used instead.
 - **CORS, when enabled, no longer claims credentials against `*`.** Browsers reject that combination, so a remote UI could not call the API. CORS is for token headers, not the session cookie.
 - **The setup password button stays disabled until the password is long enough.** The API already requires 10 characters; the form submitted shorter ones and showed the error afterwards.
+- **The log writer no longer stalls behind a blocklist refresh.** Replacing a changed list deleted
+  its old rows with a full scan of the 4.5 million-row domain table (there was no index on the
+  list name) and then inserted the new rows one statement at a time, all while holding the write
+  lock. On a Raspberry Pi that took minutes, during which the flow and DNS log filled its memory
+  buffer and dropped rows (66,000 in three days on the reference node) and other writers failed
+  with "database is locked". The list name is now indexed (built in the background a few seconds
+  after start so DNS is not delayed; the first build still holds the write lock once) and rows are
+  inserted 64 to a statement.
+- **The write-ahead log no longer grows without bound.** It was only truncated after the six-hourly
+  prune, and the pooled readers kept the automatic checkpoint from finishing, so it reached
+  950 MB and every read had to consult it. The writer now checkpoints once a minute and the log
+  is capped at 64 MB after a checkpoint.
+- **Retention pruning no longer holds the write lock for minutes.** Old flows and lookups are
+  deleted 20,000 rows at a time with a pause between chunks.
+- **Listing devices no longer copies and sorts every live connection.** The device list counted
+  flows per device by taking a full sorted snapshot of the live table, tens of thousands of rows
+  on a busy network, every time a page polled it. It now counts in place.
+- **Top-destination and biggest-connection panels are answered from a short cache.** Sorting a
+  day of flows by bytes reads every row in the window; the overview asked for that every 30 s
+  and Analytics per device. Those answers are now kept for 30-60 s like the summary already was.
+- **Smart capture no longer runs one statement per sighting.** A domain seen 50 times in a pass
+  was written 50 times; it is now one additive write.
+
+### Changed
+- **SQLite is tuned for an SD card.** Commits use `synchronous=NORMAL` under the write-ahead log
+  (a power cut can lose the last moments of traffic log; the database stays consistent), each
+  connection has a 16 MB page cache instead of 2 MB, the file is memory-mapped up to 256 MB, and
+  flow rows are written 32 to a statement instead of one.
+
+### UI
+- **Pages load on demand.** Every page was compiled into one 895 KB script, and the 3D globe's
+  renderer was preloaded on every route. The first paint now downloads 269 KB; each page fetches
+  its own chunk when opened and the globe's renderer only when the globe is.
+- **A busy network no longer re-renders the whole interface per lookup.** Live events are batched
+  four times a second instead of once per WebSocket frame.
+- **Polling pauses in a hidden tab** and resumes with a fresh fetch when the tab returns; a tick
+  is skipped while the previous request is still in flight, so a slow node is not asked twice.
+- **The globe stops drawing while its tab is hidden.**
+- **Search results land where they point.** Choosing a setting from the command palette opened
+  Settings on its first section because navigation rewrote the hash; a device result opened the
+  list, not the device. Both now open the exact target, and `#/clients/<id>` is a link.
+- **Each sidebar heading appears once.** Assistant and Problems, both in the Operate group, were
+  rendered as two sections.
 
 ## v1.29.1
 

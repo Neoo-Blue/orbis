@@ -4,7 +4,7 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
-## Unreleased
+## v1.30.0
 
 ### Fixed
 - **The live UI no longer drops every two minutes.** A global request timeout cancelled the event WebSocket (and then tried to write a 504 onto the hijacked connection) and cut assistant replies that ran longer than 120 seconds. Those paths are now exempt; ordinary API calls still time out.

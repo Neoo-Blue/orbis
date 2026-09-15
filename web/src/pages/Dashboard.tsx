@@ -9,7 +9,7 @@ interface Props {
   status: SystemStatus | null
   summary: Summary | null
   events: LiveEvent[]
-  onNavigate: (r: 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings') => void
+  onNavigate: (r: 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings', sub?: string) => void
 }
 
 export function Dashboard({ status, summary, events, onNavigate }: Props) {
@@ -99,10 +99,7 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
           ) : (
             <div style={{ display: 'grid', gap: 9 }}>
               {onlineClients.slice(0, 6).map((c) => (
-                <ClientRow key={c.id} client={c} peak={onlineClients[0]} onOpen={() => {
-                  location.hash = `#/clients/${c.id}`
-                  onNavigate('clients')
-                }} />
+                <ClientRow key={c.id} client={c} peak={onlineClients[0]} onOpen={() => onNavigate('clients', c.id)} />
               ))}
             </div>
           )}

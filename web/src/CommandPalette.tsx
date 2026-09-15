@@ -24,7 +24,7 @@ export interface Command {
 
 export function CommandPalette({ pages, onNavigate }: {
   pages: Array<{ id: string; label: string; icon: keyof typeof Icons }>
-  onNavigate: (id: string) => void
+  onNavigate: (id: string, sub?: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
@@ -68,12 +68,12 @@ export function CommandPalette({ pages, onNavigate }: {
     }
     for (const d of devices) {
       list.push({ id: `dev:${d.id}`, title: d.label, subtitle: d.ip, group: 'Devices',
-        icon: 'devices', run: () => { location.hash = `#/clients/${d.id}`; onNavigate('clients') } })
+        icon: 'devices', run: () => onNavigate('clients', d.id) })
     }
     // Every setting the index knows, by its on-screen label.
     for (const e of SETTINGS_INDEX) {
       list.push({ id: `set:${e.section}:${e.label}`, title: e.label, subtitle: `Settings › ${e.section}`, group: 'Settings',
-        icon: 'gear', run: () => { location.hash = `#/settings/${e.section}`; onNavigate('settings') } })
+        icon: 'gear', run: () => onNavigate('settings', e.section) })
     }
     // A few high-value actions.
     list.push(

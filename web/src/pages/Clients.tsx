@@ -17,7 +17,8 @@ export function ClientsPage() {
   }
   const [selected, setSelected] = useState<string | null>(clientFromHash)
   useEffect(() => {
-    const onHash = () => { const id = clientFromHash(); if (id) setSelected(id) }
+    // A null closes the drawer, which is what Back from #/clients/<id> means.
+    const onHash = () => setSelected(clientFromHash())
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])

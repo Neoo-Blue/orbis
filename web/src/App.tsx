@@ -166,10 +166,11 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  const navigate = useCallback((r: Route) => {
-    if (routeFromHash() !== r) {
-      location.hash = `#/${r}`
-    }
+  // sub is a deep link inside the page (a device id, a settings section);
+  // pages read it from the hash. Without one the hash is reset to the page
+  // root, so a sidebar click always leaves a deep link.
+  const navigate = useCallback((r: Route, sub?: string) => {
+    location.hash = sub ? `#/${r}/${encodeURIComponent(sub)}` : `#/${r}`
     setRoute(r)
   }, [])
 
@@ -273,7 +274,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
 
   return (
     <div className={`shell${ui === 'simple' ? ' simple' : ''}${tabs ? ' tabs' : ''}`}>
-      <CommandPalette pages={ROUTES} onNavigate={(r) => navigate(r as Route)} />
+      <CommandPalette pages={ROUTES} onNavigate={(r, sub) => navigate(r as Route, sub)} />
       <nav className="nav">
         <div className="brand">
           <svg className="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">

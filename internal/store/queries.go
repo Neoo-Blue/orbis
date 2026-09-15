@@ -718,7 +718,7 @@ func (s *Store) Series(metric string, since time.Time) ([]map[string]any, error)
 
 // Summary is the dashboard's single round-trip.
 func (s *Store) Summary(since time.Time) (map[string]any, error) {
-	v, err := s.aggregates.get("summary|"+bucket(since, 30*time.Second), 30*time.Second, func() (any, error) {
+	v, err := s.aggregates.get("summary|"+window(since), 30*time.Second, func() (any, error) {
 		return s.summary(since)
 	})
 	if err != nil {
@@ -1046,9 +1046,13 @@ func (s *Store) DeleteConsentRule(clientID, host, scope string) error {
 // resolver. One (or zero) means nothing but the node itself is using it, which
 // is the single most common reason a new install appears to do nothing.
 func (s *Store) DNSClientCount() (int, error) {
+	// The last day answers the placement question; scanning the whole log
+	// (a million rows on a two-week retention) took seconds on every load
+	// of the interface, which waits for this before it draws anything.
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(DISTINCT client_ip) FROM dns_queries
-		WHERE client_ip NOT IN ('', '127.0.0.1', '::1')`).Scan(&n)
+		WHERE ts >= ? AND client_ip NOT IN ('', '127.0.0.1', '::1')`,
+		time.Now().Add(-24*time.Hour).Unix()).Scan(&n)
 	return n, err
 }
 

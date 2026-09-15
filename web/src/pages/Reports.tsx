@@ -75,9 +75,11 @@ export function ReportsPage() {
   )
 }
 
-function RankCard({ title, rows, render }: {
-  title: string; rows: Array<{ label: string; value: number }>; render: (v: number) => string
+function RankCard({ title, rows: given, render }: {
+  title: string; rows: Array<{ label: string; value: number }> | null; render: (v: number) => string
 }) {
+  // A day with nothing to rank arrives as null, not an empty list.
+  const rows = given ?? []
   const max = rows[0]?.value || 1
   return (
     <Card title={title}>

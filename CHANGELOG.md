@@ -4,6 +4,25 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.30.1
+
+### Fixed
+- **The interface no longer waits seconds before it draws anything.** Every load checked whether
+  other devices use this resolver by counting distinct clients across the whole lookup log, a
+  million rows on a two-week retention, before the first page could render. The check now looks
+  at the last day.
+- **The globe no longer freezes for up to 16 seconds every minute.** Its country totals grouped a
+  day of flows, and SQLite chose to walk the whole five-million-row table through the country
+  index rather than the time index. The query now names the time index, and the answer is served
+  from cache while a fresh one is computed in the background. The same stale-while-revalidate
+  cache now covers the 24-hour summary, the health hero, top destinations and the biggest
+  connections, so a page poll never waits on an aggregate after the first call; cache keys are
+  by window length, not start time, so the entry is refreshed in place rather than recomputed
+  under a new key on every poll. Retention pruning also runs `PRAGMA optimize` so the planner's
+  statistics stay current.
+- **The Reports page no longer crashes on a day with nothing to rank.** An empty list arrived as
+  `null` and the page read its first element.
+
 ## v1.30.0
 
 ### Fixed

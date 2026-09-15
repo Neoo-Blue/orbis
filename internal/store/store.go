@@ -586,7 +586,7 @@ func (s *Store) Flows(q FlowQuery) ([]Flow, error) {
 	// flows; the overview polls exactly that every 30 s. Memoise those.
 	if q.OrderBy == "bytes" || q.OrderBy == "risk" {
 		key := fmt.Sprintf("flows|%s|%s|%s|%s|%s|%s|%d|%d|%t|%s|%s|%d|%d",
-			bucketPtr(q.Since), bucketPtr(q.Until), q.ClientID, q.Verdict, q.Country, q.Proto,
+			windowPtr(q.Since), windowPtr(q.Until), q.ClientID, q.Verdict, q.Country, q.Proto,
 			q.Port, q.MinBytes, q.ActiveOnly, q.Search, q.OrderBy, q.Limit, q.Offset)
 		v, err := s.aggregates.get(key, 30*time.Second, func() (any, error) { return s.flows(q) })
 		if err != nil {
@@ -597,11 +597,11 @@ func (s *Store) Flows(q FlowQuery) ([]Flow, error) {
 	return s.flows(q)
 }
 
-func bucketPtr(t *time.Time) string {
+func windowPtr(t *time.Time) string {
 	if t == nil {
 		return ""
 	}
-	return bucket(*t, 30*time.Second)
+	return window(*t)
 }
 
 func (s *Store) flows(q FlowQuery) ([]Flow, error) {
@@ -705,7 +705,7 @@ func scanFlows(rows *sql.Rows) ([]Flow, error) {
 
 // TopDestinations powers the "who is my network talking to" panels.
 func (s *Store) TopDestinations(since time.Time, clientID string, limit int) ([]map[string]any, error) {
-	key := fmt.Sprintf("topdest|%s|%s|%d", bucket(since, time.Minute), clientID, limit)
+	key := fmt.Sprintf("topdest|%s|%s|%d", window(since), clientID, limit)
 	v, err := s.aggregates.get(key, time.Minute, func() (any, error) { return s.topDestinations(since, clientID, limit) })
 	if err != nil {
 		return nil, err
@@ -748,7 +748,7 @@ func (s *Store) topDestinations(since time.Time, clientID string, limit int) ([]
 
 // CountryTotals feeds the globe's choropleth / heat layer.
 func (s *Store) CountryTotals(since time.Time) ([]map[string]any, error) {
-	v, err := s.aggregates.get("countries|"+bucket(since, time.Minute), time.Minute, func() (any, error) {
+	v, err := s.aggregates.get("countries|"+window(since), time.Minute, func() (any, error) {
 		return s.countryTotals(since)
 	})
 	if err != nil {
@@ -760,7 +760,8 @@ func (s *Store) CountryTotals(since time.Time) ([]map[string]any, error) {
 func (s *Store) countryTotals(since time.Time) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT country, COUNT(*) c, SUM(bytes_in+bytes_out) b,
 		SUM(CASE WHEN verdict='block' THEN 1 ELSE 0 END) blk, AVG(lat), AVG(lon)
-		FROM flows WHERE started_at >= ? AND country != '' GROUP BY country ORDER BY b DESC`, since.Unix())
+		FROM flows INDEXED BY idx_flows_started
+		WHERE started_at >= ? AND country != '' GROUP BY country ORDER BY b DESC`, since.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -929,6 +930,9 @@ func (s *Store) Prune(ctx context.Context, flowDays, eventDays int) error {
 	}
 	// stats_minute powers sparklines and the analytics charts; keep 14 days.
 	_, _ = s.db.ExecContext(ctx, "DELETE FROM stats_minute WHERE bucket < ?", now.Add(-14*24*time.Hour).Unix())
+	// Refresh the planner's statistics where they are stale, so a grouped
+	// query keeps choosing the time index over a whole-table index scan.
+	_, _ = s.db.ExecContext(ctx, "PRAGMA optimize")
 	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 	return err
 }

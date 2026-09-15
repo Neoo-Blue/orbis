@@ -13,13 +13,16 @@ export function usePoll<T>(
   const [loading, setLoading] = useState(true)
   const fnRef = useRef(fn)
   fnRef.current = fn
-  const inFlightRef = useRef(false)
+  // When the request in flight started, 0 when idle. A request that has
+  // hung for longer than two intervals (a dropped Wi-Fi association leaves
+  // fetch waiting on TCP for minutes) no longer blocks the next tick.
+  const inFlightRef = useRef(0)
   const [tick, setTick] = useState(0)
 
   useEffect(() => {
     let cancelled = false
     const run = async () => {
-      inFlightRef.current = true
+      inFlightRef.current = Date.now()
       try {
         const result = await fnRef.current()
         if (!cancelled) {
@@ -34,7 +37,7 @@ export function usePoll<T>(
         }
       } finally {
         if (!cancelled) {
-          inFlightRef.current = false
+          inFlightRef.current = 0
           setLoading(false)
         }
       }
@@ -43,23 +46,22 @@ export function usePoll<T>(
     if (intervalMs <= 0) {
       return () => {
         cancelled = true
-        inFlightRef.current = false
+        inFlightRef.current = 0
       }
     }
+    const busy = () => inFlightRef.current !== 0 && Date.now() - inFlightRef.current < Math.max(2 * intervalMs, 30000)
     const onTick = () => {
-      if (document.hidden || inFlightRef.current) return
+      if (document.hidden || busy()) return
       run()
     }
     const onVisibility = () => {
-      if (!document.hidden && !inFlightRef.current) {
-        run()
-      }
+      if (!document.hidden && !busy()) run()
     }
     const id = setInterval(onTick, intervalMs)
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
       cancelled = true
-      inFlightRef.current = false
+      inFlightRef.current = 0
       clearInterval(id)
       document.removeEventListener('visibilitychange', onVisibility)
     }

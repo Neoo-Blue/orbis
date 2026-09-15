@@ -1,7 +1,9 @@
 package api
 
 import (
+	"net"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/Neoo-Blue/orbis/internal/config"
@@ -43,12 +45,63 @@ func (s *Server) handleOnboardingState(w http.ResponseWriter, r *http.Request) {
 		"current_mode":   string(cfg.Mode),
 		"placement":      s.placementChecks(cfg),
 		"interfaces":     listInterfaces(),
+		"addresses":      lanAddresses(),
+		"timezone":       guessTimezone(cfg.Node.Timezone),
 		"links":          onboardingLinks(s),
 		"dns_enabled":    cfg.DNS.Enabled,
 		"dhcp_enabled":   cfg.DHCP.Enabled,
 		"adblock":        cfg.AdBlock.Enabled,
 		"lounge_enabled": cfg.YouTube.Lounge.Enabled,
 	})
+}
+
+// lanAddresses lists this node's global IPv4 addresses, for the "point your
+// router at this address" step of the wizard.
+func lanAddresses() []string {
+	out := []string{}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagLoopback != 0 || ifc.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok {
+				if ip4 := ipn.IP.To4(); ip4 != nil && !ip4.IsLinkLocalUnicast() {
+					out = append(out, ip4.String())
+				}
+			}
+		}
+	}
+	return out
+}
+
+// guessTimezone offers the wizard a default: the configured zone unless it
+// is the placeholder, else the host's, else UTC.
+func guessTimezone(configured string) string {
+	if configured != "" && configured != "UTC" {
+		return configured
+	}
+	if b, err := os.ReadFile("/etc/timezone"); err == nil {
+		if tz := strings.TrimSpace(string(b)); tz != "" {
+			return tz
+		}
+	}
+	if link, err := os.Readlink("/etc/localtime"); err == nil {
+		if i := strings.Index(link, "zoneinfo/"); i >= 0 {
+			return link[i+len("zoneinfo/"):]
+		}
+	}
+	if tz := os.Getenv("TZ"); tz != "" {
+		return tz
+	}
+	return "UTC"
 }
 
 // placementChecks answers "will this node actually see the network", which is

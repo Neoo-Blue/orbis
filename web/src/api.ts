@@ -7,7 +7,7 @@ import type {
   NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
   ShapingConfig, ShapingStatus, PortMapping, PingResult, TracerouteHop,
   SpeedResult, ConsentStatus, ConsentRule, Diagnosis, ImportResult,
-  OnboardingState, PlacementCheck, TopoGraph, InterceptStatus, DNSRecord,
+  OnboardingState, OnboardingApplyParams, PlacementCheck, TopoGraph, InterceptStatus, DNSRecord,
   AlertRule, ReportData, BuiltinList,
   ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
   HostedResponse, StorageDevice, PortForward, RouterInfo,
@@ -101,7 +101,20 @@ export const api = {
   audit: (limit = 200) => get<{ entries: AuditEntry[] }>(`/audit${qs({ limit })}`),
   geoip: (ip: string) => get<{ ip: string; location: Record<string, unknown> }>(`/geoip/${ip}`),
   locateSelf: () =>
-    post<{ self: Record<string, unknown>; home: { lat: number; lng: number } }>('/geoip/locate'),
+    post<{
+      self: {
+        city?: string
+        country?: string
+        lat?: number
+        lon?: number
+        public_ip?: string
+        method?: string
+        enabled?: boolean
+        last_error?: string
+        checked?: string
+      }
+      home: { lat: number; lng: number }
+    }>('/geoip/locate'),
   geoBackfill: () =>
     post<{ addresses_resolved: number; rows_updated: number; local_rows_cleared: number; unresolved: number }>(
       '/geoip/backfill',
@@ -515,7 +528,7 @@ export const api = {
 
   onboarding: {
     get: () => get<OnboardingState>('/onboarding'),
-    apply: (body: Record<string, unknown>) =>
+    apply: (body: OnboardingApplyParams | Record<string, unknown>) =>
       post<{ ok: boolean; onboarded: boolean; placement: PlacementCheck[] }>('/onboarding/apply', body),
     reset: () => post<{ ok: boolean }>('/onboarding/reset'),
   },

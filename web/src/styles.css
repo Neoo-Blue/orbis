@@ -738,3 +738,207 @@ tr:hover td, .row:hover { background: color-mix(in srgb, var(--accent) 4%, trans
 
 /* Toasts can carry one action (undo). */
 .toast { display: flex; align-items: center; gap: 6px; }
+
+/* ---------- first-run wizard ---------- */
+.wizard-wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
+.wizard-header {
+  display: grid;
+  gap: 6px;
+}
+
+.wizard-header h1 {
+  font-size: 21px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.015em;
+}
+
+.wizard-header p {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.wizard-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+.wizard-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.wizard-progress-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width .25s ease-out;
+}
+
+.wizard-card-why {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+
+.wizard-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.wizard-actions .btn {
+  min-height: 40px;
+  padding: 8px 18px;
+  font-size: 13px;
+}
+
+.wizard-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wizard-skip-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: right;
+  line-height: 1.5;
+  margin-top: -6px;
+}
+
+.wizard-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: 13px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: inherit;
+  transition: border-color .15s, background .15s;
+}
+
+.wizard-option:hover {
+  border-color: #2c3c54;
+  background: var(--bg-3);
+}
+
+.wizard-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
+}
+
+.wizard-address-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  gap: 12px;
+}
+
+.wizard-address-text {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: -0.02em;
+  word-break: break-all;
+}
+
+.wizard-summary-list {
+  display: grid;
+  gap: 10px;
+}
+
+.wizard-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13px;
+  gap: 12px;
+}
+
+.wizard-summary-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.wizard-summary-label {
+  color: var(--text-dim);
+  flex: none;
+}
+
+.wizard-summary-val {
+  font-weight: 500;
+  text-align: right;
+  word-break: break-word;
+}
+
+@media (max-width: 600px) {
+  .wizard-wrap {
+    padding: 16px 12px 32px;
+    gap: 12px;
+  }
+  .wizard-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .wizard-actions-right {
+    flex-direction: column;
+    width: 100%;
+    gap: 8px;
+  }
+  .wizard-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .wizard-skip-note {
+    text-align: left;
+    margin-top: -2px;
+  }
+  .wizard-summary-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+  }
+  .wizard-summary-val {
+    text-align: left;
+  }
+  .wizard-address-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .wizard-address-item button {
+    width: 100%;
+    justify-content: center;
+  }
+}

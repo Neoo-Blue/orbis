@@ -66,10 +66,11 @@ export function ClientsPage() {
   )
 
   const accessTag = (c: Client) => {
+    // The pause map polls slower than the device list, so a lifted pause
+    // can linger in it; the device's own blocked flag decides.
+    if (!c.blocked) return null
     const until = pauseMap[c.id]
-    if (until) return <span className="tag block">{pauseUntilLabel(until)}</span>
-    if (c.blocked) return <span className="tag block">blocked</span>
-    return null
+    return <span className="tag block">{until ? pauseUntilLabel(until) : 'blocked'}</span>
   }
 
   const visible = useMemo(() => {
@@ -232,8 +233,7 @@ function ClientDrawer({ id, until, onClose, onChanged }: { id: string; until?: s
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className={`dot ${client.online ? 'on' : 'off'}`} />
           {clientName(client)}
-          {until ? <span className="tag block">{pauseUntilLabel(until)}</span>
-            : client.blocked ? <span className="tag block">blocked</span> : null}
+          {client.blocked && <span className="tag block">{until ? pauseUntilLabel(until) : 'blocked'}</span>}
         </span>
       }
       onClose={onClose}
@@ -387,8 +387,13 @@ function ClientSettings({ client, until, onChanged }: { client: Client; until?: 
         label: 'Undo',
         onClick: async () => {
           try {
-            if (wasBlocked) await api.clients.update(client.id, { blocked: true })
-            else await api.simple.resume(client.id)
+            if (wasBlocked) {
+              // Put a timed pause back with the time it had left, not a
+              // permanent block.
+              const left = until ? Math.ceil((new Date(until).getTime() - Date.now()) / 60000) : 0
+              if (until && left > 0) await api.simple.pause(client.id, left)
+              else await api.clients.update(client.id, { blocked: true })
+            } else await api.simple.resume(client.id)
             onChanged()
           } catch { /* the drawer shows the real state */ }
         },

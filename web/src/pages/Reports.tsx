@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Card, Icons, Loading, Segmented, Stat, useToast } from '../ui'
+import { Card, Icons, Loading, Segmented, Stat, useToast, Banner } from '../ui'
 import { bytes, compact } from '../format'
 
 const RANGES = [
@@ -11,12 +11,26 @@ const RANGES = [
 ]
 
 export function ReportsPage() {
-  const [hours, setHours] = useState('168')
+  const [hours, setHours] = useState('24')
   const h = Number(hours)
-  const { data } = usePoll(() => api.report.preview(h), 0, [hours])
+  // A long window is assembled in the background; ask again until it is.
+  const [building, setBuilding] = useState(false)
+  const { data } = usePoll(async () => {
+    const r = await api.report.preview(h)
+    setBuilding(Boolean(r.building))
+    return r
+  }, building ? 3000 : 0, [hours])
   const toast = useToast()
 
   if (!data) return <Loading what="report" />
+  if (data.building) {
+    return (
+      <Banner tone="info">
+        Assembling the {hours === '24' ? 'last day' : `${Number(hours) / 24}-day`} report. A long window takes a
+        minute or two on a small node; this page updates itself when it is ready.
+      </Banner>
+    )
+  }
 
   const dl = (format: 'csv' | 'html') => {
     // Same-origin download; the browser handles the auth cookie.

@@ -1328,6 +1328,8 @@ export interface AlertRule {
 }
 
 export interface ReportData {
+  /** Set while a long window is still being assembled in the background. */
+  building?: boolean
   node: string
   window: string
   generated_at: string

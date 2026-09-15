@@ -24,6 +24,10 @@ under "Show release notes" when it offers an update.
   `null` and the page read its first element.
 - **A report no longer takes fifteen seconds to build.** It pulled up to a hundred thousand
   lookup rows to count them; it now reads the cached summary.
+- **A week-long report no longer hangs the page.** The Reports page opened on a seven-day window
+  that takes minutes to assemble on a small node. It now opens on the last day, and a longer
+  window is assembled in the background while the page says so and asks again, then kept for ten
+  minutes.
 - **Loading the interface no longer forces a cable rescan.** The onboarding state asked the link
   watcher to rescan on every load; it now reads the scan the watcher already keeps fresh.
 

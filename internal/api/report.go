@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/Neoo-Blue/orbis/internal/report"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -18,7 +21,22 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	hours := queryInt(r, "hours", 24, 720)
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)
 	window := humanWindow(hours)
-	rep := s.app.BuildReport(window, since)
+	// A week of flows takes minutes to aggregate on a small node, so the
+	// report is assembled in the background and kept for ten minutes; the
+	// page asks again until it is there.
+	v, ready := s.app.Store.MemoAsync("report|"+window, 10*time.Minute, func() (any, error) {
+		return s.app.BuildReport(window, time.Now().Add(-time.Duration(hours)*time.Hour)), nil
+	})
+	if !ready {
+		w.WriteHeader(http.StatusAccepted)
+		if r.URL.Query().Get("format") == "" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"building": true, "window": window, "since": since})
+		} else {
+			fmt.Fprintf(w, "The %s report is still being assembled; try again in a minute.\n", window)
+		}
+		return
+	}
+	rep := v.(*report.Report)
 
 	switch r.URL.Query().Get("format") {
 	case "csv":

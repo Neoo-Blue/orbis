@@ -67,6 +67,42 @@ func (m *memo) get(key string, ttl time.Duration, compute func() (any, error)) (
 	return val, nil
 }
 
+// getAsync is get for answers too slow to wait for at all: a week-long report
+// on a Raspberry Pi. With no entry yet it starts the computation in the
+// background and reports not ready; the caller answers "building" and the
+// page asks again. Once an entry exists it behaves like get.
+func (m *memo) getAsync(key string, ttl time.Duration, compute func() (any, error)) (any, bool) {
+	m.mu.Lock()
+	if m.entries == nil {
+		m.entries = map[string]memoEntry{}
+		m.refreshing = map[string]bool{}
+	}
+	if _, ok := m.entries[key]; ok {
+		m.mu.Unlock()
+		v, err := m.get(key, ttl, compute)
+		return v, err == nil
+	}
+	if !m.refreshing[key] {
+		m.refreshing[key] = true
+		go func() {
+			val, err := compute()
+			m.mu.Lock()
+			delete(m.refreshing, key)
+			if err == nil {
+				m.entries[key] = memoEntry{at: time.Now(), val: val}
+			}
+			m.mu.Unlock()
+		}()
+	}
+	m.mu.Unlock()
+	return nil, false
+}
+
+// MemoAsync exposes getAsync for aggregates assembled outside the store.
+func (s *Store) MemoAsync(key string, ttl time.Duration, compute func() (any, error)) (any, bool) {
+	return s.aggregates.getAsync(key, ttl, compute)
+}
+
 // window names a query window by its length, not its start, so "the last
 // 24 hours" keeps one cache key as the clock moves and the entry can be
 // refreshed in place instead of recomputed under a new key every poll.

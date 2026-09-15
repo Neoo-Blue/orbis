@@ -140,6 +140,18 @@ func (x *Explainer) Explain(ctx context.Context, kind, key string) (*Explanation
 	return e, nil
 }
 
+// hitsFor keeps the threat hits in which addr is the remote or the local end.
+func hitsFor(rows any, addr string) []map[string]any {
+	all, _ := rows.([]map[string]any)
+	var out []map[string]any
+	for _, h := range all {
+		if h["remote_ip"] == addr || h["local_ip"] == addr {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 // subject collects what the node knows about the thing.
 func (x *Explainer) subject(ctx context.Context, kind, key string) (map[string]any, error) {
 	since := time.Now().Add(-7 * 24 * time.Hour)
@@ -235,8 +247,12 @@ func (x *Explainer) subject(ctx context.Context, kind, key string) (map[string]a
 			return nil, err
 		}
 		out["address"] = info
+		// Only this address's own hits. The whole recent list once went in,
+		// and the model wove another device's event into the answer.
 		if m, err := x.backend.ThreatStatus(since, 200); err == nil {
-			out["threat_status"] = pick(m, "hits", "recent_decisions")
+			if hits := hitsFor(m["hits"], key); len(hits) > 0 {
+				out["threat_hits_for_this_address"] = hits
+			}
 		}
 		if x.st != nil {
 			if alerts, err := x.st.IDSAlerts(since, 500); err == nil {

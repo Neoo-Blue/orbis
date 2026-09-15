@@ -4,6 +4,14 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.30.4
+
+### Fixed
+- **Explaining an address no longer borrows another device's event.** The explanation for an
+  address was given the node's whole recent threat-hit list, and the model folded an unrelated
+  device's hit into its answer (a Google address "blocked as hijacked" with the NAS's port and
+  destination). It now sees only hits in which that address is one end.
+
 ## v1.30.3
 
 ### Fixed

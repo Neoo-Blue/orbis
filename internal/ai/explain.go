@@ -55,6 +55,12 @@ notices are routine: background scanning from the internet, a device checking fo
 ad server, a cloud service's telemetry. Say so when that is the case; do not invent threats.
 When something does deserve action, be specific: which device, which setting, which page.
 
+Read the record before judging it. It says whether the connection was dropped; do not claim a
+drop it does not report. A device that was opening many short connections to many different
+addresses on high ports at the same moment, most with nothing received, is running peer-to-peer
+software (a torrent client, a game, a video call); one peer that happens to sit in a listed
+network is worth knowing about, not evidence the device is compromised.
+
 Danger levels: "none" (normal), "low" (worth knowing, no action), "medium" (do something when
 convenient), "high" (act now).
 
@@ -151,6 +157,35 @@ func (x *Explainer) subject(ctx context.Context, kind, key string) (map[string]a
 			return nil, fmt.Errorf("no such event")
 		}
 		out["event"] = ev
+		// What the same device was doing in the minutes around the event. A
+		// listed address reached during a burst of short connections to many
+		// addresses on high ports is a peer-to-peer peer, not a compromise;
+		// without the pattern the model can only read the record.
+		if ev.ClientID != "" {
+			from, to := ev.TS.Add(-2*time.Minute), ev.TS.Add(2*time.Minute)
+			if flows, err := x.backend.QueryFlows(store.FlowQuery{ClientID: ev.ClientID, Since: &from, Until: &to, Limit: 500}); err == nil && len(flows) > 0 {
+				addrs, ports := map[string]bool{}, map[int]bool{}
+				highPort, silent := 0, 0
+				for _, f := range flows {
+					addrs[f.DstIP] = true
+					ports[f.DstPort] = true
+					if f.DstPort > 1024 {
+						highPort++
+					}
+					if f.BytesIn == 0 {
+						silent++
+					}
+				}
+				out["device_activity_around_event"] = map[string]any{
+					"window":                "two minutes either side",
+					"connections":           len(flows),
+					"distinct_addresses":    len(addrs),
+					"distinct_ports":        len(ports),
+					"to_ports_above_1024":   highPort,
+					"with_nothing_received": silent,
+				}
+			}
+		}
 		// Pull in the address or host the event names, if any.
 		for _, k := range []string{"ip", "address", "src", "source", "value"} {
 			if v, ok := ev.Data[k].(string); ok && v != "" {

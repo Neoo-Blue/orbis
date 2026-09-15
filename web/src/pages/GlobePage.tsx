@@ -67,6 +67,10 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
         start_lat: home.lat, start_lng: home.lng,
         end_lat: f.lat, end_lng: f.lon,
         label: flowTarget(f), app: f.app, country: f.country, city: f.city,
+        // Mirror the server's arcs: a name from the flow itself, and where it
+        // came from, or the card says the name was not visible at all.
+        hostname: f.hostname || f.sni || '',
+        host_source: f.hostname ? 'dns' : f.sni ? 'handshake' : '',
         org: f.as_org, verdict: f.verdict, bytes: f.bytes_in + f.bytes_out,
         port: f.dst_port, proto: f.proto, risk: f.risk,
         direction: f.direction, bytes_in: f.bytes_in, bytes_out: f.bytes_out,
@@ -329,7 +333,11 @@ function ArcDetail({ arc, onClose, onBlock }: { arc: GlobeArc; onClose: () => vo
           )}
           {arc.hostname && arc.hostname !== arc.label && <><dt>Name</dt><dd className="mono" style={{ wordBreak: 'break-all' }}>{arc.hostname}</dd></>}
           {arc.hostname && arc.host_source && (
-            <><dt>Named by</dt><dd className="hint">{arc.host_source === 'handshake' ? 'the TLS handshake' : 'a DNS lookup the device made'}</dd></>
+            <><dt>Named by</dt><dd className="hint">{
+              arc.host_source === 'handshake' ? 'the TLS handshake'
+                // A plain-HTTP flow's name is read from the request's Host header.
+                : arc.port === 80 && arc.proto === 'tcp' ? 'the request itself (plain HTTP)'
+                : 'a DNS lookup the device made'}</dd></>
           )}
           {!arc.hostname && !arc.service && (
             <><dt>Name</dt><dd className="hint">not visible: no DNS lookup seen and the handshake is encrypted</dd></>

@@ -4,6 +4,21 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.30.3
+
+### Fixed
+- **The globe's live connections name their destination.** A connection that arrived over the
+  live feed was shown as "name not visible" even when the flow carried the name; the card now
+  reads it the same way the history view does, and a plain-HTTP connection says its name came
+  from the request rather than from a TLS handshake.
+
+### Changed
+- **The assistant's explanation of a threat event sees what the device was doing.** It now gets
+  the two minutes either side of the event: how many connections, to how many addresses and
+  ports, how many got nothing back. A NAS contacting one listed address in the middle of a
+  torrent's peer burst reads as what it is, instead of "critical, investigate immediately". The
+  prompt also tells the model not to claim a drop the record does not report.
+
 ## v1.30.2
 
 ### Fixed

@@ -4,6 +4,14 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.30.5
+
+### Fixed
+- **Applying the kernel settings now survives a reboot.** The Apply button wrote the live values
+  only, so the "kernel settings need attention" warning came back after every restart of the
+  node. It now also writes `/etc/sysctl.d/99-orbis.conf` and asks the boot process to load
+  `nf_conntrack` first, since the connection-tracking settings do not exist until it is loaded.
+
 ## v1.30.4
 
 ### Fixed

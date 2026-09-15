@@ -56,6 +56,7 @@ func CheckSysctls() []SysctlStatus {
 // explicitly asks, and it reports each failure rather than aborting, because
 // an unprivileged container will refuse some of them and that is fine.
 func ApplySysctls() []SysctlStatus {
+	persistSysctls()
 	out := make([]SysctlStatus, 0, len(requiredSysctls))
 	for _, s := range requiredSysctls {
 		st := SysctlStatus{Key: s.Key, Want: s.Want, Why: s.Why, Critical: s.Critical}
@@ -69,6 +70,23 @@ func ApplySysctls() []SysctlStatus {
 		out = append(out, st)
 	}
 	return out
+}
+
+// persistSysctls writes the required values where the boot process reads
+// them, so an Apply survives a reboot instead of coming back as a warning.
+// Best effort: a read-only or container filesystem simply keeps the live
+// values.
+func persistSysctls() {
+	var b strings.Builder
+	b.WriteString("# Written by Orbis: kernel settings the daemon relies on.\n")
+	for _, s := range requiredSysctls {
+		fmt.Fprintf(&b, "%s = %s\n", s.Key, s.Want)
+	}
+	_ = os.WriteFile("/etc/sysctl.d/99-orbis.conf", []byte(b.String()), 0o644)
+	// The net.netfilter keys only exist once nf_conntrack is loaded, and at
+	// boot sysctl runs after modules-load; without this the conntrack
+	// settings would fail silently at boot and come back as a warning.
+	_ = os.WriteFile("/etc/modules-load.d/orbis.conf", []byte("nf_conntrack\n"), 0o644)
 }
 
 func sysctlPath(key string) string {

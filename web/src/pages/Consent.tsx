@@ -135,7 +135,7 @@ export function ConsentPage() {
           Only these devices generate questions. Everything else keeps the normal behaviour.
         </div>
         {(clients?.clients ?? []).length === 0 ? (
-          <Empty title="No devices known yet" />
+          <Empty title="No devices known yet">Devices appear here once they use the internet through this node.</Empty>
         ) : (
           <div style={{ display: 'grid', gap: 6, maxHeight: 320, overflow: 'auto' }}>
             {(clients?.clients ?? []).map((c) => {
@@ -158,7 +158,7 @@ export function ConsentPage() {
 
       <Card title="Decisions">
         {data.rules.length === 0 ? (
-          <Empty title="No decisions yet" />
+          <Empty title="No decisions yet">Allow or deny a waiting request above and it shows up here.</Empty>
         ) : (
           <div style={{ display: 'grid', gap: 7 }}>
             {data.rules.map((r) => (

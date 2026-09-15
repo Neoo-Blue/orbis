@@ -98,7 +98,12 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
             </Empty>
           ) : (
             <div style={{ display: 'grid', gap: 9 }}>
-              {onlineClients.slice(0, 6).map((c) => <ClientRow key={c.id} client={c} peak={onlineClients[0]} />)}
+              {onlineClients.slice(0, 6).map((c) => (
+                <ClientRow key={c.id} client={c} peak={onlineClients[0]} onOpen={() => {
+                  location.hash = `#/clients/${c.id}`
+                  onNavigate('clients')
+                }} />
+              ))}
             </div>
           )}
         </Card>
@@ -113,10 +118,12 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
           ) : (
             <div style={{ display: 'grid', gap: 7 }}>
               {topBlocked.domains.map((d) => (
-                <div key={d.domain} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 12.5 }}>
+                <button type="button" key={d.domain} className="row-btn"
+                  onClick={() => onNavigate('adblock')}
+                  style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 12.5, padding: '2px 4px' }}>
                   <span className="truncate mono" style={{ flex: 1 }} title={d.domain}>{d.domain}</span>
                   <span className="num" style={{ color: 'var(--red)' }}>{compact(d.count)}</span>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -126,12 +133,12 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
       <div className="grid c2">
         <Card title="Heaviest connections (24h)"
           actions={<button className="btn sm" onClick={() => onNavigate('flows')}>All connections</button>}>
-          <TopFlows flows={topDest?.flows ?? []} />
+          <TopFlows flows={topDest?.flows ?? []} onOpen={() => onNavigate('flows')} />
         </Card>
 
         <Card title="Recent events"
           actions={<button className="btn sm" onClick={() => onNavigate('events')}>All events</button>}>
-          <EventList events={recentEvents?.events ?? []} />
+          <EventList events={recentEvents?.events ?? []} onOpen={() => onNavigate('events')} />
         </Card>
       </div>
     </div>
@@ -215,11 +222,11 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
   )
 }
 
-function ClientRow({ client, peak }: { client: Client; peak: Client }) {
+function ClientRow({ client, peak, onOpen }: { client: Client; peak: Client; onOpen: () => void }) {
   const total = client.rate_in + client.rate_out
   const max = Math.max(peak.rate_in + peak.rate_out, 1)
   return (
-    <div>
+    <button type="button" className="row-btn" onClick={onOpen} aria-label={`${clientName(client)}, ${bits(total)}`}>
       <div style={{ display: 'flex', gap: 9, alignItems: 'baseline', marginBottom: 3 }}>
         <span className="truncate" style={{ flex: 1, fontSize: 12.5 }} title={client.ip}>
           {clientName(client)}
@@ -227,12 +234,14 @@ function ClientRow({ client, peak }: { client: Client; peak: Client }) {
         <span className="num" style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>{bits(total)}</span>
       </div>
       <div className="bar"><i style={{ width: `${Math.min(100, (total / max) * 100)}%` }} /></div>
-    </div>
+    </button>
   )
 }
 
-function TopFlows({ flows }: { flows: Flow[] }) {
-  if (!flows.length) return <Empty title="No traffic recorded yet" />
+function TopFlows({ flows, onOpen }: { flows: Flow[]; onOpen: () => void }) {
+  if (!flows.length) {
+    return <Empty title="No traffic recorded yet">Connections appear once devices use the internet through this node.</Empty>
+  }
   return (
     <div className="table-wrap">
       <table className="t">
@@ -241,7 +250,11 @@ function TopFlows({ flows }: { flows: Flow[] }) {
         </thead>
         <tbody>
           {flows.map((f) => (
-            <tr key={f.id}>
+            <tr key={f.id} className="clickable" tabIndex={0} role="button"
+              onClick={onOpen}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() }
+              }}>
               <td className="truncate" title={f.hostname || f.sni || f.dst_ip}>
                 {f.country && <span style={{ marginRight: 6 }}>{countryFlag(f.country)}</span>}
                 {f.hostname || f.sni || f.dst_ip}
@@ -257,14 +270,15 @@ function TopFlows({ flows }: { flows: Flow[] }) {
   )
 }
 
-function EventList({ events }: { events: EventItem[] }) {
+function EventList({ events, onOpen }: { events: EventItem[]; onOpen: () => void }) {
   if (!events.length) {
     return <Empty title="Nothing to report">No events in the last 24 hours.</Empty>
   }
   return (
     <div style={{ display: 'grid', gap: 9 }}>
       {events.map((e) => (
-        <div key={e.id} style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+        <button type="button" key={e.id} className="row-btn" onClick={onOpen}
+          style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '2px 4px' }}>
           <span className={`tag ${e.severity === 'critical' || e.severity === 'warning' ? 'warn' : 'info'}`}
             style={{ marginTop: 1 }}>
             {e.severity === 'critical' ? <Icons.alert size={11} /> : null}
@@ -274,7 +288,7 @@ function EventList({ events }: { events: EventItem[] }) {
             <div className="truncate" style={{ fontSize: 12.5 }} title={e.title}>{e.title}</div>
             <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{ago(e.ts)}</div>
           </div>
-        </div>
+        </button>
       ))}
     </div>
   )

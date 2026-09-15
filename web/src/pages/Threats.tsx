@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Banner, Card, Empty, Field, Icons, Loading, Segmented, Stat, Switch, useToast } from '../ui'
+import { Banner, Card, Empty, Field, Icons, Loading, Segmented, Stat, Switch, useConfirm, useToast } from '../ui'
 import { ago, countryFlag, num } from '../format'
 import type { CountryStatus, IDSStatus, ThreatDecision, ThreatFeed, ThreatHit } from '../types'
 import { bytes, countryFlag as flag } from '../format'
@@ -209,7 +209,7 @@ function FeedsTab({ feeds, busy, act }: { feeds: ThreatFeed[]; busy: string | nu
                   </td>
                 </tr>
               ))}
-              {feeds.length === 0 && <tr><td colSpan={6}><Empty title="No feeds configured" /></td></tr>}
+              {feeds.length === 0 && <tr><td colSpan={6}><Empty title="No feeds configured">Add a feed below.</Empty></td></tr>}
             </tbody>
           </table>
         </div>
@@ -328,6 +328,7 @@ function countryName(code: string): string {
 }
 
 function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string | null; act: (k: string, fn: () => Promise<unknown>, ok: string) => Promise<void> }) {
+  const confirm = useConfirm()
   const [code, setCode] = useState('')
   const [domains, setDomains] = useState((data.exempt_domains ?? []).join(', '))
   const [ips, setIps] = useState((data.exempt_ips ?? []).join(', '))
@@ -347,8 +348,8 @@ function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string |
             are also loaded into the packet filter. A CDN with servers in many countries may be affected: add its domain as an exception.
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Segmented value={data.mode} onChange={(v) => {
-              if (v === 'allow' && !window.confirm(`Allow only listed: every country NOT in the list becomes unreachable for every device, including CDNs and update servers. ${data.countries.length === 0 ? 'The list is empty, so nothing changes until you add a country. ' : `Only ${data.countries.join(', ')} will be reachable. `}Continue?`)) return
+            <Segmented value={data.mode} onChange={async (v) => {
+              if (v === 'allow' && !(await confirm(`Allow only listed: every country NOT in the list becomes unreachable for every device, including CDNs and update servers. ${data.countries.length === 0 ? 'The list is empty, so nothing changes until you add a country. ' : `Only ${data.countries.join(', ')} will be reachable. `}Continue?`))) return
               act('mode', () => api.country.rule('', v === 'allow' ? 'mode_allow' : 'mode_block'), v === 'allow' ? 'Allow mode: everything not listed is blocked' : 'Block mode: what is listed is blocked')
             }}
               options={[{ value: 'block', label: 'Block listed' }, { value: 'allow', label: 'Allow only listed' }]} />
@@ -415,7 +416,7 @@ function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string |
                   </td>
                 </tr>
               ))}
-              {seen.length === 0 && <tr><td colSpan={5}><Empty title="No country data yet" /></td></tr>}
+              {seen.length === 0 && <tr><td colSpan={5}><Empty title="No country data yet">Countries appear after this node has seen traffic.</Empty></td></tr>}
             </tbody>
           </table>
         </div>

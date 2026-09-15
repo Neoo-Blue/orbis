@@ -7,6 +7,8 @@ import { Section, Tile } from './common'
 
 export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => void; onAsk: (q: string) => void }) {
   const { data: health, refresh } = usePoll(() => api.simple.health(), 15000)
+  const { data: consent } = usePoll(() => api.consent.status(), 15000)
+  const pending = consent?.pending.length ?? 0
   const [question, setQuestion] = useState('')
   const [checking, setChecking] = useState(false)
   const toast = useToast()
@@ -47,6 +49,11 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
         <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
           <button className="btn sm" disabled={checking} onClick={runCheck}>{checking ? <><Spinner /> checking…</> : 'Check now'}</button>
           <button className="btn sm" onClick={() => onNavigate('s-alerts')}>See what happened</button>
+          {pending > 0 && (
+            <button className="btn sm" onClick={() => onNavigate('consent')}>
+              {pending} {pending === 1 ? 'request' : 'requests'} waiting for your OK
+            </button>
+          )}
         </div>
       </div>
 

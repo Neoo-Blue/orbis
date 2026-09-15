@@ -467,7 +467,7 @@ function Tailscale() {
       </div>
 
       <Card title="Tailnet peers" flush>
-        {(st.peers ?? []).length === 0 ? <Empty title="No peers" /> : (
+        {(st.peers ?? []).length === 0 ? <Empty title="No peers">Other machines on this tailnet show up here once they come online.</Empty> : (
           <div className="table-wrap">
             <table className="t">
               <thead>

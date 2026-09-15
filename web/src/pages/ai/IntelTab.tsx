@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api } from '../../api'
 import { usePoll } from '../../hooks'
-import { Banner, Card, Empty, Icons, Loading, Switch, useToast } from '../../ui'
+import { Banner, Card, Empty, Icons, Loading, Switch, useConfirm, useToast } from '../../ui'
 import { ago } from '../../format'
 import type { AIAction, AIIntel, IntelFinding } from '../../types'
 
@@ -30,6 +30,7 @@ export function IntelTab({ onToggleActive, compact = false }: {
   const [busy, setBusy] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
   const toast = useToast()
+  const confirm = useConfirm()
 
   const run = async () => {
     setBusy('run')
@@ -79,7 +80,7 @@ export function IntelTab({ onToggleActive, compact = false }: {
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
               Active blocking
               <Switch checked={activeBlocking} disabled={busy === 'active'} onChange={async (v) => {
-                if (v && !confirm('Active blocking lets the assistant ban addresses and block domains on its own when it is confident. Every action is bounded, logged and can be undone here. Turn it on?')) return
+                if (v && !(await confirm('Active blocking lets the assistant ban addresses and block domains on its own when it is confident. Every action is bounded, logged and can be undone here. Turn it on?'))) return
                 setBusy('active')
                 try { await onToggleActive(v) } finally { setBusy(null) }
               }} />

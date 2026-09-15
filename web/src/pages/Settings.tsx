@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import {
-  Banner, Bar, Card, CopyButton, Dot, Empty, Field, Icons, Loading, Segmented, Spinner, Switch, useToast, Search,
+  Banner, Bar, Card, CopyButton, Dot, Empty, Field, Icons, Loading, Segmented, Spinner, Switch, useConfirm, useToast, Search,
 } from '../ui'
 import { ago, bytes, compact, duration, num } from '../format'
 import type { AIBrief, AppConfig, SystemStatus } from '../types'
@@ -237,6 +237,7 @@ function SwitchRow({ label, hint, checked, onChange, disabled }: {
 /* ---------- sections ---------- */
 
 function GeneralSection({ config, status, save, refresh, toast }: SectionProps) {
+  const confirm = useConfirm()
   const inline = config.mode === 'inline'
   const selfInfo = (status as unknown as { self?: Record<string, unknown> } | null)?.self
   return (
@@ -255,9 +256,9 @@ function GeneralSection({ config, status, save, refresh, toast }: SectionProps) 
                   toast(`Inline mode needs you to ${missing.join(', ')} first (Settings → Firewall). Without them the node would revert to observe at its next start.`, 'err')
                   return
                 }
-                if (!confirm(
+                if (!(await confirm(
                   'Inline mode installs an nftables ruleset and starts enforcing policy on traffic ' +
-                  'that passes through this node. Every device that routes through it depends on it. Continue?')) return
+                  'that passes through this node. Every device that routes through it depends on it. Continue?'))) return
               }
               if (await save({ mode: v })) {
                 toast(v === 'inline' ? 'Now in inline mode' : 'Back to observe mode', 'ok')
@@ -403,7 +404,7 @@ function CaptureSection({ config, status, save, interfaces }: SectionProps) {
       </Card>
 
       <Card title="Live capture health">
-        {!capture ? <Empty title="No capture statistics yet" /> : (
+        {!capture ? <Empty title="No capture statistics yet">Statistics appear once packet capture has opened an interface.</Empty> : (
           <dl className="kv">
             <dt>Interfaces open</dt><dd>{String(capture.interfaces ?? 0)}</dd>
             <dt>Kernel filter</dt>
@@ -1348,6 +1349,7 @@ function TailscaleSection({ config, save, refresh, toast }: SectionProps) {
 }
 
 function AssistantSection({ config, save, toast }: SectionProps) {
+  const confirm = useConfirm()
   const [apiKey, setApiKey] = useState('')
   const provider = config.ai.provider || 'anthropic'
   const isOpenRouter = provider === 'openrouter' || /openrouter/i.test(config.ai.base_url || '')
@@ -1451,9 +1453,9 @@ function AssistantSection({ config, save, toast }: SectionProps) {
           <SwitchRow label="Let the assistant make changes" checked={config.ai.allow_write}
             hint="With this off, the mutating tools are not offered to the model at all, it can inspect and propose, but every change needs a click. With it on, it can add firewall rules, block domains and devices, and apply the ruleset. Everything it does lands in the audit log."
             onChange={async (v) => {
-              if (v && !confirm(
+              if (v && !(await confirm(
                 'The assistant will be able to change firewall rules, blocklists and device ' +
-                'access on this live network. Continue?')) return
+                'access on this live network. Continue?'))) return
               save({ 'ai.allow_write': v })
             }} />
           {config.ai.allow_write && (
@@ -1501,8 +1503,8 @@ function AssistantSection({ config, save, toast }: SectionProps) {
             onChange={(v) => save({ 'ai.intel.notify': v })} />
           <SwitchRow label="Active blocking: apply confident actions without a click" checked={config.ai.intel.active_blocking}
             hint="Bounded by the limits below, audited, announced as an event, and undoable from the Threats page. Essential services, CDNs, local names and anything on the never-act-on list are refused whatever the model says."
-            onChange={(v) => {
-              if (v && !confirm('The assistant will ban addresses and block domains on its own when it is confident. Continue?')) return
+            onChange={async (v) => {
+              if (v && !(await confirm('The assistant will ban addresses and block domains on its own when it is confident. Continue?'))) return
               save({ 'ai.intel.active_blocking': v })
             }} />
           {config.ai.intel.active_blocking && (

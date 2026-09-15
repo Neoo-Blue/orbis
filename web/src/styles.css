@@ -206,11 +206,11 @@
     border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
     font-size: 13px; transition: border-color .14s;
   }
-  .input:focus, .select:focus, .textarea:focus { border-color: var(--accent-dim); outline: none; }
+  .input:focus, .select:focus, .textarea:focus { border-color: var(--accent-dim); }
   .input::placeholder, .textarea::placeholder { color: var(--text-faint); }
   .textarea { resize: vertical; min-height: 72px; font-family: var(--mono); font-size: 12px; }
   .field { display: flex; flex-direction: column; gap: 5px; }
-  .field label { font-size: 11.5px; color: var(--text-dim); font-weight: 500; }
+  .field > label, .field > span { font-size: 11.5px; color: var(--text-dim); font-weight: 500; }
   .field .hint { font-size: 11px; color: var(--text-faint); line-height: 1.5; }
 
   .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
@@ -260,6 +260,12 @@
   table.t tbody tr { transition: background .1s; }
   table.t tbody tr:hover { background: rgba(255,255,255,.022); }
   table.t tbody tr.clickable { cursor: pointer; }
+  .row-btn {
+    display: block; width: 100%; margin: 0; padding: 0; border: 0;
+    background: none; color: inherit; font: inherit; text-align: inherit;
+    cursor: pointer; border-radius: var(--radius-sm);
+  }
+  .row-btn:hover { background: rgba(255,255,255,.022); }
   table.t tbody tr.selected { background: var(--accent-glow); }
   table.t td.num, table.t th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
   /* Ellipsis for overflowing labels. Flex and grid children need min-width: 0 to
@@ -455,6 +461,19 @@
   .drawer-head { display: flex; align-items: center; gap: 11px; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); }
   .drawer-body { flex: 1; overflow-y: auto; padding: 16px; }
   .scrim { position: fixed; inset: 0; background: rgba(3,5,9,.6); z-index: 39; backdrop-filter: blur(2px); }
+  .scrim.confirm-scrim { z-index: 79; }
+  .confirm-dialog {
+    position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
+    padding: 18px; pointer-events: none;
+  }
+  .confirm-panel {
+    pointer-events: auto; width: min(420px, 100%);
+    background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 16px 18px 14px; display: grid; gap: 12px;
+  }
+  .confirm-panel h2 { font-size: 15px; }
+  .confirm-panel p { font-size: 13px; color: var(--text-dim); line-height: 1.55; white-space: pre-wrap; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
   .bar { height: 4px; border-radius: 3px; background: var(--bg-3); overflow: hidden; }
   .bar > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width .3s; }
@@ -643,6 +662,7 @@ tr:hover td, .row:hover { background: color-mix(in srgb, var(--accent) 4%, trans
 .topbar .segmented, .topbar .btn { flex: none; }
 
 @media (max-width: 880px) {
+  .btn.sm, .nav-item, .segmented button { min-height: 36px; }
   .shell { height: 100dvh; }
   .topbar { gap: 8px; padding: 0 12px; }
   .topbar h1 { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

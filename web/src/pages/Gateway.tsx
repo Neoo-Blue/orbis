@@ -500,7 +500,7 @@ function Tools() {
                 <div style={{ fontSize: 11.5, color: 'var(--amber)', marginTop: 6 }}>{speed.note}</div>
               )}
             </>
-          ) : <Empty title="Not run yet" />}
+          ) : <Empty title="Not run yet">Press Run to measure this node's download and upload.</Empty>}
         </Card>
 
         <Card title="Wake on LAN">

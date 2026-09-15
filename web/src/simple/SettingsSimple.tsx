@@ -1,6 +1,6 @@
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Field, Loading } from '../ui'
+import { Field, Loading, useConfirm } from '../ui'
 import type { AppConfig, SystemStatus } from '../types'
 import { BigSwitch, Section } from './common'
 import { UpdateCard } from '../pages/UpdateCard'
@@ -12,6 +12,7 @@ export function SimpleSettings({ config, status, save, uiMode, setUIMode, onNavi
   uiMode: 'simple' | 'advanced'; setUIMode: (m: 'simple' | 'advanced') => void; onNavigate: (r: string) => void
 }) {
   const { data: models } = usePoll(() => api.ai.models(), 60000)
+  const confirm = useConfirm()
   if (!config) return <Loading what="settings" />
   return (
     <div style={{ display: 'grid', gap: 4, maxWidth: 900 }}>
@@ -39,8 +40,8 @@ export function SimpleSettings({ config, status, save, uiMode, setUIMode, onNavi
             desc={config.ai.allow_write
               ? 'On. When you ask it to block a site, pause a device or fix something, it does it and tells you what it did. Everything it changes is listed under Alerts and in the audit log.'
               : 'Off. The assistant explains what it would change and where to click, but does not touch anything. Turn on to let "pause the tablet" or "unblock that site" just happen.'}
-            onChange={(v) => {
-              if (v && !confirm('The assistant will be able to pause devices, block or allow sites and change rules when you ask it to. Every change is logged. Turn on?')) return
+            onChange={async (v) => {
+              if (v && !(await confirm('The assistant will be able to pause devices, block or allow sites and change rules when you ask it to. Every change is logged. Turn on?'))) return
               save({ 'ai.allow_write': v })
             }} />
           <BigSwitch icon="📝" title="Write a network check every few hours" checked={config.ai.brief.enabled}

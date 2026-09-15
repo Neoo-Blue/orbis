@@ -101,7 +101,7 @@ export function DNSPage({ events }: { events: LiveEvent[] }) {
             toast(`Flushed ${n.flushed} cached entries`, 'ok')
           }}>Flush cache</button>
         }>
-          {upstreams.length === 0 ? <Empty title="No upstreams configured" /> : (
+          {upstreams.length === 0 ? <Empty title="No upstreams configured">Add them under Settings → DNS → Upstream resolvers.</Empty> : (
             <div style={{ display: 'grid', gap: 9 }}>
               {upstreams.map((u, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

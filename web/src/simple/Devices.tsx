@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
+import { PauseMenu, pauseOkMessage, pauseUntilLabel } from '../PauseMenu'
 import { Drawer, Empty, Field, Loading, Search, Spinner, useToast } from '../ui'
 import { ago, bits, clientName, deviceGlyph } from '../format'
 import type { Client, Policy } from '../types'
@@ -55,7 +56,7 @@ export function SimpleDevices({ onNavigate }: { onNavigate: (r: string) => void 
           <div className="name">
             <span className="truncate">{clientName(c)}</span>
             <span className={`pill ${c.blocked ? 'paused' : c.online ? 'on' : 'off'}`}>
-              {c.blocked ? (until ? `paused until ${new Date(until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'paused') : c.online ? 'online' : `last seen ${ago(c.last_seen)}`}
+              {c.blocked ? pauseUntilLabel(until) : c.online ? 'online' : `last seen ${ago(c.last_seen)}`}
             </span>
             {c.policy_id && <span className="pill">{policyName(c.policy_id)}</span>}
           </div>
@@ -69,7 +70,7 @@ export function SimpleDevices({ onNavigate }: { onNavigate: (r: string) => void 
               {busy === c.id ? <Spinner /> : 'Resume internet'}
             </button>
           ) : (
-            <PauseMenu disabled={busy === c.id} onPick={(min) => act(c, () => api.simple.pause(c.id, min), min ? `${clientName(c)} paused for ${min >= 60 ? `${min / 60} hour${min > 60 ? 's' : ''}` : `${min} minutes`}` : `${clientName(c)} paused until you resume it`, () => api.simple.resume(c.id))} />
+            <PauseMenu disabled={busy === c.id} onPick={(min) => act(c, () => api.simple.pause(c.id, min), pauseOkMessage(clientName(c), min), () => api.simple.resume(c.id))} />
           )}
           <button className="btn sm" onClick={() => setEditing(c)}>Edit</button>
         </div>
@@ -100,19 +101,6 @@ export function SimpleDevices({ onNavigate }: { onNavigate: (r: string) => void 
           onSaved={() => { setEditing(null); refresh(); refreshPolicies() }} />
       )}
     </div>
-  )
-}
-
-function PauseMenu({ onPick, disabled }: { onPick: (minutes: number) => void; disabled?: boolean }) {
-  const [open, setOpen] = useState(false)
-  if (!open) return <button className="btn sm" disabled={disabled} onClick={() => setOpen(true)}>Pause internet</button>
-  return (
-    <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
-      {[{ m: 30, l: '30 min' }, { m: 60, l: '1 hour' }, { m: 180, l: '3 hours' }, { m: 0, l: 'Until I resume' }].map((o) => (
-        <button key={o.m} className="btn sm" onClick={() => { setOpen(false); onPick(o.m) }}>{o.l}</button>
-      ))}
-      <button className="btn sm" onClick={() => setOpen(false)}>Cancel</button>
-    </span>
   )
 }
 

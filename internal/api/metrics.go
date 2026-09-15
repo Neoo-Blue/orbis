@@ -27,6 +27,28 @@ func (m *metricWriter) counter(name, help string, value float64, labels ...strin
 	m.emit("counter", name, help, value, labels...)
 }
 
+// histogram writes a Prometheus histogram from the nested map Stats() exposes
+// as "answer_seconds": buckets [{le, n}, ...] (already cumulative), plus sum
+// and count. HELP/TYPE are emitted once for the base name.
+func (m *metricWriter) histogram(name, help string, h map[string]any) {
+	if help != "" {
+		fmt.Fprintf(&m.b, "# HELP %s %s\n# TYPE %s histogram\n", name, help, name)
+	}
+	if buckets, ok := h["buckets"].([]map[string]any); ok {
+		for _, b := range buckets {
+			le, _ := b["le"].(string)
+			n, _ := toFloat(b["n"])
+			m.emit("", name+"_bucket", "", n, "le", le)
+		}
+	}
+	if sum, ok := toFloat(h["sum"]); ok {
+		m.emit("", name+"_sum", "", sum)
+	}
+	if count, ok := toFloat(h["count"]); ok {
+		m.emit("", name+"_count", "", count)
+	}
+}
+
 // emit writes one sample. Labels arrive as alternating key/value pairs; an odd
 // trailing element is dropped rather than producing malformed output that a
 // scraper would reject wholesale.
@@ -93,6 +115,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			default:
 				m.gauge("orbis_dns_"+k, "", v)
 			}
+		}
+		if h, ok := d["answer_seconds"].(map[string]any); ok {
+			m.histogram("orbis_dns_answer_seconds", "DNS answer latency in seconds.", h)
 		}
 		m.gauge("orbis_dns_running", "1 when the resolver is listening.", b2f(app.DNS.Running()))
 	}
@@ -268,6 +293,8 @@ func toFloat(v any) (float64, bool) {
 	case int:
 		return float64(n), true
 	case int64:
+		return float64(n), true
+	case uint64:
 		return float64(n), true
 	case float64:
 		return n, true

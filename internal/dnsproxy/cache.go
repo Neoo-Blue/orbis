@@ -89,10 +89,14 @@ func (c *Cache) Get(q dns.Question, dnssecOK bool) (*dns.Msg, bool, bool) {
 	} else {
 		c.stale++
 	}
-	msg := e.msg.Copy()
+	// The stored message is immutable after Put; Copy and TTL rewrite are
+	// the expensive part, so they run after unlock rather than serialising
+	// every concurrent lookup behind one deep copy.
+	src := e.msg
 	elapsed := uint32(now.Sub(e.inserted).Seconds())
 	c.mu.Unlock()
 
+	msg := src.Copy()
 	adjustTTL(msg, elapsed)
 	return msg, true, fresh
 }

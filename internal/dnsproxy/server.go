@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
@@ -64,15 +65,65 @@ type Server struct {
 }
 
 type Stats struct {
-	Queries     int64 `json:"queries"`
-	Blocked     int64 `json:"blocked"`
-	Cached      int64 `json:"cached"`
-	Errors      int64 `json:"errors"`
-	Collapsed   int64 `json:"collapsed"`
-	Local       int64 `json:"local"`
-	RateLimited int64 `json:"rate_limited"`
-	Rebind      int64 `json:"rebind_blocked"`
-	Rewritten   int64 `json:"rewritten"`
+	Queries     atomic.Int64
+	Blocked     atomic.Int64
+	Cached      atomic.Int64
+	Errors      atomic.Int64
+	Collapsed   atomic.Int64
+	Local       atomic.Int64
+	RateLimited atomic.Int64
+	Rebind      atomic.Int64
+	Rewritten   atomic.Int64
+	answer      latencyHist
+}
+
+// Finite Prometheus histogram bounds in milliseconds. le labels are these
+// values in seconds; the last slot is +Inf.
+var dnsAnswerBucketMS = [...]float64{1, 5, 10, 25, 50, 100, 250, 500, 1000}
+
+var dnsAnswerBucketLe = [...]string{"0.001", "0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1"}
+
+// latencyHist is a fixed-bucket histogram recorded on every answered query.
+// observe is allocation-free; snapshot/export are for Stats() and /metrics.
+type latencyHist struct {
+	buckets [len(dnsAnswerBucketMS) + 1]atomic.Uint64
+	sumUS   atomic.Int64
+	count   atomic.Uint64
+}
+
+func (h *latencyHist) observe(ms float64) {
+	if ms < 0 {
+		ms = 0
+	}
+	i := 0
+	for i < len(dnsAnswerBucketMS) && ms > dnsAnswerBucketMS[i] {
+		i++
+	}
+	h.buckets[i].Add(1)
+	h.count.Add(1)
+	h.sumUS.Add(int64(ms * 1000))
+}
+
+func (h *latencyHist) snapshot() (buckets [len(dnsAnswerBucketMS) + 1]uint64, sumSec float64, count uint64) {
+	var cum uint64
+	for i := range h.buckets {
+		cum += h.buckets[i].Load()
+		buckets[i] = cum
+	}
+	return buckets, float64(h.sumUS.Load()) / 1e6, h.count.Load()
+}
+
+func (h *latencyHist) export() map[string]any {
+	cum, sumSec, count := h.snapshot()
+	buckets := make([]map[string]any, 0, len(cum))
+	for i, n := range cum {
+		le := "+Inf"
+		if i < len(dnsAnswerBucketLe) {
+			le = dnsAnswerBucketLe[i]
+		}
+		buckets = append(buckets, map[string]any{"le": le, "n": int64(n)})
+	}
+	return map[string]any{"buckets": buckets, "sum": sumSec, "count": int64(count)}
 }
 
 type inflightCall struct {
@@ -232,14 +283,14 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	clientAddr := remoteAddr(w)
 	cfg := s.cfg.Snapshot()
 
-	s.stats.Queries++
+	s.stats.Queries.Add(1)
 
 	// 0. Rate limit before any work. A flood must cost this node as little as
 	//    possible, and a refused reply is smaller than the query that caused it.
 	if s.limiter != nil {
 		s.limiter.SetLimit(cfg.DNS.RateLimit)
 		if !s.limiter.Allow(clientAddr, start) {
-			s.stats.RateLimited++
+			s.stats.RateLimited.Add(1)
 			s.refuse(w, r)
 			return
 		}
@@ -264,7 +315,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 			logEntry.LatencyMS = msSince(start)
 			logEntry.Answer = answerStrings(m)
 			logEntry.BlockSource = "rewrite"
-			s.stats.Rewritten++
+			s.stats.Rewritten.Add(1)
 			s.finish(w, m, logEntry, cfg)
 			return
 		}
@@ -279,7 +330,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 			m.Answer = rrs
 			logEntry.RCode = "NOERROR"
 			logEntry.LatencyMS = msSince(start)
-			s.stats.Local++
+			s.stats.Local.Add(1)
 			s.finish(w, m, logEntry, cfg)
 			return
 		}
@@ -298,7 +349,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 			logEntry.BlockSource = "service:" + svc
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
 			logEntry.LatencyMS = msSince(start)
-			s.stats.Blocked++
+			s.stats.Blocked.Add(1)
 			s.finish(w, m, logEntry, cfg)
 			return
 		}
@@ -310,7 +361,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 			logEntry.BlockSource = "doh-bypass"
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
 			logEntry.LatencyMS = msSince(start)
-			s.stats.Blocked++
+			s.stats.Blocked.Add(1)
 			s.finish(w, m, logEntry, cfg)
 			return
 		}
@@ -342,7 +393,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 			logEntry.BlockSource = match.Source
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
 			logEntry.LatencyMS = msSince(start)
-			s.stats.Blocked++
+			s.stats.Blocked.Add(1)
 			s.finish(w, m, logEntry, cfg)
 			return
 		}
@@ -357,11 +408,11 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		logEntry.RCode = dns.RcodeToString[cached.Rcode]
 		logEntry.LatencyMS = msSince(start)
 		logEntry.Answer = answerStrings(cached)
-		s.stats.Cached++
+		s.stats.Cached.Add(1)
 		if m, code := s.countryBlocked(r, q, cfg, clientAddr, name, cached); m != nil {
 			logEntry.Blocked, logEntry.BlockSource, logEntry.Answer = true, "country:"+code, answerStrings(m)
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
-			s.stats.Blocked++
+			s.stats.Blocked.Add(1)
 			s.finish(w, m, logEntry, cfg)
 			return
 		}
@@ -384,7 +435,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 			s.finish(w, stale, logEntry, cfg)
 			return
 		}
-		s.stats.Errors++
+		s.stats.Errors.Add(1)
 		logEntry.RCode = "SERVFAIL"
 		logEntry.LatencyMS = msSince(start)
 		s.finish(w, servfail(r), logEntry, cfg)
@@ -403,7 +454,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 				logEntry.CNAMEChain = chain
 				logEntry.RCode = dns.RcodeToString[m.Rcode]
 				logEntry.LatencyMS = msSince(start)
-				s.stats.Blocked++
+				s.stats.Blocked.Add(1)
 				s.finish(w, m, logEntry, cfg)
 				return
 			}
@@ -415,7 +466,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	//    record never gets served twice.
 	if cfg.DNS.RebindProtection && !RebindAllowed(name, cfg.DNS.LocalDomain, cfg.DNS.RebindAllowlist) {
 		if n := StripRebind(resp); n > 0 {
-			s.stats.Rebind++
+			s.stats.Rebind.Add(1)
 			logEntry.BlockSource = "dns-rebind"
 			s.log("dns: stripped %d private answer(s) for %s (rebinding protection)", n, name)
 		}
@@ -431,7 +482,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	if m, code := s.countryBlocked(r, q, cfg, clientAddr, name, resp); m != nil {
 		logEntry.Blocked, logEntry.BlockSource, logEntry.Answer = true, "country:"+code, answerStrings(m)
 		logEntry.RCode = dns.RcodeToString[m.Rcode]
-		s.stats.Blocked++
+		s.stats.Blocked.Add(1)
 		s.finish(w, m, logEntry, cfg)
 		return
 	}
@@ -589,7 +640,7 @@ func (s *Server) resolve(ctx context.Context, r *dns.Msg, q dns.Question, name s
 	s.inflightMu.Lock()
 	if call, ok := s.inflight[key]; ok {
 		s.inflightMu.Unlock()
-		s.stats.Collapsed++
+		s.stats.Collapsed.Add(1)
 		call.wg.Wait()
 		if call.msg == nil {
 			return nil, call.from, call.err
@@ -601,13 +652,17 @@ func (s *Server) resolve(ctx context.Context, r *dns.Msg, q dns.Question, name s
 	s.inflight[key] = call
 	s.inflightMu.Unlock()
 
+	// Wake waiters and drop the slot even if forward panics; otherwise every
+	// later lookup for this name blocks forever on Wait.
+	defer func() {
+		call.wg.Done()
+		s.inflightMu.Lock()
+		delete(s.inflight, key)
+		s.inflightMu.Unlock()
+	}()
+
 	msg, from, err := s.forward(ctx, r, name)
 	call.msg, call.from, call.err = msg, from, err
-	call.wg.Done()
-
-	s.inflightMu.Lock()
-	delete(s.inflight, key)
-	s.inflightMu.Unlock()
 
 	if msg == nil {
 		return nil, from, err
@@ -726,6 +781,7 @@ func (s *Server) finish(w dns.ResponseWriter, m *dns.Msg, entry store.DNSQuery, 
 		// A client that hung up mid-answer is normal, not worth logging.
 		_ = err
 	}
+	s.stats.answer.observe(entry.LatencyMS)
 	if cfg.DNS.LogQueries {
 		s.st.QueueDNS(entry)
 	}
@@ -753,13 +809,14 @@ func servfail(r *dns.Msg) *dns.Msg {
 
 func (s *Server) Stats() map[string]any {
 	out := map[string]any{
-		"queries": s.stats.Queries, "blocked": s.stats.Blocked,
-		"cached": s.stats.Cached, "errors": s.stats.Errors,
-		"collapsed": s.stats.Collapsed, "local": s.stats.Local,
-		"rate_limited": s.stats.RateLimited, "rebind_blocked": s.stats.Rebind,
-		"rewritten": s.stats.Rewritten,
-		"running":   s.Running(),
-		"cache":     s.cache.Stats(),
+		"queries": s.stats.Queries.Load(), "blocked": s.stats.Blocked.Load(),
+		"cached": s.stats.Cached.Load(), "errors": s.stats.Errors.Load(),
+		"collapsed": s.stats.Collapsed.Load(), "local": s.stats.Local.Load(),
+		"rate_limited": s.stats.RateLimited.Load(), "rebind_blocked": s.stats.Rebind.Load(),
+		"rewritten":      s.stats.Rewritten.Load(),
+		"answer_seconds": s.stats.answer.export(),
+		"running":        s.Running(),
+		"cache":          s.cache.Stats(),
 	}
 	s.mu.RLock()
 	ups := make([]map[string]any, 0, len(s.upstreams))

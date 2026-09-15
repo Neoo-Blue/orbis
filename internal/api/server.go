@@ -46,6 +46,7 @@ func (s *Server) Start() error {
 
 	r.Use(middleware.Recoverer)
 	r.Use(s.requestTimeout)
+	r.Use(s.compress)
 	r.Use(s.securityHeaders)
 
 	if cfg.API.AllowCORS {
@@ -136,6 +137,21 @@ func longLivedPath(path string) bool {
 	default:
 		return false
 	}
+}
+
+// compress gzip-encodes ordinary responses, including the hashed assets
+// under /assets/. The live event stream and the assistant SSE turn must not
+// be buffered through a compressor; chi's wrapper would also interfere with
+// WebSocket hijacking. Cache-Control set by the static handler is left alone.
+func (s *Server) compress(next http.Handler) http.Handler {
+	compressed := middleware.Compress(5)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if longLivedPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		compressed.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {

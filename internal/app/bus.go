@@ -2,6 +2,7 @@ package app
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,8 +23,8 @@ type Bus struct {
 	capacity int
 	closed   bool
 
-	published uint64
-	dropped   uint64
+	published atomic.Int64
+	dropped   atomic.Int64
 }
 
 func NewBus(capacity int) *Bus {
@@ -69,12 +70,12 @@ func (b *Bus) Publish(e Event) {
 	if b.closed {
 		return
 	}
-	b.published++
+	b.published.Add(1)
 	for _, ch := range b.subs {
 		select {
 		case ch <- e:
 		default:
-			b.dropped++
+			b.dropped.Add(1)
 		}
 	}
 }
@@ -84,8 +85,8 @@ func (b *Bus) Stats() map[string]any {
 	defer b.mu.RUnlock()
 	return map[string]any{
 		"subscribers": len(b.subs),
-		"published":   b.published,
-		"dropped":     b.dropped,
+		"published":   b.published.Load(),
+		"dropped":     b.dropped.Load(),
 	}
 }
 

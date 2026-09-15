@@ -415,3 +415,35 @@ func TestQueueFlowDoesNotBlockOnWriteMu(t *testing.T) {
 	s.flowBuf = nil
 	s.mu.Unlock()
 }
+
+// A flow that was queued twice while a flush was blocked lands in one
+// multi-row statement; the later row must win, as it did one row at a time.
+func TestWriteFlowsDuplicateIDInOneBatch(t *testing.T) {
+	s := openTestStore(t)
+	first := flowRow(0)
+	first.BytesIn, first.BytesOut, first.Hostname = 10, 20, "example.com"
+	second := first
+	second.BytesIn, second.BytesOut, second.Hostname = 300, 400, ""
+	third := flowRow(1)
+	if err := s.writeFlows([]Flow{first, third, second}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Flows(FlowQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("flow count = %d, want 2", len(got))
+	}
+	for _, f := range got {
+		if f.ID != first.ID {
+			continue
+		}
+		if f.BytesIn != 300 || f.BytesOut != 400 {
+			t.Fatalf("later duplicate did not win: %+v", f)
+		}
+		if f.Hostname != "example.com" {
+			t.Fatalf("empty hostname in the later row erased the earlier one: %+v", f)
+		}
+	}
+}

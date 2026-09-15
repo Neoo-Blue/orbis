@@ -282,12 +282,7 @@ func (r *ClientRegistry) All() []store.Client {
 
 	if r.tracker != nil {
 		rates := r.tracker.ClientRates()
-		active := map[string]int{}
-		for _, f := range r.tracker.Active(0) {
-			if f.ClientID != "" {
-				active[f.ClientID]++
-			}
-		}
+		active := r.tracker.ActiveCounts()
 		cutoff := time.Now().Add(-5 * time.Minute)
 		for i := range out {
 			if rt, ok := rates[out[i].ID]; ok {

@@ -197,20 +197,22 @@ func (s *Store) ReplaceListDomains(list, category string, e ListEntries) error {
 	if _, err := tx.Exec("DELETE FROM block_domains WHERE source=?", list); err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO block_domains (domain, source, category, wildcard, important) VALUES (?,?,?,?,?)")
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
 	put := func(items []string, kind int) error {
-		for _, d := range items {
-			imp := 0
-			if e.Important[d] {
-				imp = 1
+		const domainCols = 5
+		for i := 0; i < len(items); {
+			n := insertChunk
+			if len(items)-i < n {
+				n = len(items) - i
 			}
-			if _, err := stmt.Exec(d, list, category, kind, imp); err != nil {
+			args := make([]any, 0, n*domainCols)
+			for _, d := range items[i : i+n] {
+				args = append(args, d, list, category, kind, b2i(e.Important[d]))
+			}
+			q := "INSERT OR IGNORE INTO block_domains (domain, source, category, wildcard, important) VALUES " + sqlValues(n, domainCols)
+			if _, err := tx.Exec(q, args...); err != nil {
 				return err
 			}
+			i += n
 		}
 		return nil
 	}
@@ -359,18 +361,23 @@ func (s *Store) DeleteLocalRule(domain string) error {
 
 // ---------- ad candidates ----------
 
-// ObserveCandidate records a sighting, creating the row on first contact.
-func (s *Store) ObserveCandidate(domain string, clients, referrers int) error {
+// ObserveCandidate records sightings, creating the row on first contact.
+func (s *Store) ObserveCandidate(domain string, n, clients, referrers int) error {
+	if n <= 0 {
+		return nil
+	}
+	// More sightings in one pass do not add useful scoring evidence.
+	n = min(n, 50)
 	now := time.Now().Unix()
 	_, err := s.db.Exec(`INSERT INTO ad_candidates
 		(domain, first_seen, last_seen, observations, distinct_clients, distinct_referrers)
-		VALUES (?,?,?,1,?,?)
+		VALUES (?,?,?,?,?,?)
 		ON CONFLICT(domain) DO UPDATE SET
 			last_seen=excluded.last_seen,
-			observations=ad_candidates.observations+1,
+			observations=ad_candidates.observations+excluded.observations,
 			distinct_clients=MAX(ad_candidates.distinct_clients, excluded.distinct_clients),
 			distinct_referrers=MAX(ad_candidates.distinct_referrers, excluded.distinct_referrers)`,
-		domain, now, now, clients, referrers)
+		domain, now, now, n, clients, referrers)
 	return err
 }
 

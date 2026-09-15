@@ -98,6 +98,7 @@ func TestConcurrentObserveIsRaceFree(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 100; i++ {
 				_ = tr.Active(50)
+				_ = tr.ActiveCounts()
 				_ = tr.ClientRates()
 				_ = tr.Stats()
 				tr.SetLocalNets([]string{"192.168.1.0/24", "10.0.0.0/8"})
@@ -114,6 +115,109 @@ func TestConcurrentObserveIsRaceFree(t *testing.T) {
 	// collapse to one flow per tuple rather than two.
 	if stats.Total > 1600 {
 		t.Errorf("recorded %d flows for 1600 tuples — reply packets created duplicate flows", stats.Total)
+	}
+}
+
+func TestActiveCounts(t *testing.T) {
+	tests := []struct {
+		name    string
+		clients []string
+		want    map[string]int
+	}{
+		{name: "empty", want: map[string]int{}},
+		{
+			name:    "multiple clients",
+			clients: []string{"a", "b", "a", "b", "a"},
+			want:    map[string]int{"a": 3, "b": 2},
+		},
+		{
+			name:    "unassigned only",
+			clients: []string{"", ""},
+			want:    map[string]int{},
+		},
+		{
+			name:    "mixed assigned and unassigned",
+			clients: []string{"", "a", "b", "a", ""},
+			want:    map[string]int{"a": 2, "b": 1},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := NewTracker(nil, nil, 0, 0)
+			for i, id := range tc.clients {
+				tr.entries[Key{SrcPort: uint16(i)}] = &Entry{Flow: store.Flow{ClientID: id}}
+			}
+			got := tr.ActiveCounts()
+			if got == nil {
+				t.Fatal("ActiveCounts returned a nil map")
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("active counts = %v, want %v", got, tc.want)
+			}
+			for id, want := range tc.want {
+				if got[id] != want {
+					t.Errorf("active count for %q = %d, want %d", id, got[id], want)
+				}
+			}
+		})
+	}
+}
+
+func TestActiveCountsReturnsIsolatedMap(t *testing.T) {
+	tr := NewTracker(nil, nil, 0, 0)
+	key := Key{SrcPort: 1}
+	tr.entries[key] = &Entry{Flow: store.Flow{ClientID: "a"}}
+
+	counts := tr.ActiveCounts()
+	counts["a"] = 99
+	counts["other"] = 1
+	fresh := tr.ActiveCounts()
+	if len(fresh) != 1 || fresh["a"] != 1 {
+		t.Fatalf("mutating returned counts affected the tracker: %v", fresh)
+	}
+
+	delete(tr.entries, key)
+	if got := tr.ActiveCounts(); len(got) != 0 {
+		t.Errorf("active counts after removing the flow = %v, want empty", got)
+	}
+	if len(fresh) != 1 || fresh["a"] != 1 {
+		t.Errorf("tracker changes affected previously returned counts: %v", fresh)
+	}
+}
+
+func TestRegistryAllActiveCounts(t *testing.T) {
+	tr := NewTracker(nil, nil, 0, 0)
+	r := NewClientRegistry(nil, tr)
+	stale := time.Now().Add(-time.Hour)
+	for i, id := range []string{"a", "b", "idle", ""} {
+		ip := netip.AddrFrom4([4]byte{192, 168, 1, byte(i + 1)})
+		r.byIP[ip] = &store.Client{ID: id, IP: ip.String(), LastSeen: stale}
+	}
+	for i, id := range []string{"a", "b", "a", ""} {
+		tr.entries[Key{SrcPort: uint16(i)}] = &Entry{Flow: store.Flow{ClientID: id, StartedAt: stale}}
+	}
+
+	clients := r.All()
+	want := map[string]int{"a": 2, "b": 1, "idle": 0, "": 0}
+	if len(clients) != len(want) {
+		t.Fatalf("got %d clients, want %d", len(clients), len(want))
+	}
+	for _, c := range clients {
+		count, ok := want[c.ID]
+		if !ok {
+			t.Errorf("unexpected or duplicate client %q", c.ID)
+			continue
+		}
+		if c.ActiveFlows != count {
+			t.Errorf("client %q active flows = %d, want %d", c.ID, c.ActiveFlows, count)
+		}
+		if c.Online != (count > 0) {
+			t.Errorf("client %q online = %v, want %v", c.ID, c.Online, count > 0)
+		}
+		delete(want, c.ID)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing clients: %v", want)
 	}
 }
 

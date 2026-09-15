@@ -218,13 +218,8 @@ func (s *SmartCapture) Pass(ctx context.Context) error {
 
 	evidence := make(map[string]DomainEvidence, len(batch))
 	for d, o := range batch {
-		for i := 0; i < o.count; i++ {
-			if err := s.st.ObserveCandidate(d, len(o.clients), len(o.referrers)); err != nil {
-				return err
-			}
-			if i > 50 {
-				break // the count column saturates; the score does not need more
-			}
+		if err := s.st.ObserveCandidate(d, o.count, len(o.clients), len(o.referrers)); err != nil {
+			return err
 		}
 		evidence[d] = s.buildEvidence(o)
 	}

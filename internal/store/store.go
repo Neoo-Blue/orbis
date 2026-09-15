@@ -80,7 +80,12 @@ func Open(path string) (*Store, error) {
 	// A long busy_timeout is a second line of defence behind writeMu, for
 	// the case where an external process (a backup, a manual sqlite3 shell)
 	// holds the write lock.
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(15000)&_txlock=immediate", path)
+	// DSN pragmas apply to every pooled connection, not just the one that
+	// runs schema. NORMAL trades the latest commits on power loss for less
+	// SD-card sync I/O; traffic logs can tolerate that loss.
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(15000)&_txlock=immediate"+
+		"&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-16000)"+
+		"&_pragma=journal_size_limit(67108864)&_pragma=mmap_size(268435456)&_pragma=temp_store(MEMORY)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -98,8 +103,51 @@ func Open(path string) (*Store, error) {
 	applyMigrations(db)
 
 	s := &Store{db: db, closed: make(chan struct{}), kick: make(chan struct{}, 1)}
-	s.wg.Add(1)
+	s.wg.Add(2)
 	go s.flushLoop()
+	go func() {
+		defer s.wg.Done()
+		// Building this index on millions of domains can take minutes;
+		// leave it out of the synchronous schema path so DNS can start.
+		t := time.NewTimer(5 * time.Second)
+		defer t.Stop()
+		select {
+		case <-s.closed:
+			return
+		case <-t.C:
+		}
+		var exists int
+		err := s.db.QueryRow("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_block_source'").Scan(&exists)
+		if err == nil {
+			return
+		}
+		if err != sql.ErrNoRows {
+			fmt.Fprintf(os.Stderr, "store: block source index check failed: %v\n", err)
+			return
+		}
+		tx, unlock, err := s.beginWrite()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "store: block source index failed: %v\n", err)
+			return
+		}
+		defer unlock()
+		defer tx.Rollback()
+		select {
+		case <-s.closed:
+			return
+		default:
+		}
+		started := time.Now()
+		fmt.Fprintln(os.Stderr, "store: building block source index")
+		if _, err = tx.Exec("CREATE INDEX IF NOT EXISTS idx_block_source ON block_domains(source)"); err == nil {
+			err = tx.Commit()
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "store: block source index failed: %v\n", err)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "store: block source index finished in %v\n", time.Since(started).Round(time.Millisecond))
+	}()
 	return s, nil
 }
 
@@ -138,14 +186,22 @@ func (s *Store) flushLoop() {
 	defer s.wg.Done()
 	t := time.NewTicker(flushInterval)
 	defer t.Stop()
+	lastCheckpoint := time.Now()
 	for {
 		select {
 		case <-s.closed:
 			return
 		case <-t.C:
-			s.flush()
 		case <-s.kick:
-			s.flush()
+		}
+		s.flush()
+		if time.Since(lastCheckpoint) >= time.Minute {
+			// Make progress even with pooled readers holding snapshots;
+			// PASSIVE never waits for them like a truncating checkpoint.
+			if _, err := s.db.Exec("PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
+				fmt.Fprintf(os.Stderr, "store: passive checkpoint failed: %v\n", err)
+			}
+			lastCheckpoint = time.Now()
 		}
 	}
 }
@@ -428,42 +484,49 @@ func (s *Store) writeFlows(flows []Flow) error {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(`
-		INSERT INTO flows (id, client_id, started_at, ended_at, last_seen, proto, src_ip, src_port,
+	const flowCols = 30
+	// 32 rows keep each statement at 960 bound parameters.
+	const flowChunk = 32
+	for i := 0; i < len(flows); {
+		n := flowChunk
+		if len(flows)-i < n {
+			n = len(flows) - i
+		}
+		args := make([]any, 0, n*flowCols)
+		for _, f := range flows[i : i+n] {
+			var ended any
+			if f.EndedAt != nil {
+				ended = f.EndedAt.Unix()
+			}
+			args = append(args, f.ID, nz(f.ClientID), f.StartedAt.Unix(), ended, f.LastSeen.Unix(),
+				f.Proto, f.SrcIP, f.SrcPort, f.DstIP, f.DstPort, f.Direction, f.Hostname, f.SNI,
+				f.App, f.JA4, f.PacketsIn, f.PacketsOut, f.BytesIn, f.BytesOut, f.Verdict,
+				nz(f.RuleID), f.Reason, f.Country, f.City, f.Lat, f.Lon, f.ASN, f.ASOrg, f.Risk,
+				jsonStrings(f.Tags))
+		}
+		q := `INSERT INTO flows (id, client_id, started_at, ended_at, last_seen, proto, src_ip, src_port,
 			dst_ip, dst_port, direction, hostname, sni, app, ja4, packets_in, packets_out,
 			bytes_in, bytes_out, verdict, rule_id, reason, country, city, lat, lon, asn, as_org, risk, tags)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET
-			ended_at=excluded.ended_at,
-			last_seen=excluded.last_seen,
-			hostname=COALESCE(NULLIF(excluded.hostname,''), flows.hostname),
-			sni=COALESCE(NULLIF(excluded.sni,''), flows.sni),
-			app=COALESCE(NULLIF(excluded.app,''), flows.app),
-			ja4=COALESCE(NULLIF(excluded.ja4,''), flows.ja4),
-			packets_in=excluded.packets_in,
-			packets_out=excluded.packets_out,
-			bytes_in=excluded.bytes_in,
-			bytes_out=excluded.bytes_out,
-			verdict=excluded.verdict,
-			reason=COALESCE(NULLIF(excluded.reason,''), flows.reason),
-			risk=MAX(excluded.risk, flows.risk),
-			tags=excluded.tags`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, f := range flows {
-		var ended any
-		if f.EndedAt != nil {
-			ended = f.EndedAt.Unix()
-		}
-		if _, err := stmt.Exec(f.ID, nz(f.ClientID), f.StartedAt.Unix(), ended, f.LastSeen.Unix(),
-			f.Proto, f.SrcIP, f.SrcPort, f.DstIP, f.DstPort, f.Direction, f.Hostname, f.SNI,
-			f.App, f.JA4, f.PacketsIn, f.PacketsOut, f.BytesIn, f.BytesOut, f.Verdict,
-			nz(f.RuleID), f.Reason, f.Country, f.City, f.Lat, f.Lon, f.ASN, f.ASOrg, f.Risk,
-			jsonStrings(f.Tags)); err != nil {
+			VALUES ` + sqlValues(n, flowCols) + `
+			ON CONFLICT(id) DO UPDATE SET
+				ended_at=excluded.ended_at,
+				last_seen=excluded.last_seen,
+				hostname=COALESCE(NULLIF(excluded.hostname,''), flows.hostname),
+				sni=COALESCE(NULLIF(excluded.sni,''), flows.sni),
+				app=COALESCE(NULLIF(excluded.app,''), flows.app),
+				ja4=COALESCE(NULLIF(excluded.ja4,''), flows.ja4),
+				packets_in=excluded.packets_in,
+				packets_out=excluded.packets_out,
+				bytes_in=excluded.bytes_in,
+				bytes_out=excluded.bytes_out,
+				verdict=excluded.verdict,
+				reason=COALESCE(NULLIF(excluded.reason,''), flows.reason),
+				risk=MAX(excluded.risk, flows.risk),
+				tags=excluded.tags`
+		if _, err := tx.Exec(q, args...); err != nil {
 			return err
 		}
+		i += n
 	}
 	return tx.Commit()
 }
@@ -775,11 +838,37 @@ func (s *Store) Prune(ctx context.Context, flowDays, eventDays int) error {
 	now := time.Now()
 	if flowDays > 0 {
 		cut := now.AddDate(0, 0, -flowDays).Unix()
-		if _, err := s.db.ExecContext(ctx, "DELETE FROM flows WHERE started_at < ?", cut); err != nil {
-			return err
-		}
-		if _, err := s.db.ExecContext(ctx, "DELETE FROM dns_queries WHERE ts < ?", cut); err != nil {
-			return err
+		for _, q := range []string{
+			"DELETE FROM flows WHERE rowid IN (SELECT rowid FROM flows WHERE started_at < ? LIMIT 20000)",
+			"DELETE FROM dns_queries WHERE rowid IN (SELECT rowid FROM dns_queries WHERE ts < ? LIMIT 20000)",
+		} {
+			for {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				// Commit and release writeMu per chunk so retention cannot
+				// starve the log writer for minutes on an SD card.
+				s.writeMu.Lock()
+				result, err := s.db.ExecContext(ctx, q, cut)
+				s.writeMu.Unlock()
+				if err != nil {
+					return err
+				}
+				n, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if n == 0 {
+					break
+				}
+				t := time.NewTimer(250 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					t.Stop()
+					return ctx.Err()
+				case <-t.C:
+				}
+			}
 		}
 	}
 	if eventDays > 0 {

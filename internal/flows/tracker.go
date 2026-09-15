@@ -717,6 +717,19 @@ func (t *Tracker) Active(limit int) []store.Flow {
 	return out
 }
 
+// ActiveCounts returns live flow counts per client, excluding unassigned flows.
+func (t *Tracker) ActiveCounts() map[string]int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := map[string]int{}
+	for _, e := range t.entries {
+		if e.ClientID != "" {
+			out[e.ClientID]++
+		}
+	}
+	return out
+}
+
 // ActiveForClient filters the live table to one device.
 func (t *Tracker) ActiveForClient(clientID string) []store.Flow {
 	t.mu.RLock()

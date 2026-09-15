@@ -350,7 +350,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
               {(() => {
                 const out: Array<{ group: string; items: NavRoute[] }> = []
                 for (const r of ROUTES) {
-                  const g = r.group ?? (out.length ? out[out.length - 1].group : '')
+                  const g = r.group ?? (out.length ? out[out.length - 1].group : 'Observe')
                   let b = out.find((x) => x.group === g)
                   if (!b) { b = { group: g, items: [] }; out.push(b) }
                   b.items.push(r)

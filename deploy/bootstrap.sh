@@ -31,9 +31,15 @@ REPO="Neoo-Blue/orbis"
 RAW="https://raw.githubusercontent.com/${REPO}/main"
 CHANNEL="${CHANNEL:-stable}"
 
-c_say()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
-c_warn() { printf '\033[33m warn\033[0m %s\n' "$*"; }
-c_die()  { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_STEP=$'\033[36m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_OFF=$'\033[0m'
+else
+  C_STEP=''; C_OK=''; C_WARN=''; C_ERR=''; C_OFF=''
+fi
+c_say()  { printf '%s==>%s %s\n' "$C_STEP" "$C_OFF" "$*"; }
+c_ok()   { printf '%s ok %s %s\n' "$C_OK" "$C_OFF" "$*"; }
+c_warn() { printf '%s warn%s %s\n' "$C_WARN" "$C_OFF" "$*"; }
+c_die()  { printf '%serror%s %s\n' "$C_ERR" "$C_OFF" "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || c_die "run as root (pipe into 'sudo bash')"
 
@@ -119,7 +125,7 @@ install_inplace() {
   fi
 
   local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  c_say "Done. Open http://${ip:-<this-host>}:8080 and set an admin password."
+  c_ok "Done. Open the address above in a browser; the guided setup takes about five minutes."
 }
 
 # ---- Proxmox LXC install -----------------------------------------------------
@@ -202,7 +208,7 @@ LXCCONF
 
   local ip
   ip="$(pct exec "$ctid" -- hostname -I 2>/dev/null | awk '{print $1}')"
-  c_say "Done. Orbis is in LXC ${ctid}. Open http://${ip:-<container-ip>}:8080"
+  c_ok "Done. Orbis is in LXC ${ctid}. Open http://${ip:-<container-ip>}:8080 in a browser; the guided setup takes about five minutes."
 }
 
 # ---- dispatch ----------------------------------------------------------------

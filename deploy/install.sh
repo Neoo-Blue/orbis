@@ -12,9 +12,18 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/orbis}"
 DATA_DIR="${DATA_DIR:-/var/lib/orbis}"
 CONFIG="$CONFIG_DIR/orbis.yaml"
 
-say()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[33m warn\033[0m %s\n' "$*"; }
-die()  { printf '\033[31merror\033[0m %s\n' "$*" >&2; exit 1; }
+# Colour when stdout is a terminal and NO_COLOR is unset; the one-liner's
+# stdout is the terminal even though stdin is the pipe.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_STEP=$'\033[36m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_ERR=$'\033[31m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_OFF=$'\033[0m'
+else
+  C_STEP=''; C_OK=''; C_WARN=''; C_ERR=''; C_DIM=''; C_BOLD=''; C_OFF=''
+fi
+say()  { printf '%s==>%s %s\n' "$C_STEP" "$C_OFF" "$*"; }
+ok()   { printf '%s ok %s %s\n' "$C_OK" "$C_OFF" "$*"; }
+dim()  { printf '%s%s%s\n' "$C_DIM" "$*" "$C_OFF"; }
+warn() { printf '%s warn%s %s\n' "$C_WARN" "$C_OFF" "$*"; }
+die()  { printf '%serror%s %s\n' "$C_ERR" "$C_OFF" "$*" >&2; exit 1; }
 
 install_deps() {
   # nftables: the firewall engine. conntrack: flow termination + byte counters.
@@ -163,7 +172,8 @@ say "Installing the systemd units and the safety net"
 # takes over DNS, DHCP and forwarding when the service cannot come back,
 # the release step that puts intercepted devices back on the real gateway
 # after any stop, and the hardware watchdog where the board has one.
-if ! /usr/local/bin/orbisd -install-safety-net -config "$CONFIG"; then
+if ! /usr/local/bin/orbisd -install-safety-net -config "$CONFIG" >/tmp/orbis-safety-net.log 2>&1; then
+  cat /tmp/orbis-safety-net.log >&2
   warn "safety net install failed; writing a plain unit instead"
   cat > /etc/systemd/system/orbis.service <<'UNIT'
 [Unit]
@@ -206,7 +216,7 @@ modprobe nf_conntrack 2>/dev/null || warn "could not load nf_conntrack (expected
 sysctl -q --system 2>/dev/null || warn "some sysctls could not be applied"
 
 systemctl daemon-reload
-systemctl enable --now orbis.service
+systemctl enable --now -q orbis.service
 
 # api.listen looks like ":8080" or "0.0.0.0:8080".
 ui_port=8080
@@ -236,15 +246,14 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 if [ "$ready" -ne 1 ]; then
-  echo "Orbis did not start: run journalctl -u orbis -n 50" >&2
-  exit 1
+  die "Orbis did not start: run journalctl -u orbis -n 50"
 fi
 
 addrs="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)" || true
 [ -n "$addrs" ] || addrs="$(hostname -I 2>/dev/null || true)"
 
 echo
-say "Orbis is up."
+ok "Orbis is up."
 ui_printed=0
 # Word-split: each token is one address from ip or hostname -I.
 # shellcheck disable=SC2086
@@ -253,16 +262,16 @@ for a in $addrs; do
     *:*) continue ;;
   esac
   if [ "$ui_printed" -eq 0 ]; then
-    echo "    UI:      http://${a}:${ui_port}"
+    printf '    UI:      %s%shttp://%s:%s%s\n' "$C_BOLD" "$C_OK" "$a" "$ui_port" "$C_OFF"
     ui_printed=1
   else
-    echo "             http://${a}:${ui_port}"
+    printf '             %s%shttp://%s:%s%s\n' "$C_BOLD" "$C_OK" "$a" "$ui_port" "$C_OFF"
   fi
 done
 if [ "$ui_printed" -eq 0 ]; then
-  echo "    UI:      http://127.0.0.1:${ui_port}"
+  printf '    UI:      %s%shttp://127.0.0.1:%s%s\n' "$C_BOLD" "$C_OK" "$ui_port" "$C_OFF"
 fi
-echo "    Config:  $CONFIG"
-echo "    Logs:    journalctl -u orbis -f"
+dim "    Config:  $CONFIG"
+dim "    Logs:    journalctl -u orbis -f"
 echo
 echo "  Open it in a browser. The first screen is a guided setup: it sets a password, names the node, picks what to run, the upstream resolvers and blocklists, and shows you how to point your router at it. About five minutes."

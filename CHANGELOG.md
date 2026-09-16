@@ -4,6 +4,14 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## Unreleased
+
+### Changed
+- **The installer's output is easier to read.** Steps in cyan, warnings in yellow, errors in red,
+  the success line and the address to open in bold green, secondary lines dimmed; the daemon's
+  own log lines while it writes the units and systemd's symlink message are silenced unless
+  something fails. Colour is skipped when the output is not a terminal or `NO_COLOR` is set.
+
 ## v1.32.1
 
 ### Fixed

@@ -151,8 +151,9 @@ func TestUnblockerDailyCap(t *testing.T) {
 	defer done()
 	st, cfg := unblockSetup(t)
 	for _, d := range []string{"x1.example", "x2.example", "x3.example"} {
-		r, _ := st.UpsertRecommendation(store.Recommendation{ID: d, TS: time.Now(), Kind: "allow", Domain: d})
-		_ = st.DecideRecommendation(r.ID, "accepted", AutoUnblockActor)
+		if err := st.SaveLocalRule(store.LocalRule{Domain: d, Action: "allow", Origin: "ai"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	u := NewUnblocker(cfg, NewClient(cfg, nil, nil), st,
 		func(since time.Time, blockedOnly bool, search string, limit int) ([]store.DNSQuery, error) {

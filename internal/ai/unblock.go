@@ -169,13 +169,19 @@ func (u *Unblocker) Pass(ctx context.Context) (suggested, allowed int, err error
 	})
 
 	decided := map[string]bool{}
-	autoToday := 0
 	if recs, err := u.st.Recommendations("", 500); err == nil {
 		for _, r := range recs {
 			if r.Kind == "allow" && (r.Status == "accepted" || r.Status == "dismissed") {
 				decided[r.Domain] = true
 			}
-			if r.DecidedBy == AutoUnblockActor && now.Sub(r.DecidedAt) < 24*time.Hour {
+		}
+	}
+	// The cap counts allows actually made: a week-old one kept because it is
+	// still in use is renewed on its recommendation, not re-created here.
+	autoToday := 0
+	if rules, err := u.st.LocalRules(); err == nil {
+		for _, r := range rules {
+			if r.Origin == "ai" && r.Action == "allow" && now.Sub(r.CreatedAt) < 24*time.Hour {
 				autoToday++
 			}
 		}

@@ -275,6 +275,13 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 			c.AI.APIKey = v
 			return true
 		}
+	case "ai.typesafe.enabled":
+		return setBool(&c.AI.TypeSafe.Enabled, raw)
+	case "ai.typesafe.api_key":
+		if v, ok := raw.(string); ok && v != config.MaskedSecret {
+			c.AI.TypeSafe.APIKey = strings.TrimSpace(v)
+			return true
+		}
 	case "ai.model":
 		return setStr(&c.AI.Model, raw)
 	case "ai.fast_model":

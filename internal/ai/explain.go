@@ -291,8 +291,8 @@ func (x *Explainer) subject(ctx context.Context, kind, key string) (map[string]a
 // JudgeDomain asks the ad-and-tracker classifier about one hostname, with
 // what the DNS log shows about it, for the domain tester.
 func (x *Explainer) JudgeDomain(ctx context.Context, domain string) (map[string]any, error) {
-	if !x.client.Configured() {
-		return nil, fmt.Errorf("the assistant is not configured")
+	if !x.judge.Available() {
+		return nil, fmt.Errorf("neither TypeSafe nor the assistant is configured")
 	}
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	if domain == "" || !strings.Contains(domain, ".") {

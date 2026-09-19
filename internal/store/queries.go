@@ -445,7 +445,7 @@ func (s *Store) PendingCandidates(minObs, limit int) ([]AdCandidate, error) {
 		distinct_referrers, heuristic_score, ai_score, COALESCE(ai_reason,''), final_score, status,
 		COALESCE(decided_by,''), decided_at, COALESCE(features,'{}')
 		FROM ad_candidates WHERE status IN ('candidate','review') AND observations >= ?
-		ORDER BY observations DESC LIMIT ?`, minObs, clampInt(limit, 1, 2000))
+		ORDER BY status = 'review', observations DESC LIMIT ?`, minObs, clampInt(limit, 1, 2000))
 	if err != nil {
 		return nil, err
 	}

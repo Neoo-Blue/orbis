@@ -56,6 +56,7 @@ export const SETTINGS_INDEX: SettingsEntry[] = [
   { section: 'vpn', label: 'Outbound tunnels and routing', keywords: 'tunnel egress route devices through vpn' },
   { section: 'tailscale', label: 'Tailscale', keywords: 'tailscale exit node subnet routes auth key login' },
   { section: 'assistant', label: 'Assistant provider and API key', keywords: 'ai openrouter anthropic openai ollama api key model' },
+  { section: 'assistant', label: 'TypeSafe domain judge', keywords: 'typesafe jev ad tracker classifier smart capture api key probability' },
   { section: 'assistant', label: 'Free models, probe, budget', keywords: 'free models openrouter probe ranking budget chain pin' },
   { section: 'assistant', label: 'Let the assistant make changes', keywords: 'write access permissions allow write' },
   { section: 'assistant', label: 'Network brief schedule', keywords: 'brief report check hours notify' },

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -311,7 +312,8 @@ func classify(err error) (cooldown time.Duration, retriable bool) {
 		return 0, false
 	}
 	msg := strings.ToLower(err.Error())
-	if pe, ok := err.(*ProviderError); ok {
+	var pe *ProviderError
+	if errors.As(err, &pe) {
 		switch pe.status() {
 		case 429:
 			return 2 * time.Minute, true

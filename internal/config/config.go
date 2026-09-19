@@ -868,6 +868,19 @@ type AIConfig struct {
 	// Intel is the scheduled threat-intelligence assessment, and the active
 	// blocking that lets it act on its own findings.
 	Intel IntelConfig `yaml:"intel" json:"intel"`
+	// TypeSafe answers the ad-and-tracker domain judgments with calibrated
+	// probabilities instead of the chat model.
+	TypeSafe TypeSafeConfig `yaml:"typesafe" json:"typesafe"`
+}
+
+// TypeSafeConfig points the domain classifier (smart capture and the domain
+// tester) at TypeSafe's System One API. It returns typed judgments, not
+// text, so chat, briefs and reviews stay on Provider, and it works whether
+// or not the assistant itself is enabled. When it fails, the classifier
+// falls back to the chat model if one is configured.
+type TypeSafeConfig struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	APIKey  string `yaml:"api_key" json:"api_key"`
 }
 
 // IntelConfig schedules the threat-intelligence assessment. The assessment
@@ -1571,6 +1584,9 @@ func (c *Config) Redacted() Config {
 	const mask = MaskedSecret
 	if cp.AI.APIKey != "" {
 		cp.AI.APIKey = mask
+	}
+	if cp.AI.TypeSafe.APIKey != "" {
+		cp.AI.TypeSafe.APIKey = mask
 	}
 	if cp.Issues.GitHub.Token != "" {
 		cp.Issues.GitHub.Token = mask

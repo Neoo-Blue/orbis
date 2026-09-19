@@ -6,6 +6,26 @@ under "Show release notes" when it offers an update.
 
 ## Unreleased
 
+### Added
+- **TypeSafe can judge ad and tracker hosts.** Settings, Assistant, TypeSafe domain judge: turn it
+  on and paste a key from console.typesafe.ai. Smart capture and the domain tester's "Ask the
+  assistant" then ask TypeSafe's Jev model two typed questions per host (is it ad or tracking
+  infrastructure, and how likely is a block to break something) and get calibrated probabilities
+  back in about a third of a second, at a fraction of a cent per thousand hosts. It works with no
+  chat model configured; when one is, it takes over if TypeSafe fails. Chat, briefs and reviews
+  are unchanged.
+
+### Fixed
+- **Smart capture now asks the model about hosts it only saw in DNS.** Its heuristics measure
+  referrers, response sizes and paths, so a host seen only as DNS lookups scored zero for lack
+  of evidence and the model was never consulted; on a DNS-only node no candidate was ever
+  judged. Each such host is now asked about once. Because a verdict on the name alone has
+  nothing to be blended with, it stands on its own, and it can only send the host to review,
+  never block it. Hosts waiting for review no longer crowd unjudged ones out of each pass.
+- **A host keeps its smart-capture evidence through a quiet interval.** Referrers, response
+  sizes and paths seen on an earlier pass used to be overwritten by the next pass that saw only
+  DNS, so a likely beacon's score fell back toward zero whenever it went quiet for 15 minutes.
+
 ### Changed
 - **The installer's output is easier to read.** Steps in cyan, warnings in yellow, errors in red,
   the success line and the address to open in bold green, secondary lines dimmed; the daemon's

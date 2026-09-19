@@ -687,6 +687,7 @@ export interface AppConfig {
       enabled: boolean; interval_hours: number; active_blocking: boolean; min_confidence: number
       max_actions_per_run: number; max_ban_hours: number; ban_addresses: boolean; block_domains: boolean; notify: boolean
     }
+    typesafe: { enabled: boolean; api_key: string }
   }
   safety: { fallback_dns: string; lifeboat: boolean; hardware_watchdog: boolean; liveness_probe: boolean }
   issues: {

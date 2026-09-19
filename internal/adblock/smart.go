@@ -244,6 +244,20 @@ func (s *SmartCapture) Pass(ctx context.Context) error {
 		ev.DistinctClients = c.DistinctClients
 		ev.FirstSeenHoursAgo = time.Since(c.FirstSeen).Hours()
 
+		fresh := !ev.DNSOnly()
+		if !fresh {
+			// Nothing over HTTP this interval: score on the last interval
+			// that did see some, so a quiet host keeps its evidence.
+			ev = withStoredHTTP(ev, c.Features)
+			if c.Status == store.CandidateReview && c.AIScore != nil {
+				// Already judged and waiting for a person, and nothing new
+				// to measure: keep the verdict for them.
+				continue
+			}
+		}
+		// Never seen over HTTP at all, rather than quiet this interval.
+		dnsOnly := ev.DNSOnly()
+
 		h := Heuristic(ev)
 		ev.HeuristicScore = h
 		final := h
@@ -254,8 +268,10 @@ func (s *SmartCapture) Pass(ctx context.Context) error {
 
 		// The middle band is where a human (or a model) actually adds value.
 		// Below it the domain is obviously benign; above it the heuristics
-		// already agree with any reasonable reviewer.
-		if h >= 0.45 && h < cfg.AutoBlockScore && cfg.UseAI {
+		// already agree with any reasonable reviewer. A DNS-only host scores
+		// low for lack of evidence, not for being benign, so the model gets
+		// it once.
+		if cfg.UseAI && h < cfg.AutoBlockScore && (h >= 0.45 || (dnsOnly && c.Status == store.CandidateNew)) {
 			ambiguous = append(ambiguous, ev)
 		} else if h >= cfg.AutoBlockScore {
 			s.promote(c.Domain, h, fmt.Sprintf("heuristic score %.2f", h), "smart:heuristic")
@@ -277,7 +293,7 @@ func (s *SmartCapture) Pass(ctx context.Context) error {
 func (s *SmartCapture) escalate(ctx context.Context, j Judge, batch []DomainEvidence, cfg config.SmartCaptureConfig) {
 	// Highest-uncertainty first, and cap the batch: a model call per pass
 	// should cost cents, not dollars.
-	sort.Slice(batch, func(i, k int) bool {
+	sort.SliceStable(batch, func(i, k int) bool {
 		return math.Abs(batch[i].HeuristicScore-0.65) < math.Abs(batch[k].HeuristicScore-0.65)
 	})
 	if len(batch) > 40 {
@@ -306,6 +322,12 @@ func (s *SmartCapture) escalate(ctx context.Context, j Judge, batch []DomainEvid
 		// cannot. Weighting the model higher reflects that it is only
 		// consulted on cases where the heuristics were unsure.
 		final := 0.4*ev.HeuristicScore + 0.6*aiScore
+		if ev.DNSOnly() {
+			// The heuristics had nothing to measure, so there is nothing to
+			// blend. A verdict on the name alone goes to a person, never
+			// straight to a block.
+			final = math.Min(aiScore, cfg.AutoBlockScore-0.01)
+		}
 		if strings.EqualFold(v.BreakageRisk, "high") {
 			// Never auto-block something the model flagged as breakage-prone;
 			// cap it into the review band so a human decides.
@@ -423,6 +445,37 @@ func evidenceFromStored(c store.AdCandidate) DomainEvidence {
 		LabelEntropy:    labelEntropy(c.Domain),
 		KeywordHits:     keywordHits(c.Domain),
 	}
+}
+
+// DNSOnly reports that nothing beyond DNS lookups was seen for the host: no
+// referrers, response sizes or paths. Those are what the heuristics measure,
+// so a zero in them here means "not measured", not "first-party".
+func (e DomainEvidence) DNSOnly() bool {
+	return len(e.ReferringSites) == 0 && e.AvgResponseBytes == 0 && len(e.SamplePaths) == 0 && e.ThirdPartyRatio == 0
+}
+
+// withStoredHTTP fills the HTTP-level fields from a candidate's stored
+// features (written by asMap on an earlier pass).
+func withStoredHTTP(ev DomainEvidence, f map[string]any) DomainEvidence {
+	strs := func(v any) []string {
+		var out []string
+		a, _ := v.([]any)
+		for _, x := range a {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	num := func(v any) float64 { n, _ := v.(float64); return n }
+	ev.ReferringSites = strs(f["referrers"])
+	ev.SamplePaths = strs(f["paths"])
+	ev.ThirdPartyRatio = num(f["third_party_ratio"])
+	ev.AvgResponseBytes = int64(num(f["avg_bytes"]))
+	if org, _ := f["as_org"].(string); ev.ASOrg == "" {
+		ev.ASOrg = org
+	}
+	return ev
 }
 
 func (e DomainEvidence) asMap() map[string]any {

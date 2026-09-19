@@ -1411,6 +1411,8 @@ function AssistantSection({ config, save, toast }: SectionProps) {
 
       {isOpenRouter && <FreeModelsCard config={config} save={save} toast={toast} />}
 
+      <TypeSafeCard config={config} save={save} toast={toast} />
+
       <Card title="Network brief">
         <div style={{ display: 'grid', gap: 14 }}>
           <div className="hint" style={{ lineHeight: 1.7 }}>
@@ -1556,6 +1558,41 @@ function Chain({ ids }: { ids: string[] }) {
  * chains a request walks right now, today's spend against the free cap, and
  * the pins. Everything is per-row and immediate; there is no separate editor.
  */
+function TypeSafeCard({ config, save, toast }: Pick<SectionProps, 'config' | 'save' | 'toast'>) {
+  const [key, setKey] = useState('')
+  const ts = config.ai.typesafe
+  return (
+    <Card title="TypeSafe domain judge">
+      <div style={{ display: 'grid', gap: 14 }}>
+        <div className="hint" style={{ lineHeight: 1.7 }}>
+          TypeSafe answers narrow questions with calibrated probabilities instead of writing text. With it on,
+          it decides whether each host smart capture finds is ad or tracking infrastructure and whether blocking
+          it would break something, in about a third of a second per host and without a chat model. A host seen
+          only in DNS is judged on its name and goes to review on the Ad blocking page, never straight to a block.
+          Chat, briefs and reviews stay on the provider above, which also takes over if TypeSafe fails.
+        </div>
+        <SwitchRow label="Judge ad and tracker hosts with TypeSafe" checked={ts.enabled}
+          onChange={(v) => save({ 'ai.typesafe.enabled': v })} />
+        <Field label="API key" hint={<>From <a href="https://console.typesafe.ai" target="_blank" rel="noreferrer">console.typesafe.ai</a>. Stored in the config file with 0600 permissions and never returned by the API.</>}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input className="input mono" type="password" value={key} style={{ flex: 1, minWidth: 180 }}
+              placeholder={ts.api_key ? '•••••••• (set)' : 'apikey_…'}
+              onChange={(e) => setKey(e.target.value)} />
+            <button className="btn" disabled={!key} onClick={async () => {
+              if (await save({ 'ai.typesafe.api_key': key })) { setKey(''); toast('Key saved', 'ok') }
+            }}>Save</button>
+            {ts.api_key && <button className="btn" onClick={() => save({ 'ai.typesafe.api_key': '' })}>Clear</button>}
+          </div>
+        </Field>
+        {ts.enabled && !ts.api_key && <div className="hint">Add a key to start judging.</div>}
+        {ts.enabled && !config.adblock.smart_capture.use_ai && (
+          <div className="hint">Smart capture's AI escalation is off, so only the domain tester will ask TypeSafe.</div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
 function FreeModelsCard({ config, save, toast }: Pick<SectionProps, 'config' | 'save' | 'toast'>) {
   const { data, refresh } = usePoll(() => api.ai.models(), 15000)
   const [chainKind, setChainKind] = useState<'chat' | 'fast'>('chat')

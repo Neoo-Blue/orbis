@@ -33,6 +33,9 @@ You are given behavioural evidence gathered by the network itself, not a descrip
 - Tiny avg_response_bytes (under ~1 KB) with high request counts means beacons.
 - name_keywords are suggestive but not decisive on their own. Plenty of legitimate services have
   "metrics" or "analytics" in the name, and plenty of ad servers have neutral names.
+- No referring_sites, avg_response_bytes or sample_paths means the network saw only DNS lookups
+  for the host, so a third_party_ratio of 0 is unmeasured, not first-party. Judge those from the
+  hostname and what you know of its operator.
 - High label entropy with deep subdomains suggests generated hostnames, which ad networks use to
   evade static lists, but CDN shards look identical, so do not over-weight it.
 
@@ -49,12 +52,25 @@ Answer with a JSON array and nothing else. One object per domain you were given:
 confidence is how sure you are of the verdict you gave, not how sure you are that it is an ad.
 Keep reason to one sentence naming the evidence that decided it.`
 
+// Available reports whether any classifier is set up: TypeSafe or the
+// chat model.
+func (j *Judge) Available() bool {
+	return typeSafeKey(j.client.cfg) != "" || j.client.Configured()
+}
+
 func (j *Judge) JudgeDomains(ctx context.Context, batch []adblock.DomainEvidence) ([]adblock.DomainVerdict, error) {
-	if !j.client.Configured() {
-		return nil, fmt.Errorf("AI not configured")
-	}
 	if len(batch) == 0 {
 		return nil, nil
+	}
+	if key := typeSafeKey(j.client.cfg); key != "" {
+		out, err := j.judgeTypeSafe(ctx, key, batch)
+		if err == nil || !j.client.Configured() || ctx.Err() != nil {
+			return out, err
+		}
+		j.log("judge: %v; falling back to the chat model", err)
+	}
+	if !j.client.Configured() {
+		return nil, fmt.Errorf("AI not configured")
 	}
 
 	payload, err := json.MarshalIndent(batch, "", "  ")

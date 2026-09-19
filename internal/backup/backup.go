@@ -209,6 +209,7 @@ func preserveSecrets(in *config.Config, live *config.Config) {
 	keep(&in.API.SessionKey, live.API.SessionKey)
 	keep(&in.API.AdminHash, live.API.AdminHash)
 	keep(&in.AI.APIKey, live.AI.APIKey)
+	keep(&in.AI.TypeSafe.APIKey, live.AI.TypeSafe.APIKey)
 	keep(&in.Tailscale.AuthKey, live.Tailscale.AuthKey)
 	keep(&in.VPN.Server.PrivateKey, live.VPN.Server.PrivateKey)
 	keep(&in.Notify.Email.Password, live.Notify.Email.Password)

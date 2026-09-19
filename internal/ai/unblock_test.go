@@ -52,7 +52,7 @@ func unblockSetup(t *testing.T) (*store.Store, *config.Config) {
 	}
 	t.Cleanup(func() { st.Close() })
 	lists := map[string][2]any{
-		"Aggressive": {"ads", store.ListEntries{Exact: []string{"push.example", "cdn.example", "widely.example"}, Wildcard: []string{"tele.example"}}},
+		"Aggressive": {"ads", store.ListEntries{Exact: []string{"push.example", "cdn.example", "widely.example", "mixed.example"}, Wildcard: []string{"tele.example"}}},
 		"Bypass":     {"bypass", store.ListEntries{Exact: []string{"dns.example"}}},
 		"Two":        {"ads", store.ListEntries{Exact: []string{"widely.example"}}},
 		"Three":      {"tracking", store.ListEntries{Exact: []string{"widely.example"}}},
@@ -79,6 +79,9 @@ func blockedLog(now time.Time) []store.DNSQuery {
 		q("widely.example", "Aggressive", "a"),
 		q("dns.example", "Bypass", "a"),
 		q("mine.example", "local", "a"),
+		// Newest first, as the query log returns it: a policy refused it
+		// after an ad list did.
+		q("mixed.example", "policy:kids", "a"), q("mixed.example", "Aggressive", "a"),
 	}
 }
 
@@ -114,7 +117,7 @@ func TestUnblockerGates(t *testing.T) {
 	if sug != 1 {
 		t.Errorf("suggested %d, want cdn.example only", sug)
 	}
-	for _, d := range []string{"dns.example", "mine.example"} {
+	for _, d := range []string{"dns.example", "mine.example", "mixed.example"} {
 		if _, ok := asked.Load(d); ok {
 			t.Errorf("%s is not an ad-list block and must not be asked about", d)
 		}

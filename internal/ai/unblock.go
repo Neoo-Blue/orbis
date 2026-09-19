@@ -116,7 +116,10 @@ type blockedName struct {
 	lookups int
 	clients map[string]bool
 	kinds   map[string]bool
-	source  string
+	// sources is every reason a lookup was refused in the window, so a
+	// name also stopped by a policy, a service block or the operator is
+	// recognised even when an ad list refused it too.
+	sources map[string]bool
 }
 
 // Pass judges the last day's most-asked blocked names once each and returns
@@ -143,7 +146,7 @@ func (u *Unblocker) Pass(ctx context.Context) (suggested, allowed int, err error
 		d := strings.ToLower(strings.TrimSuffix(q.Name, "."))
 		b := byName[d]
 		if b == nil {
-			b = &blockedName{domain: d, clients: map[string]bool{}, kinds: map[string]bool{}}
+			b = &blockedName{domain: d, clients: map[string]bool{}, kinds: map[string]bool{}, sources: map[string]bool{}}
 			byName[d] = b
 		}
 		b.lookups++
@@ -153,9 +156,7 @@ func (u *Unblocker) Pass(ctx context.Context) (suggested, allowed int, err error
 			kind = "unknown"
 		}
 		b.kinds[kind] = true
-		if q.BlockSource != "" {
-			b.source = q.BlockSource
-		}
+		b.sources[q.BlockSource] = true
 	}
 	names := make([]*blockedName, 0, len(byName))
 	for _, b := range byName {
@@ -196,7 +197,7 @@ func (u *Unblocker) Pass(ctx context.Context) (suggested, allowed int, err error
 			continue
 		}
 		hits, err := u.st.BlockSources(b.domain)
-		if err != nil || !onlyAdLists(hits, b.source) {
+		if err != nil || !onlyAdLists(hits, b.sources) {
 			// Policy, bypass, malware and the operator's own blocks are
 			// never second-guessed.
 			continue
@@ -293,21 +294,24 @@ func (u *Unblocker) due(domain string, now time.Time) bool {
 }
 
 // onlyAdLists is true when every list covering the name is an ad or tracking
-// list and the refusal came from one of them.
-func onlyAdLists(hits []store.ListHit, source string) bool {
-	if len(hits) == 0 {
+// list and every refusal in the window came from one of them.
+func onlyAdLists(hits []store.ListHit, sources map[string]bool) bool {
+	if len(hits) == 0 || len(sources) == 0 {
 		return false
 	}
-	fromList := false
+	lists := map[string]bool{}
 	for _, h := range hits {
 		if h.Category != "ads" && h.Category != "tracking" {
 			return false
 		}
-		if h.Source == source {
-			fromList = true
+		lists[h.Source] = true
+	}
+	for s := range sources {
+		if !lists[s] {
+			return false
 		}
 	}
-	return fromList
+	return true
 }
 
 // expire withdraws automatic allows after a week unless the name is still

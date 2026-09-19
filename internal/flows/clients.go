@@ -3,6 +3,7 @@ package flows
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"maps"
 	"net/netip"
 	"strings"
 	"sync"
@@ -157,7 +158,7 @@ func (r *ClientRegistry) Observe(ip netip.Addr, mac, hostname string) *store.Cli
 		}
 	}
 	r.pending[c.ID] = true
-	snapshot := *c
+	snapshot := copyClient(c)
 	r.mu.Unlock()
 
 	if r.tracker != nil {
@@ -180,7 +181,7 @@ func (r *ClientRegistry) ByMAC(mac string) *store.Client {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if c, ok := r.byMAC[strings.ToLower(strings.TrimSpace(mac))]; ok {
-		cp := *c
+		cp := copyClient(c)
 		return &cp
 	}
 	return nil
@@ -235,7 +236,7 @@ func (r *ClientRegistry) ByIP(ip netip.Addr) *store.Client {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if c, ok := r.byIP[ip]; ok {
-		cp := *c
+		cp := copyClient(c)
 		return &cp
 	}
 	return nil
@@ -246,13 +247,13 @@ func (r *ClientRegistry) ByID(id string) *store.Client {
 	defer r.mu.RUnlock()
 	for _, c := range r.byMAC {
 		if c.ID == id {
-			cp := *c
+			cp := copyClient(c)
 			return &cp
 		}
 	}
 	for _, c := range r.byIP {
 		if c.ID == id {
-			cp := *c
+			cp := copyClient(c)
 			return &cp
 		}
 	}
@@ -307,14 +308,14 @@ func (r *ClientRegistry) All() []store.Client {
 			continue
 		}
 		seen[c.ID] = true
-		out = append(out, *c)
+		out = append(out, copyClient(c))
 	}
 	for _, c := range r.byMAC {
 		if seen[c.ID] {
 			continue
 		}
 		seen[c.ID] = true
-		out = append(out, *c)
+		out = append(out, copyClient(c))
 	}
 	r.mu.RUnlock()
 
@@ -370,13 +371,13 @@ func (r *ClientRegistry) persist() {
 		for _, c := range r.byIP {
 			if c.ID == id && !seen[id] {
 				seen[id] = true
-				batch = append(batch, *c)
+				batch = append(batch, copyClient(c))
 			}
 		}
 		for _, c := range r.byMAC {
 			if c.ID == id && !seen[id] {
 				seen[id] = true
-				batch = append(batch, *c)
+				batch = append(batch, copyClient(c))
 			}
 		}
 	}
@@ -390,4 +391,12 @@ func (r *ClientRegistry) persist() {
 		c.RxBytes, c.TxBytes = 0, 0
 		_ = r.st.UpsertClient(&c)
 	}
+}
+
+// copyClient is a value copy that owns its Meta, so a reader outside the
+// lock never shares a map that a DHCP lease is writing to.
+func copyClient(c *store.Client) store.Client {
+	cp := *c
+	cp.Meta = maps.Clone(c.Meta)
+	return cp
 }

@@ -3,9 +3,11 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,9 +120,13 @@ func TestTypeSafeTriage(t *testing.T) {
 				} `json:"finding"`
 			} `json:"state"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
-		if req.State.Finding.Evidence["ip"] != nil || req.State.Finding.Evidence["mac"] != nil {
-			t.Errorf("address leaked: %v", req.State.Finding.Evidence)
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &req)
+		if strings.Contains(string(body), "192.168.") || strings.Contains(string(body), "aa:bb") {
+			t.Errorf("a LAN or hardware address left the node: %s", body)
+		}
+		if !strings.Contains(string(body), "8.8.8.8") {
+			t.Errorf("the public destination was redacted too: %s", body)
 		}
 		u := unexplained[req.State.Finding.Title]
 		json.NewEncoder(w).Encode(map[string]any{"model": "jev-test", "answers": map[string]any{
@@ -144,7 +150,8 @@ func TestTypeSafeTriage(t *testing.T) {
 	var findings []Finding
 	for _, title := range []string{"Beacon A", "Beacon B", "Beacon C"} {
 		findings = append(findings, Finding{Kind: "beaconing", Severity: store.SevWarning, Title: title,
-			Evidence: map[string]any{"ip": "192.168.1.5", "mac": "aa:bb", "destination": "x.example"}})
+			Detail:   "Seen from 192.168.1.8 talking to 8.8.8.8.",
+			Evidence: map[string]any{"ip": "192.168.1.5", "mac": "aa:bb", "source": "192.168.1.7", "destination": "8.8.8.8"}})
 	}
 	if err := a.triageTypeSafe(context.Background(), findings); err != nil {
 		t.Fatal(err)

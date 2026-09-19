@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
@@ -265,15 +266,33 @@ func (a *Analyzer) triageTypeSafe(ctx context.Context, findings []Finding) error
 	return nil
 }
 
+var ipv4Text = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}\b`)
+
+// redactLAN replaces local addresses in text. Public ones stay: where a
+// device was talking to is the evidence.
+func redactLAN(s string) string {
+	return ipv4Text.ReplaceAllStringFunc(s, func(ip string) string {
+		if localDestination(ip) {
+			return "a local device"
+		}
+		return ip
+	})
+}
+
 // triageState is a finding as TypeSafe sees it, without LAN addresses or
 // hardware addresses.
 func triageState(f Finding, c store.Client) map[string]any {
 	ev := map[string]any{}
 	for k, v := range f.Evidence {
-		if k != "ip" && k != "mac" && k != "client_ip" {
-			ev[k] = v
+		if k == "ip" || k == "mac" || k == "client_ip" {
+			continue
 		}
+		if s, ok := v.(string); ok {
+			v = redactLAN(s)
+		}
+		ev[k] = v
 	}
+	f.Title, f.Detail = redactLAN(f.Title), redactLAN(f.Detail)
 	dev := map[string]any{}
 	name := c.Label
 	if name == "" {

@@ -97,3 +97,29 @@ func TestSetClassDoesNotOverwrite(t *testing.T) {
 		t.Fatalf("OS fill overwrote class or missed OS: %+v", got)
 	}
 }
+
+// A client handed out by the registry owns its Meta: reading it while a DHCP
+// lease rewrites the live record must not race (run with -race).
+func TestRegistryCopiesOwnMeta(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := NewClientRegistry(st, nil)
+	ip := netip.MustParseAddr("192.168.1.9")
+	r.NoteDHCP(ip, "aa:bb:cc:dd:ee:01", "tv", "vc", "1,3,6")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			r.NoteDHCP(ip, "aa:bb:cc:dd:ee:01", "tv", "vc", "1,3,6")
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		for _, c := range r.All() {
+			_ = c.Meta["dhcp_fingerprint"]
+		}
+	}
+	<-done
+}

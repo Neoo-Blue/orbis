@@ -299,7 +299,8 @@ func (a *App) AllowDomain(domain, note string) error {
 
 // AutoAllow lets one exact name through on the unblocker's say-so. The rule
 // is marked as the assistant's, so revoking it can never touch one of the
-// operator's, and a name the operator already has a rule for is left alone.
+// operator's, and a name the operator already has a rule for, or blocks
+// through a wildcard on a parent, is left alone.
 func (a *App) AutoAllow(domain, note string) error {
 	rules, err := a.Store.LocalRules()
 	if err != nil {
@@ -308,6 +309,9 @@ func (a *App) AutoAllow(domain, note string) error {
 	for _, r := range rules {
 		if r.Domain == domain {
 			return fmt.Errorf("%s already has a rule of its own", domain)
+		}
+		if r.Action == "block" && r.Wildcard && !r.Regex && strings.HasSuffix(domain, "."+r.Domain) {
+			return fmt.Errorf("%s is under your block on %s", domain, r.Domain)
 		}
 	}
 	if err := a.Store.SaveLocalRule(store.LocalRule{Domain: domain, Action: "allow", Origin: "ai", Note: note}); err != nil {

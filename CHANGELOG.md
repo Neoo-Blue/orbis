@@ -33,6 +33,9 @@ under "Show release notes" when it offers an update.
   detector flagged devices talking to this node, the router, the broadcast address and tailnet
   peers; on one home network that was 85 of 752 alerts in a week. Only destinations out on the
   internet are considered now.
+- **A DHCP lease arriving while a device was being read could crash the daemon.** Every copy of
+  a device the registry handed out shared its details map with the live record, which a new
+  lease writes to. Copies now own their details.
 
 ## v1.33.0
 

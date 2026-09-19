@@ -4,7 +4,7 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
-## Unreleased
+## v1.34.0
 
 ### Added
 - **Smart unblock.** Settings, Assistant, TypeSafe: "Suggest unblocks for blocks that break things".

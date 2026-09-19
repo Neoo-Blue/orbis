@@ -259,6 +259,44 @@ func (r *ClientRegistry) ByID(id string) *store.Client {
 	return nil
 }
 
+// SetClass records a device type and OS guess. A real classification already
+// on the client is left alone; an empty OS guess can still be filled in.
+func (r *ClientRegistry) SetClass(id, class, os string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var c *store.Client
+	for _, x := range r.byMAC {
+		if x.ID == id {
+			c = x
+			break
+		}
+	}
+	if c == nil {
+		for _, x := range r.byIP {
+			if x.ID == id {
+				c = x
+				break
+			}
+		}
+	}
+	if c == nil {
+		return false
+	}
+	changed := false
+	if class != "" && (c.DeviceType == "" || c.DeviceType == "unknown") && c.DeviceType != class {
+		c.DeviceType = class
+		changed = true
+	}
+	if os != "" && c.OSGuess == "" {
+		c.OSGuess = os
+		changed = true
+	}
+	if changed {
+		r.pending[c.ID] = true
+	}
+	return changed
+}
+
 // All returns every known client decorated with live state.
 func (r *ClientRegistry) All() []store.Client {
 	seen := map[string]bool{}

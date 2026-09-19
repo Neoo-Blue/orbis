@@ -881,6 +881,8 @@ type AIConfig struct {
 type TypeSafeConfig struct {
 	Enabled bool   `yaml:"enabled" json:"enabled"`
 	APIKey  string `yaml:"api_key" json:"api_key"`
+	// Identify is off until opted in: a pass sends hostnames and DNS names to TypeSafe.
+	Identify bool `yaml:"identify" json:"identify"`
 }
 
 // IntelConfig schedules the threat-intelligence assessment. The assessment

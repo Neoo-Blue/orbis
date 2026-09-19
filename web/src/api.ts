@@ -344,7 +344,7 @@ export const api = {
     runBrief: (hours?: number) => untilDone(() => post<AIBrief | { running: true }>('/ai/briefs/run', hours ? { hours } : {})),
     recommendations: (status = '') =>
       get<{ recommendations: Recommendation[]; review: { enabled: boolean; interval_hours: number } }>(`/ai/recommendations${qs({ status })}`),
-    decide: (id: string, decision: 'accept' | 'dismiss' | 'reopen') =>
+    decide: (id: string, decision: 'accept' | 'dismiss' | 'reopen' | 'undo') =>
       post<{ recommendation: Recommendation }>(`/ai/recommendations/${id}`, { decision }),
     runReview: (hours?: number) => untilDone(() => post<{ added: Recommendation[] } | { running: true }>('/ai/review/run', hours ? { hours } : {})),
     notes: () => get<{ notes: AINote[] }>('/ai/notes'),

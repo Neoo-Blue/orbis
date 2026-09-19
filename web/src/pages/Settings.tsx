@@ -1562,17 +1562,26 @@ function TypeSafeCard({ config, save, toast }: Pick<SectionProps, 'config' | 'sa
   const [key, setKey] = useState('')
   const ts = config.ai.typesafe
   return (
-    <Card title="TypeSafe domain judge">
+    <Card title="TypeSafe">
       <div style={{ display: 'grid', gap: 14 }}>
         <div className="hint" style={{ lineHeight: 1.7 }}>
-          TypeSafe answers narrow questions with calibrated probabilities instead of writing text. With it on,
-          it decides whether each host smart capture finds is ad or tracking infrastructure and whether blocking
-          it would break something, in about a third of a second per host and without a chat model. A host seen
-          only in DNS is judged on its name and goes to review on the Ad blocking page, never straight to a block.
-          Chat, briefs and reviews stay on the provider above, which also takes over if TypeSafe fails.
+          TypeSafe answers narrow questions with calibrated probabilities instead of writing text, in about a third
+          of a second each and without a chat model. With it on, it decides whether each host smart capture finds is
+          ad or tracking infrastructure (a host seen only in DNS goes to review, never straight to a block), and it
+          triages anomaly alerts: a finding with an ordinary explanation is lowered, never raised. Chat, briefs and
+          reviews stay on the provider above, which also takes over if TypeSafe fails.
         </div>
-        <SwitchRow label="Judge ad and tracker hosts with TypeSafe" checked={ts.enabled}
+        <SwitchRow label="Use TypeSafe" checked={ts.enabled}
           onChange={(v) => save({ 'ai.typesafe.enabled': v })} />
+        <SwitchRow label="Suggest unblocks for blocks that break things" checked={ts.unblock}
+          hint="Every hour, asks what the most-refused names are for. A push, sign-in, app, update or content host that only one to three ad lists block becomes an allow suggestion on the Assistant page. Malware, bypass and your own blocks are never touched."
+          onChange={(v) => save({ 'ai.typesafe.unblock': v })} />
+        <SwitchRow label="Unblock the clearest ones automatically" checked={ts.auto_unblock} disabled={!ts.unblock}
+          hint="Only push, sign-in, app and update hosts blocked by one or two lists, at most three a day. Each is announced, can be undone from the Assistant page, and is withdrawn after a week unless something still uses it."
+          onChange={(v) => save({ 'ai.typesafe.auto_unblock': v })} />
+        <SwitchRow label="Identify unknown devices" checked={ts.identify}
+          hint="Names devices the built-in rules cannot, from their hostname, vendor and the names they look up most. Those names are sent to TypeSafe; addresses are not."
+          onChange={(v) => save({ 'ai.typesafe.identify': v })} />
         <Field label="API key" hint={<>From <a href="https://console.typesafe.ai" target="_blank" rel="noreferrer">console.typesafe.ai</a>. Stored in the config file with 0600 permissions and never returned by the API.</>}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <input className="input mono" type="password" value={key} style={{ flex: 1, minWidth: 180 }}

@@ -4,6 +4,36 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## Unreleased
+
+### Added
+- **Smart unblock.** Settings, Assistant, TypeSafe: "Suggest unblocks for blocks that break things".
+  Every hour TypeSafe is asked what the names your devices keep getting refused are for. A
+  push-notification, sign-in, app, update or content host that only one to three ad lists block is
+  probably collateral damage from an aggressive list, and becomes an allow suggestion on the
+  Assistant page. Turn on "Unblock the clearest ones automatically" and push, sign-in, app and
+  update hosts blocked by one or two lists are allowed at once: at most three a day, each announced
+  as an event, undoable from the Assistant page (an undone name is never unblocked automatically
+  again), and withdrawn after a week unless something still uses it. Names on malware or DNS-bypass
+  lists, Orbis's own policy blocks and your own blocks are never touched.
+- **TypeSafe triages anomaly alerts.** With TypeSafe on and AI triage enabled, each finding is
+  judged on its own against the device and the destination's name, port, country and network
+  operator. One with an ordinary explanation (update checks, sync, push, a tunnel you run,
+  peer-to-peer) is lowered to notice or info; one with none keeps the detector's severity. It
+  never raises a finding.
+- **Unknown devices get a type.** Virtual machines and containers (Proxmox, VMware, Xen and
+  Parallels network cards) are recognised as servers. With "Identify unknown devices" on,
+  TypeSafe names the rest from their hostname, vendor and the names they look up most: a device
+  resolving Samsung TV services is a TV, one calling a robot-vacuum API is an appliance. A
+  classification is only applied when TypeSafe is at least 60% sure, and never replaces one the
+  built-in rules made.
+
+### Fixed
+- **No more "regular check-in" alerts for traffic inside your own network.** The beaconing
+  detector flagged devices talking to this node, the router, the broadcast address and tailnet
+  peers; on one home network that was 85 of 752 alerts in a week. Only destinations out on the
+  internet are considered now.
+
 ## v1.33.0
 
 ### Added

@@ -42,6 +42,8 @@ export function AssistantPage({ initialQuestion, onConsumed }: { initialQuestion
   const { data: briefs, refresh: refreshBriefs } = usePoll(() => api.ai.briefs(1), 120000)
   const [briefBusy, setBriefBusy] = useState(false)
   const { data: recData, refresh: refreshRecs } = usePoll(() => api.ai.recommendations('open'), 60000)
+  const { data: appliedData, refresh: refreshApplied } = usePoll(() => api.ai.recommendations('accepted'), 60000)
+  const autoUnblocked = (appliedData?.recommendations ?? []).filter((r) => r.decided_by === 'typesafe:auto')
   const { data: notesData, refresh: refreshNotes } = usePoll(() => api.ai.notes(), 120000)
   const [reviewBusy, setReviewBusy] = useState(false)
   const [decideBusy, setDecideBusy] = useState<string | null>(null)
@@ -60,14 +62,16 @@ export function AssistantPage({ initialQuestion, onConsumed }: { initialQuestion
       setReviewBusy(false)
     }
   }
-  const decide = async (r: Recommendation, decision: 'accept' | 'dismiss') => {
+  const decide = async (r: Recommendation, decision: 'accept' | 'dismiss' | 'undo') => {
     setDecideBusy(r.id)
     try {
       await api.ai.decide(r.id, decision)
       toast(decision === 'accept'
         ? (r.kind === 'allow' ? `${r.domain} allowed` : r.kind === 'block' ? `${r.domain} blocked` : 'Noted')
+        : decision === 'undo' ? `${r.domain} is blocked again, and will not be unblocked automatically`
         : 'Dismissed, and remembered', 'ok')
       refreshRecs()
+      refreshApplied()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not apply that', 'err')
     } finally {
@@ -327,6 +331,30 @@ export function AssistantPage({ initialQuestion, onConsumed }: { initialQuestion
                   <div className="brief-body">
                     Reviews look at what was blocked, for how many devices and by which list, plus what smart capture
                     wants blocked, and suggest changes. {recData?.review.enabled ? `Scheduled every ${recData.review.interval_hours}h.` : 'Scheduled reviews are off (Settings → Assistant).'}
+                  </div>
+                )}
+                {autoUnblocked.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div className="hint" style={{ marginBottom: 6 }}>
+                      Unblocked automatically: each is withdrawn after a week unless something still uses it.
+                    </div>
+                    {autoUnblocked.map((r) => (
+                      <div className="rec" key={r.id}>
+                        <span className="kind allow">allowed</span>
+                        <div style={{ minWidth: 0 }}>
+                          <div className="domain">{r.domain}</div>
+                          <div className="reason">{r.reason}</div>
+                          <div className="hint" style={{ fontSize: 11, marginTop: 3 }}>
+                            {r.evidence && 'devices' in r.evidence ? `was blocked for ${String(r.evidence.devices)} device(s) · ` : ''}
+                            {r.decided_at ? ago(r.decided_at) : ago(r.ts)}
+                          </div>
+                        </div>
+                        <div className="actions">
+                          <button className="btn sm" disabled={decideBusy === r.id} onClick={() => decide(r, 'undo')}
+                            title="Block it again and never unblock it automatically">Undo</button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
                 <div className="brief-foot" style={{ justifyContent: 'space-between' }}>

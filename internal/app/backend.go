@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/Neoo-Blue/orbis/internal/ai"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
 	"github.com/Neoo-Blue/orbis/internal/safety"
 	"net"
@@ -293,6 +294,54 @@ func (a *App) AllowDomain(domain, note string) error {
 	}
 	a.Store.Audit("api", "domain.allow", domain, "", note, "ok")
 	a.Bus.Publish(Event{Type: "adblock.changed", Data: map[string]any{"domain": domain, "action": "allow"}})
+	return nil
+}
+
+// AutoAllow lets one exact name through on the unblocker's say-so. The rule
+// is marked as the assistant's, so revoking it can never touch one of the
+// operator's, and a name the operator already has a rule for is left alone.
+func (a *App) AutoAllow(domain, note string) error {
+	rules, err := a.Store.LocalRules()
+	if err != nil {
+		return err
+	}
+	for _, r := range rules {
+		if r.Domain == domain {
+			return fmt.Errorf("%s already has a rule of its own", domain)
+		}
+	}
+	if err := a.Store.SaveLocalRule(store.LocalRule{Domain: domain, Action: "allow", Origin: "ai", Note: note}); err != nil {
+		return err
+	}
+	if err := a.Lists.RebuildLocal(); err != nil {
+		return err
+	}
+	a.FlushDNSCache(domain)
+	a.Store.Audit("typesafe", "domain.allow", domain, "", note, "ok")
+	a.Bus.Publish(Event{Type: "adblock.changed", Data: map[string]any{"domain": domain, "action": "allow"}})
+	return nil
+}
+
+// RevokeAutoAllow removes an allow AutoAllow made, and nothing else.
+func (a *App) RevokeAutoAllow(domain string) error {
+	rules, err := a.Store.LocalRules()
+	if err != nil {
+		return err
+	}
+	for _, r := range rules {
+		if r.Domain == domain && r.Action == "allow" && r.Origin == "ai" {
+			if err := a.Store.DeleteLocalRule(domain); err != nil {
+				return err
+			}
+			if err := a.Lists.RebuildLocal(); err != nil {
+				return err
+			}
+			a.FlushDNSCache(domain)
+			a.Store.Audit("typesafe", "domain.unallow", domain, "", "", "ok")
+			a.Bus.Publish(Event{Type: "adblock.changed", Data: map[string]any{"domain": domain, "action": "unallow"}})
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -762,8 +811,27 @@ func (a *App) DecideRecommendation(id, decision, actor string) (*store.Recommend
 		if err := a.Store.DecideRecommendation(id, "open", actor); err != nil {
 			return nil, err
 		}
+	case "undo":
+		// Takes an applied allow back out. It is remembered as dismissed, so
+		// neither the specialist nor the unblocker offers it again.
+		if rec.Kind != "allow" || rec.Status != "accepted" {
+			return nil, fmt.Errorf("only an applied allow can be undone")
+		}
+		var err error
+		if rec.DecidedBy == ai.AutoUnblockActor {
+			err = a.RevokeAutoAllow(rec.Domain)
+		} else {
+			err = a.UnblockDomain(rec.Domain)
+		}
+		if err != nil {
+			return nil, err
+		}
+		a.FlushDNSCache(rec.Domain)
+		if err := a.Store.DecideRecommendation(id, "dismissed", actor); err != nil {
+			return nil, err
+		}
 	default:
-		return nil, fmt.Errorf("decision must be accept, dismiss or reopen")
+		return nil, fmt.Errorf("decision must be accept, dismiss, reopen or undo")
 	}
 	a.Store.Audit(actor, "recommendation."+decision, rec.Kind+":"+rec.Domain, "", rec.Reason, "ok")
 	a.Bus.Publish(Event{Type: "ai.recommendation", Data: map[string]any{"id": id, "decision": decision}})

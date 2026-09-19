@@ -874,13 +874,18 @@ type AIConfig struct {
 }
 
 // TypeSafeConfig points the domain classifier (smart capture and the domain
-// tester) at TypeSafe's System One API. It returns typed judgments, not
-// text, so chat, briefs and reviews stay on Provider, and it works whether
-// or not the assistant itself is enabled. When it fails, the classifier
-// falls back to the chat model if one is configured.
+// tester) and anomaly triage at TypeSafe's System One API. It returns typed
+// judgments, not text, so chat, briefs and reviews stay on Provider, and it
+// works whether or not the assistant itself is enabled. When it fails, both
+// fall back to the chat model if one is configured.
 type TypeSafeConfig struct {
 	Enabled bool   `yaml:"enabled" json:"enabled"`
 	APIKey  string `yaml:"api_key" json:"api_key"`
+	// Unblock asks what the most-refused names are for and suggests allows
+	// for ones a block is probably breaking; AutoUnblock applies the
+	// clearest few a day by itself.
+	Unblock     bool `yaml:"unblock" json:"unblock"`
+	AutoUnblock bool `yaml:"auto_unblock" json:"auto_unblock"`
 }
 
 // IntelConfig schedules the threat-intelligence assessment. The assessment

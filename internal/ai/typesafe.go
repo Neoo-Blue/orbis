@@ -9,6 +9,7 @@ import (
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/store"
 )
 
 // TypeSafe's System One API takes a state and typed questions and returns
@@ -186,4 +187,105 @@ func typeSafeVerdict(domain string, r *typeSafeResponse) (adblock.DomainVerdict,
 		BreakageRisk: risk,
 		Reason:       fmt.Sprintf("TypeSafe: %.0f%% likely ad or tracking, breakage risk %s", math.Round(p*100), risk),
 	}, nil
+}
+
+// typeSafeTriageQuestions ask what ordinary cause, if any, explains an
+// anomaly finding. The answer's "unexplained" share decides the severity.
+var typeSafeTriageQuestions = map[string]any{
+	"explanation": map[string]any{
+		"type": "choice",
+		"instructions": "A home-network monitor flagged `finding` for the device `device`. Detectors are " +
+			"statistical, so most findings have an ordinary cause. What is the most likely explanation, given " +
+			"the device and the destination's name, port, country and network operator?",
+		"criteria": map[string]string{
+			"updates":     "Software, firmware or configuration checks",
+			"sync":        "Cloud sync, backup or file transfer the device is set up for",
+			"keepalive":   "Push notifications, messaging, or a connection keepalive",
+			"monitoring":  "Status, uptime or health polling",
+			"tunnel":      "A VPN, tunnel or remote-access service the owner runs",
+			"p2p":         "BitTorrent, Usenet or other peer-to-peer traffic",
+			"streaming":   "Media streaming or a smart-TV app",
+			"household":   "A household device joining or behaving as its kind normally does",
+			"unexplained": "No ordinary explanation fits: possible malware, stalkerware or unwanted remote access",
+		},
+	},
+}
+
+var triageLabels = map[string]string{
+	"updates": "software or configuration checks", "sync": "sync or backup", "keepalive": "push or keepalive traffic",
+	"monitoring": "status polling", "tunnel": "a tunnel or remote-access service", "p2p": "peer-to-peer traffic",
+	"streaming": "streaming", "household": "an ordinary household device", "unexplained": "unexplained",
+}
+
+var sevRank = map[string]int{store.SevInfo: 0, store.SevNotice: 1, store.SevWarning: 2, store.SevCritical: 3}
+
+// triageTypeSafe judges each finding on its own. It can only lower what a
+// detector said: a finding with no ordinary explanation keeps the detector's
+// severity. Nothing is recorded if the key is refused, so the caller can fall
+// back to the chat model with the whole batch.
+func (a *Analyzer) triageTypeSafe(ctx context.Context, findings []Finding) error {
+	key := typeSafeKey(a.cfg)
+	devices := map[string]store.Client{}
+	if cs, err := a.st.Clients(); err == nil {
+		for _, c := range cs {
+			devices[c.ID] = c
+		}
+	}
+	notes := make([]string, len(findings))
+	for i := range findings {
+		f := &findings[i]
+		resp, err := a.client.askTypeSafe(ctx, key, triageState(*f, devices[f.ClientID]), typeSafeTriageQuestions)
+		if err != nil {
+			if _, retriable := classify(err); !retriable || ctx.Err() != nil {
+				return err
+			}
+			a.log("anomaly: TypeSafe: %s: %v", f.Title, err)
+			continue
+		}
+		ans, ok := resp.Answers["explanation"]
+		if !ok || ans.Type != "choice" {
+			continue
+		}
+		u := ans.Probabilities["unexplained"]
+		switch {
+		case u >= 0.5:
+		case u >= 0.2:
+			if sevRank[f.Severity] > sevRank[store.SevNotice] {
+				f.Severity = store.SevNotice
+			}
+		default:
+			f.Severity = store.SevInfo
+		}
+		notes[i] = fmt.Sprintf("TypeSafe: most likely %s (%.0f%%), %.0f%% unexplained.",
+			triageLabels[ans.Choice], math.Round(ans.Probabilities[ans.Choice]*100), math.Round(u*100))
+	}
+	for i, f := range findings {
+		a.record(f, notes[i])
+	}
+	return nil
+}
+
+// triageState is a finding as TypeSafe sees it, without LAN addresses or
+// hardware addresses.
+func triageState(f Finding, c store.Client) map[string]any {
+	ev := map[string]any{}
+	for k, v := range f.Evidence {
+		if k != "ip" && k != "mac" && k != "client_ip" {
+			ev[k] = v
+		}
+	}
+	dev := map[string]any{}
+	name := c.Label
+	if name == "" {
+		name = c.Hostname
+	}
+	for k, v := range map[string]string{"name": name, "vendor": c.Vendor, "type": c.DeviceType, "os": c.OSGuess} {
+		if v != "" && v != "unknown" {
+			dev[k] = v
+		}
+	}
+	return map[string]any{
+		"finding": map[string]any{"kind": f.Kind, "title": f.Title, "detail": f.Detail, "evidence": ev},
+		"device":  dev,
+	}
 }

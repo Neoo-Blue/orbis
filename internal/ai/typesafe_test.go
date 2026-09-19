@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/store"
 )
 
 // TypeSafe answers the domain judgments when it is on, with no chat model
@@ -99,5 +102,74 @@ func TestTypeSafeJudge(t *testing.T) {
 	cfg.Update(func(c *config.Config) { c.AI.TypeSafe.Enabled = false })
 	if j.Available() {
 		t.Error("judge available with TypeSafe off and no chat model")
+	}
+}
+
+// TypeSafe triage only ever lowers a detector's severity, and never sends a
+// device's LAN or hardware address.
+func TestTypeSafeTriage(t *testing.T) {
+	unexplained := map[string]float64{"Beacon A": 0.05, "Beacon B": 0.3, "Beacon C": 0.8}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			State struct {
+				Finding struct {
+					Title    string         `json:"title"`
+					Evidence map[string]any `json:"evidence"`
+				} `json:"finding"`
+			} `json:"state"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.State.Finding.Evidence["ip"] != nil || req.State.Finding.Evidence["mac"] != nil {
+			t.Errorf("address leaked: %v", req.State.Finding.Evidence)
+		}
+		u := unexplained[req.State.Finding.Title]
+		json.NewEncoder(w).Encode(map[string]any{"model": "jev-test", "answers": map[string]any{
+			"explanation": map[string]any{"type": "choice", "choice": "updates",
+				"probabilities": map[string]float64{"updates": 1 - u, "unexplained": u}},
+		}})
+	}))
+	defer srv.Close()
+	old := typeSafeURL
+	typeSafeURL = srv.URL
+	defer func() { typeSafeURL = old }()
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Default()
+	cfg.AI.TypeSafe = config.TypeSafeConfig{Enabled: true, APIKey: "k"}
+	a := NewAnalyzer(cfg, NewClient(cfg, nil, nil), st, nil)
+	var findings []Finding
+	for _, title := range []string{"Beacon A", "Beacon B", "Beacon C"} {
+		findings = append(findings, Finding{Kind: "beaconing", Severity: store.SevWarning, Title: title,
+			Evidence: map[string]any{"ip": "192.168.1.5", "mac": "aa:bb", "destination": "x.example"}})
+	}
+	if err := a.triageTypeSafe(context.Background(), findings); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := st.Events(time.Now().Add(-time.Hour), "", false, 10)
+	got := map[string]string{}
+	for _, e := range evs {
+		got[e.Title] = e.Severity
+	}
+	want := map[string]string{"Beacon A": store.SevInfo, "Beacon B": store.SevNotice, "Beacon C": store.SevWarning}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: severity %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestLocalDestination(t *testing.T) {
+	for ip, want := range map[string]bool{
+		"192.168.50.75": true, "192.168.50.255": true, "127.0.0.1": true, "100.68.107.112": true,
+		"224.0.0.251": true, "255.255.255.255": true, "fe80::1": true,
+		"8.8.8.8": false, "91.200.42.46": false, "2606:4700::1111": false, "not-an-ip": false,
+	} {
+		if got := localDestination(ip); got != want {
+			t.Errorf("localDestination(%s) = %v, want %v", ip, got, want)
+		}
 	}
 }

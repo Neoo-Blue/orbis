@@ -87,6 +87,7 @@ type App struct {
 	Analyzer  *ai.Analyzer
 	Briefer   *ai.Briefer
 	Reviewer  *ai.Reviewer
+	Unblocker *ai.Unblocker
 
 	// Issues is the problem recorder (and GitHub reporter).
 	Issues *issues.Recorder
@@ -569,6 +570,11 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	a.Smart.SetJudge(ai.NewJudge(a.AI, logf))
 	a.Intel = ai.NewIntel(cfg, a.AI, a, st, a.recordBrief, logf)
 	a.Explainer = ai.NewExplainer(a.AI, a, st, logf)
+	a.Unblocker = ai.NewUnblocker(cfg, a.AI, st,
+		func(since time.Time, blockedOnly bool, search string, limit int) ([]store.DNSQuery, error) {
+			return a.DNSLog(since, "", blockedOnly, search, limit)
+		},
+		a.Registry.All, a.AutoAllow, a.RevokeAutoAllow, a.recordBrief, logf)
 
 	// Problem recorder. Device names are scrubbed from every report, and
 	// the diagnostics bundle is the same snapshot the status page shows.
@@ -773,6 +779,8 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.Reviewer.Run(a.ctx) }()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.Intel.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Unblocker.Run(a.ctx) }()
 
 	// Installing a GeoIP database should fix the history too, not just new
 	// traffic, so reconcile stored rows once at startup.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -137,6 +138,19 @@ func (a *Analyzer) Sweep(ctx context.Context) error {
 		return nil
 	}
 
+	if cfg.UseAI && typeSafeKey(a.cfg) != "" {
+		if err := a.triageTypeSafe(ctx, findings); err == nil {
+			return nil
+		} else if !a.client.Configured() {
+			a.log("anomaly: TypeSafe triage failed (%v); recording findings unfiltered", err)
+			for _, f := range findings {
+				a.record(f, "")
+			}
+			return nil
+		} else {
+			a.log("anomaly: TypeSafe triage failed (%v); falling back to the chat model", err)
+		}
+	}
 	if cfg.UseAI && a.client.Configured() {
 		a.triage(ctx, findings)
 		return nil
@@ -208,9 +222,15 @@ func (a *Analyzer) detectBeaconing(since time.Time, cfg config.AnomalyConfig) ([
 		times    []time.Time
 		clientID string
 		bytes    int64
+		last     store.Flow
 	}
 	groups := map[string]*series{}
 	for _, f := range flows {
+		if localDestination(f.DstIP) {
+			// This node, the router, a broadcast or a tailnet peer: periodic
+			// traffic inside the network is what networks do.
+			continue
+		}
 		dest := f.Hostname
 		if dest == "" {
 			dest = f.DstIP
@@ -223,6 +243,7 @@ func (a *Analyzer) detectBeaconing(since time.Time, cfg config.AnomalyConfig) ([
 		}
 		g.times = append(g.times, f.StartedAt)
 		g.bytes += f.BytesIn + f.BytesOut
+		g.last = f
 	}
 
 	minSamples := cfg.BeaconMinSamples
@@ -261,6 +282,7 @@ func (a *Analyzer) detectBeaconing(since time.Time, cfg config.AnomalyConfig) ([
 			Evidence: map[string]any{
 				"destination": dest, "connections": len(g.times),
 				"interval_seconds": mean, "jitter": cv, "bytes": g.bytes,
+				"port": g.last.DstPort, "country": g.last.Country, "network_operator": g.last.ASOrg, "app": g.last.App,
 			},
 			dedupeKey: "beacon:" + key,
 		})
@@ -516,6 +538,20 @@ func (a *Analyzer) triage(ctx context.Context, findings []Finding) {
 			a.record(f, "")
 		}
 	}
+}
+
+// cgnat is 100.64.0.0/10, which Tailscale and carrier NAT use for peers.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// localDestination reports an address that is not out on the internet.
+func localDestination(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	return a.IsPrivate() || a.IsLoopback() || a.IsMulticast() || a.IsLinkLocalUnicast() ||
+		a.IsUnspecified() || cgnat.Contains(a) || a == netip.AddrFrom4([4]byte{255, 255, 255, 255})
 }
 
 // ---- math helpers ----

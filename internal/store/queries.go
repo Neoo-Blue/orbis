@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -357,6 +358,41 @@ func (s *Store) SaveLocalRule(r LocalRule) error {
 func (s *Store) DeleteLocalRule(domain string) error {
 	_, err := s.db.Exec("DELETE FROM local_rules WHERE domain=?", domain)
 	return err
+}
+
+// ListHit is one blocklist entry that covers a name.
+type ListHit struct {
+	Source   string `json:"source"`
+	Category string `json:"category"`
+}
+
+// BlockSources lists every blocklist that blocks the name, either exactly or
+// through a wildcard entry on a parent.
+func (s *Store) BlockSources(domain string) ([]ListHit, error) {
+	labels := strings.Split(domain, ".")
+	names := make([]any, 0, len(labels))
+	for i := 0; i < len(labels)-1; i++ {
+		names = append(names, strings.Join(labels[i:], "."))
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`SELECT DISTINCT source, COALESCE(category,'') FROM block_domains
+		WHERE domain IN (?`+strings.Repeat(",?", len(names)-1)+`) AND (domain = ? OR wildcard = 1)`,
+		append(names, domain)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ListHit
+	for rows.Next() {
+		var h ListHit
+		if err := rows.Scan(&h.Source, &h.Category); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // ---------- ad candidates ----------

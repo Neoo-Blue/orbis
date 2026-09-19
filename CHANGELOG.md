@@ -4,7 +4,7 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
-## Unreleased
+## v1.33.0
 
 ### Added
 - **TypeSafe can judge ad and tracker hosts.** Settings, Assistant, TypeSafe domain judge: turn it

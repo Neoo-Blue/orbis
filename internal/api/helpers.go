@@ -281,6 +281,8 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 		return setBool(&c.AI.TypeSafe.Unblock, raw)
 	case "ai.typesafe.auto_unblock":
 		return setBool(&c.AI.TypeSafe.AutoUnblock, raw)
+	case "ai.typesafe.identify":
+		return setBool(&c.AI.TypeSafe.Identify, raw)
 	case "ai.typesafe.api_key":
 		if v, ok := raw.(string); ok && v != config.MaskedSecret {
 			c.AI.TypeSafe.APIKey = strings.TrimSpace(v)

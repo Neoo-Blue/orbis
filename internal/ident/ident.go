@@ -118,6 +118,9 @@ func DeviceClass(vendor, hostname, userAgent, dhcpFingerprint string) (class str
 		return "camera", ""
 	case strings.Contains(v, "espressif") || strings.Contains(v, "tuya") || strings.Contains(v, "shelly") || strings.Contains(v, "sonoff"):
 		return "iot", ""
+	case strings.Contains(v, "proxmox") || strings.Contains(v, "vmware") || strings.Contains(v, "xensource") || strings.Contains(v, "parallels"):
+		// Those OUIs belong to the hypervisor's virtual NIC, not a laptop or phone.
+		return "server", ""
 	case strings.Contains(v, "raspberry"):
 		return "server", "Linux"
 	case strings.Contains(v, "intel") || strings.Contains(v, "dell") || strings.Contains(v, "lenovo") || strings.Contains(v, "hewlett"):

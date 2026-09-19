@@ -886,6 +886,8 @@ type TypeSafeConfig struct {
 	// clearest few a day by itself.
 	Unblock     bool `yaml:"unblock" json:"unblock"`
 	AutoUnblock bool `yaml:"auto_unblock" json:"auto_unblock"`
+	// Identify is off until opted in: a pass sends hostnames and DNS names to TypeSafe.
+	Identify bool `yaml:"identify" json:"identify"`
 }
 
 // IntelConfig schedules the threat-intelligence assessment. The assessment

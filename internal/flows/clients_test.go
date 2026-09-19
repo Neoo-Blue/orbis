@@ -56,3 +56,44 @@ func TestRegistryReportsAddressMoves(t *testing.T) {
 		t.Fatalf("MAC-less observations are not moves, got %v", moves)
 	}
 }
+
+// SetClass fills in an unknown device and then refuses to overwrite a real type.
+func TestSetClassDoesNotOverwrite(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := NewClientRegistry(st, nil)
+
+	c := r.Observe(netip.MustParseAddr("192.168.50.80"), "11:22:33:44:55:66", "")
+	if c.DeviceType != "" && c.DeviceType != "unknown" {
+		t.Fatalf("fixture DeviceType = %q, want unknown", c.DeviceType)
+	}
+	if !r.SetClass(c.ID, "tv", "Tizen") {
+		t.Fatal("first SetClass should apply")
+	}
+	got := r.ByID(c.ID)
+	if got.DeviceType != "tv" || got.OSGuess != "Tizen" {
+		t.Fatalf("after apply: %+v", got)
+	}
+	if r.SetClass(c.ID, "phone", "Android") {
+		t.Fatal("SetClass must not overwrite a real class or OS")
+	}
+	got = r.ByID(c.ID)
+	if got.DeviceType != "tv" || got.OSGuess != "Tizen" {
+		t.Fatalf("overwrote a real class: %+v", got)
+	}
+
+	c2 := r.Observe(netip.MustParseAddr("192.168.50.81"), "11:22:33:44:55:67", "")
+	if !r.SetClass(c2.ID, "iot", "") {
+		t.Fatal("class-only SetClass should apply")
+	}
+	if !r.SetClass(c2.ID, "phone", "embedded") {
+		t.Fatal("an empty OS guess should still be fillable")
+	}
+	got = r.ByID(c2.ID)
+	if got.DeviceType != "iot" || got.OSGuess != "embedded" {
+		t.Fatalf("OS fill overwrote class or missed OS: %+v", got)
+	}
+}

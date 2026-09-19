@@ -80,14 +80,15 @@ type App struct {
 	CA        *mitm.CA
 	Lounge    *lounge.Manager
 
-	AI        *ai.Client
-	Intel     *ai.Intel
-	Explainer *ai.Explainer
-	Assistant *ai.Assistant
-	Analyzer  *ai.Analyzer
-	Briefer   *ai.Briefer
-	Reviewer  *ai.Reviewer
-	Unblocker *ai.Unblocker
+	AI         *ai.Client
+	Intel      *ai.Intel
+	Explainer  *ai.Explainer
+	Assistant  *ai.Assistant
+	Analyzer   *ai.Analyzer
+	Briefer    *ai.Briefer
+	Reviewer   *ai.Reviewer
+	Unblocker  *ai.Unblocker
+	Identifier *ai.Identifier
 
 	// Issues is the problem recorder (and GitHub reporter).
 	Issues *issues.Recorder
@@ -575,6 +576,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 			return a.DNSLog(since, "", blockedOnly, search, limit)
 		},
 		a.Registry.All, a.AutoAllow, a.RevokeAutoAllow, a.recordBrief, logf)
+	a.Identifier = ai.NewIdentifier(cfg, a.AI, a.Registry.All, func(since time.Time, id string) ([]store.DNSQuery, error) {
+		return a.DNSLog(since, id, false, "", 2000)
+	}, a.Registry.SetClass, logf)
 
 	// Problem recorder. Device names are scrubbed from every report, and
 	// the diagnostics bundle is the same snapshot the status page shows.
@@ -770,13 +774,14 @@ func (a *App) Start() {
 		}
 		go func() { defer a.wg.Done(); a.Analyzer.Run(a.ctx) }()
 	}
-	// The model router and the brief writer always run: both read the
-	// configuration on every tick, so turning the assistant on from the UI
-	// takes effect without a restart.
-	a.wg.Add(3)
+	// The model router, brief writer, reviewer and device identifier always
+	// run: they read the configuration on every tick, so turning them on from
+	// the UI takes effect without a restart.
+	a.wg.Add(4)
 	go func() { defer a.wg.Done(); a.AI.Router().Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.Briefer.Run(a.ctx) }()
 	go func() { defer a.wg.Done(); a.Reviewer.Run(a.ctx) }()
+	go func() { defer a.wg.Done(); a.Identifier.Run(a.ctx) }()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.Intel.Run(a.ctx) }()
 	a.wg.Add(1)

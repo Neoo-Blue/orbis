@@ -57,7 +57,7 @@ var typeSafeUnblockQuestions = map[string]any{
 }
 
 var unblockLabels = map[string]string{
-	"push": "push-notification", "signin": "sign-in", "app_api": "app API", "content": "content", "updates": "update",
+	"push": "a push-notification", "signin": "a sign-in", "app_api": "an app API", "content": "a content", "updates": "an update",
 }
 
 // Unblocker looks at the names devices keep getting refused and asks
@@ -238,7 +238,7 @@ func (u *Unblocker) Pass(ctx context.Context) (suggested, allowed int, err error
 			sources = append(sources, h.Source)
 		}
 		sort.Strings(sources)
-		reason := fmt.Sprintf("TypeSafe: a %s host (%.0f%%), blocked only by %s", unblockLabels[ans.Choice],
+		reason := fmt.Sprintf("TypeSafe: %s host (%.0f%%), blocked only by %s", unblockLabels[ans.Choice],
 			math.Round(need*100), strings.Join(sources, ", "))
 		rec, err := u.st.UpsertRecommendation(store.Recommendation{
 			ID: uuid.NewString(), TS: now, Kind: "allow", Domain: b.domain, Reason: reason, Confidence: need,

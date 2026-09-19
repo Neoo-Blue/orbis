@@ -230,18 +230,20 @@ func topQueriedNames(qs []store.DNSQuery, n int) []string {
 var identifyQuestions = map[string]any{
 	"class": map[string]any{
 		"type": "choice",
+		// One worked example in the instructions anchors the model on it (a
+		// Samsung phone came back a TV); platform hints sit in every option.
 		"instructions": "What kind of device is this on a home network? The names it looks up " +
-			"(`most_queried_names`) are the strongest evidence of what it is: a device resolving " +
-			"samsungqbe.com and cspserver.net is a Samsung TV; one resolving midea.com and a " +
-			"robot-vacuum API is a robot vacuum. Use hostname, vendor, DHCP vendor class and " +
-			"whether the MAC is randomized as supporting evidence. Pick unknown when the evidence " +
-			"is too thin or mixed.",
+			"(`most_queried_names`) are the strongest evidence of what it is, taken together: the " +
+			"operating system's own services (push, connectivity checks, updates) say what platform " +
+			"it runs, and app or vendor services say what it is for. Use hostname, vendor, DHCP " +
+			"vendor class and whether the MAC is randomized as supporting evidence. Pick unknown " +
+			"when the evidence is too thin or mixed.",
 		"criteria": map[string]string{
-			"phone":   "Mobile phone",
-			"tablet":  "Tablet",
+			"phone":   "Mobile phone: Android phones look up mtalk.google.com (push) and connectivitycheck.gstatic.com; iPhones look up Apple push and iCloud services",
+			"tablet":  "Tablet: the same platform services as a phone",
 			"laptop":  "Laptop or notebook computer",
 			"desktop": "Desktop PC or workstation",
-			"tv":      "Smart TV or streaming box: Samsung/LG/Roku/Fire TV/Chromecast/Apple TV",
+			"tv":      "Smart TV or streaming box: Samsung Tizen TVs look up cspserver.net and samsungcloudsolution; LG webOS, Roku, Fire TV, Chromecast, Apple TV",
 			"console": "Game console: PlayStation, Xbox, Nintendo Switch",
 			"speaker": "Smart speaker or audio device: Sonos, HomePod, Echo",
 			"camera":  "Security camera, doorbell or NVR",
@@ -255,15 +257,14 @@ var identifyQuestions = map[string]any{
 	"os": map[string]any{
 		"type": "choice",
 		"instructions": "Which operating system does this device run? Infer from vendor, hostname, " +
-			"DHCP vendor class and the names it looks up. A device resolving samsungqbe.com is " +
-			"typically Tizen; an LG TV is typically webOS. Pick unknown when the evidence is too thin.",
+			"DHCP vendor class and the names it looks up. Pick unknown when the evidence is too thin.",
 		"criteria": map[string]string{
-			"Android":    "Android phone, tablet or TV",
+			"Android":    "Android phone, tablet or TV: looks up mtalk.google.com and connectivitycheck.gstatic.com",
 			"iOS/iPadOS": "iPhone or iPad",
 			"macOS":      "Mac",
 			"Windows":    "Windows PC",
 			"Linux":      "Linux computer, NAS or server",
-			"Tizen":      "Samsung TV (Tizen)",
+			"Tizen":      "Samsung TV (Tizen): looks up cspserver.net",
 			"webOS":      "LG TV (webOS)",
 			"Roku OS":    "Roku player or Roku TV",
 			"Fire OS":    "Amazon Fire TV or Fire tablet",

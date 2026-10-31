@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { LiveEvent } from '../hooks'
+import { useMemo, useRef, useState } from 'react'
 import { api } from '../api'
+import { useLiveBatch } from '../live'
 import { usePoll } from '../hooks'
 import { Banner, Card, Drawer, Empty, Icons, Loading, Segmented, Stat, useToast } from '../ui'
 import { NetworkMap } from './NetworkMap'
@@ -19,7 +19,7 @@ const ROLE_ICON: Record<string, keyof typeof Icons> = {
   mobile: 'devices', printer: 'devices', iot: 'spark', unknown: 'search',
 }
 
-export function TopologyPage({ events }: { events: LiveEvent[] }) {
+export function TopologyPage() {
   const { data, refresh } = usePoll<TopoGraph>(() => api.topology.get(), 20000)
   const [scanning, setScanning] = useState(false)
   const [selected, setSelected] = useState<TopoNode | null>(null)
@@ -30,25 +30,24 @@ export function TopologyPage({ events }: { events: LiveEvent[] }) {
 
   // Light nodes up as flows involving them arrive on the socket, so the map
   // reflects live traffic between the 20s polls rather than sitting static.
-  useEffect(() => {
-    const last = events[events.length - 1]
-    if (!last || (last.type !== 'flow.new' && last.type !== 'flow.update')) return
-    const f = last.data as { src_ip?: string; dst_ip?: string } | undefined
-    if (!f) return
+  useLiveBatch(['flow.new', 'flow.update'], (batch) => {
     setActiveIPs((prev) => {
       const next = new Set(prev)
-      for (const ip of [f.src_ip, f.dst_ip]) {
-        if (!ip) continue
-        next.add(ip)
-        const existing = timers.current.get(ip)
-        if (existing) window.clearTimeout(existing)
-        timers.current.set(ip, window.setTimeout(() => {
-          setActiveIPs((p2) => { const n = new Set(p2); n.delete(ip); return n })
-        }, 2200))
+      for (const ev of batch) {
+        const f = ev.data as { src_ip?: string; dst_ip?: string } | undefined
+        for (const ip of [f?.src_ip, f?.dst_ip]) {
+          if (!ip) continue
+          next.add(ip)
+          const existing = timers.current.get(ip)
+          if (existing) window.clearTimeout(existing)
+          timers.current.set(ip, window.setTimeout(() => {
+            setActiveIPs((p2) => { const n = new Set(p2); n.delete(ip); return n })
+          }, 2200))
+        }
       }
       return next
     })
-  }, [events])
+  })
 
   const grouped = useMemo(() => {
     const out = new Map<string, TopoNode[]>()

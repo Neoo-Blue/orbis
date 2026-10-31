@@ -2,6 +2,7 @@ package dnsproxy
 
 import (
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -362,5 +363,40 @@ func TestUDPAnswerFitsWhatTheClientCanTake(t *testing.T) {
 	s.handle(w, r)
 	if w.msg.Len() > dns.MinMsgSize || !w.msg.Truncated {
 		t.Fatalf("len %d truncated %v", w.msg.Len(), w.msg.Truncated)
+	}
+}
+
+func TestBlockPageIsOfferedOnlyWhereItCanWork(t *testing.T) {
+	up := startUpstream(t, 0, goodAnswer)
+	s, matcher := newTestServer(t, true, up)
+	b := adblock.NewBuilder()
+	b.AddBlock("ads.example.com", "test", "ads", false)
+	matcher.Commit(b)
+	s.cfg.DNS.SinkholeIPv4, s.cfg.DNS.SinkholeIPv6 = "0.0.0.0", "::"
+	s.cfg.DNS.BlockPage = true
+
+	// No hook, or a device that refused the certificate: the plain sinkhole.
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
+		t.Fatalf("no hook answered %v", a.A)
+	}
+	offer := false
+	s.hooks.BlockPageAddr = func(netip.Addr) (netip.Addr, bool) {
+		return netip.MustParseAddr("192.168.50.75"), offer
+	}
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
+		t.Fatalf("declined client answered %v", a.A)
+	}
+
+	offer = true
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4(192, 168, 50, 75)) {
+		t.Fatalf("answered %v", a.A)
+	}
+	if got := ask(t, s, "ads.example.com", dns.TypeAAAA); len(got.Answer) != 0 {
+		t.Fatalf("a browser would try this AAAA first: %v", got.Answer)
+	}
+
+	s.cfg.DNS.BlockPage = false
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
+		t.Fatalf("switched off, answered %v", a.A)
 	}
 }

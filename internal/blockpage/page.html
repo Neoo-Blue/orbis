@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0a1729">
+<title>{{.Host}} stopped by Orbis</title>
+<style nonce="{{.Nonce}}">
+@font-face { font-family: Geist; src: url(/__orbis/geist.woff2) format('woff2'); font-weight: 100 900; font-display: swap; }
+:root {
+  --ground: #0a1729; --plate: #0f2138; --line: rgba(214, 190, 138, .2); --line-strong: rgba(214, 190, 138, .46);
+  --ivory: #efe9da; --dim: #aab6c6; --faint: #8796ab; --brass: #d9bc7c; --brass-ink: #1b1608;
+  --vermilion: #f2643c; --jade: #62d8b2;
+  --sans: Geist, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.16, 1, .3, 1);
+}
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+html, body { min-height: 100%; }
+body {
+  background: var(--ground); color: var(--ivory); font: 400 16px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+::selection { background: rgba(217, 188, 124, .32); color: var(--ivory); }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+main {
+  position: relative; min-height: 100dvh; width: min(100%, 660px);
+  padding: clamp(24px, 6vh, 64px) clamp(20px, 5vw, 72px) 32px;
+  display: flex; flex-direction: column; gap: 28px; justify-content: center;
+}
+.mark { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: .02em; color: var(--brass); }
+.mark svg { width: 24px; height: 24px; display: block; }
+h1 {
+  font-size: clamp(30px, 5.4vw, 54px); line-height: 1.08; font-weight: 560; letter-spacing: -.03em;
+  overflow-wrap: anywhere; text-wrap: balance;
+}
+h1.long { font-size: clamp(26px, 4.2vw, 42px); }
+.lede { font-size: clamp(17px, 2vw, 19px); line-height: 1.5; color: var(--ivory); max-width: 56ch; text-wrap: pretty; }
+.lede b { font-weight: 560; color: var(--vermilion); }
+
+/* The decision, drawn as one line through ordered stations. */
+.route { list-style: none; padding: 0; display: grid; gap: 0; }
+.stop {
+  position: relative; display: grid; grid-template-columns: 22px 1fr; column-gap: 14px;
+  padding: 0 0 18px; opacity: 0; transform: translateX(-6px);
+  animation: arrive .46s var(--ease) forwards; animation-delay: calc(var(--i) * 130ms + 180ms);
+}
+.stop::before {
+  content: ''; position: absolute; left: 10px; top: 16px; bottom: -4px; width: 2px;
+  background: var(--line-strong); transform-origin: top; transform: scaleY(0);
+  animation: draw .3s linear forwards; animation-delay: calc(var(--i) * 130ms + 300ms);
+}
+.stop:nth-child(1) { --i: 0; } .stop:nth-child(2) { --i: 1; } .stop:nth-child(3) { --i: 2; } .stop:nth-child(4) { --i: 3; }
+.stop:nth-child(5) { --i: 4; } .stop:nth-child(6) { --i: 5; } .stop:nth-child(7) { --i: 6; } .stop:nth-child(n+8) { --i: 7; }
+.stop:last-child { padding-bottom: 0; }
+.stop:last-child::before { display: none; }
+.dot { width: 12px; height: 12px; margin: 5px 0 0 5px; border-radius: 50%; background: var(--ground); border: 2px solid var(--brass); position: relative; }
+.stop b { display: block; font-size: 15px; font-weight: 520; }
+.stop span { display: block; font-size: 14px; line-height: 1.45; color: var(--dim); overflow-wrap: anywhere; }
+.stop.decided .dot { background: var(--vermilion); border-color: var(--vermilion); }
+.stop.decided .dot::after {
+  content: ''; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--vermilion);
+  animation: flare 2.6s var(--ease) infinite; animation-delay: calc(var(--i) * 130ms + 420ms);
+}
+.stop.decided b { color: var(--vermilion); }
+.stop.decided::before { background: repeating-linear-gradient(to bottom, var(--faint) 0 3px, transparent 3px 8px); }
+.stop.unreached .dot { border-color: var(--faint); }
+.stop.unreached b { color: var(--faint); }
+.stop.unreached span { color: var(--faint); }
+.stop.clear .dot { border-color: var(--jade); }
+
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 20px; font-size: 14px; padding-top: 16px; border-top: 1px solid var(--line); }
+dt { color: var(--faint); }
+dd { color: var(--ivory); overflow-wrap: anywhere; }
+dd.code { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px;
+  border-radius: 7px; border: 1px solid var(--line-strong); background: transparent; color: var(--ivory);
+  font: 520 15px var(--sans); text-decoration: none; cursor: pointer;
+  transition: background .18s var(--ease), border-color .18s var(--ease), transform .18s var(--ease);
+}
+.btn:hover { background: rgba(217, 188, 124, .1); border-color: var(--brass); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--brass); border-color: var(--brass); color: var(--brass-ink); }
+.btn.primary:hover { background: #e6cc92; }
+.btn:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
+
+@keyframes arrive { to { opacity: 1; transform: none; } }
+@keyframes draw { to { transform: scaleY(1); } }
+@keyframes flare { 0% { transform: scale(1); opacity: .9; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
+@media (min-width: 760px) {
+  main { padding-right: 0; }
+  dl { max-width: 540px; }
+}
+@media (max-width: 759px) {
+  canvas { opacity: .42; }
+  .actions .btn { flex: 1 1 auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stop, .stop::before { animation: none; opacity: 1; transform: none; }
+  .stop.decided .dot::after { animation: none; opacity: 0; }
+}
+</style>
+</head>
+<body>
+<canvas id="sky" aria-hidden="true"></canvas>
+<main>
+  <div class="mark">
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="16" cy="16" r="11.5" stroke="currentColor" stroke-width="1.6"/><ellipse cx="16" cy="16" rx="11.5" ry="4.4" stroke="currentColor" stroke-width="1.1" opacity=".6"/><circle cx="16" cy="16" r="2.6" fill="currentColor"/></svg>
+    Orbis
+  </div>
+  <div>
+    <h1{{if .Long}} class="long"{{end}}>{{range .HostParts}}{{.}}<wbr>{{end}}</h1>
+  </div>
+  {{if .Blocked}}
+  <p class="lede"><b>Orbis stopped this site.</b> {{.Why}}</p>
+  <ol class="route" aria-label="How Orbis decided">
+    {{range $s := .Stations}}<li class="stop {{$s.Class}}"><i class="dot"></i><div><b>{{$s.Title}}</b>{{if $s.Detail}}<span>{{$s.Detail}}</span>{{end}}</div></li>
+    {{end}}
+  </ol>
+  <dl>
+    {{if .Rule}}<dt>Rule</dt><dd class="code">{{.Rule}}</dd>{{end}}
+    {{if .Source}}<dt>Decided by</dt><dd>{{.Source}}</dd>{{end}}
+    {{if .Category}}<dt>Category</dt><dd>{{.Category}}</dd>{{end}}
+    {{if .Device}}<dt>This device</dt><dd>{{.Device}}</dd>{{end}}
+    <dt>When</dt><dd>{{.When}}</dd>
+  </dl>
+  <div class="actions">
+    {{if .AdminURL}}<a class="btn primary" href="{{.AdminURL}}">Review in Orbis</a>{{end}}
+    <button class="btn" id="back" type="button">Go back</button>
+    <button class="btn" id="copy" type="button" data-copy="{{.Copy}}">Copy details</button>
+  </div>
+  <footer>If this should be open, whoever runs this network can allow it in one step.</footer>
+  {{else}}
+  <p class="lede">Orbis no longer blocks this site. Your device is still remembering the old answer for a few seconds.</p>
+  <div class="actions"><button class="btn primary" id="reload" type="button">Try again</button></div>
+  {{end}}
+</main>
+<script nonce="{{.Nonce}}">
+(function () {
+  var back = document.getElementById('back'), copy = document.getElementById('copy'), reload = document.getElementById('reload');
+  if (back) back.onclick = function () { history.length > 1 ? history.back() : (location.href = 'about:blank') };
+  if (reload) reload.onclick = function () { location.reload() };
+  if (copy) copy.onclick = function () {
+    var done = function () { copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = 'Copy details' }, 1800) };
+    if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copy).then(done);
+  };
+
+  // The plate: engraved rings around the network, and requests arriving from
+  // outside. Blocked ones stop dead at the shield ring.
+  var c = document.getElementById('sky'), x = c.getContext('2d');
+  if (!x) return;
+  var still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var w, h, cx, cy, unit, dpr = Math.min(devicePixelRatio || 1, 2), stars = [], shots = [], last = 0;
+  function size() {
+    w = innerWidth; h = innerHeight; c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var wide = w >= 760;
+    cx = wide ? Math.max(w * .76, 640 + h * .44) : w * .96; cy = wide ? h * .5 : 28; unit = Math.min(wide ? h * .44 : w * .72, 440);
+    stars = [];
+    for (var i = 0; i < Math.round(w * h / 9000); i++) stars.push([Math.random() * w, Math.random() * h, Math.random() * 1.1 + .25, Math.random()]);
+    if (still) frame(0);
+  }
+  function ring(r, a, dash) {
+    x.beginPath(); x.setLineDash(dash || []); x.strokeStyle = 'rgba(214,190,138,' + a + ')'; x.arc(cx, cy, r, 0, 6.2832); x.stroke(); x.setLineDash([]);
+  }
+  function ticks(r, n, rot, len, a) {
+    x.beginPath(); x.strokeStyle = 'rgba(214,190,138,' + a + ')';
+    for (var i = 0; i < n; i++) {
+      var t = rot + i * 6.2832 / n, cs = Math.cos(t), sn = Math.sin(t), l = i % 5 ? len : len * 2.4;
+      x.moveTo(cx + cs * r, cy + sn * r); x.lineTo(cx + cs * (r + l), cy + sn * (r + l));
+    }
+    x.stroke();
+  }
+  function spawn(t) {
+    var a = Math.random() * 6.2832, side = Math.random() < .5 ? 1 : -1;
+    shots.push({ a: a, born: t, life: 1500, side: side });
+    if (shots.length > 4) shots.shift();
+  }
+  var shield = 1;
+  function frame(t) {
+    x.clearRect(0, 0, w, h);
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i]; x.fillStyle = 'rgba(239,233,218,' + (.18 + .3 * Math.abs(Math.sin(t / 2600 + s[3] * 6))) + ')';
+      x.fillRect(s[0], s[1], s[2], s[2]);
+    }
+    x.lineWidth = 1;
+    ring(unit * .16, .5); ring(unit * .38, .24, [2, 6]); ring(unit * .62, .22);
+    ticks(unit * .62, 120, t / 90000, 4, .22);
+    ring(unit * shield, .62); ticks(unit, 72, -t / 60000, 6, .4);
+    // The centre: Orbis.
+    x.beginPath(); x.fillStyle = '#d9bc7c'; x.arc(cx, cy, 3.4, 0, 6.2832); x.fill();
+    for (var b = 0; b < 7; b++) {
+      var ang = b * 2.4 + t / (34000 + b * 9000), rad = unit * (b % 2 ? .38 : .62), bx = cx + Math.cos(ang) * rad, by = cy + Math.sin(ang) * rad;
+      x.beginPath(); x.fillStyle = b === 2 ? '#62d8b2' : 'rgba(239,233,218,.82)'; x.arc(bx, by, b === 2 ? 2.6 : 1.9, 0, 6.2832); x.fill();
+    }
+    for (var k = 0; k < shots.length; k++) {
+      var o = shots[k], p = Math.min(1, (t - o.born) / o.life), e = 1 - Math.pow(1 - p, 3);
+      var from = unit * 1.9, r = from + (unit - from) * e, a = o.a + (1 - e) * .5 * o.side;
+      var hx = cx + Math.cos(a) * r, hy = cy + Math.sin(a) * r;
+      if (p < 1) {
+        var ta = o.a + (1 - Math.max(0, e - .16)) * .5 * o.side, tr = from + (unit - from) * Math.max(0, e - .16);
+        x.beginPath(); x.moveTo(cx + Math.cos(ta) * tr, cy + Math.sin(ta) * tr); x.lineTo(hx, hy);
+        x.strokeStyle = 'rgba(242,100,60,.7)'; x.lineWidth = 1.4; x.stroke(); x.lineWidth = 1;
+      } else {
+        var f = (t - o.born - o.life) / 900;
+        if (f < 1) {
+          x.beginPath(); x.strokeStyle = 'rgba(242,100,60,' + (1 - f) + ')'; x.lineWidth = 2;
+          x.arc(cx, cy, unit, o.a - .03 - f * .16, o.a + .03 + f * .16); x.stroke(); x.lineWidth = 1;
+          x.beginPath(); x.fillStyle = 'rgba(242,100,60,' + (1 - f) + ')';
+          x.arc(cx + Math.cos(o.a) * unit, cy + Math.sin(o.a) * unit, 2.5 + f * 6, 0, 6.2832); x.fill();
+        }
+      }
+    }
+  }
+  var next = 500, raf = 0;
+  function loop(t) {
+    raf = 0;
+    if (t - last >= 30) { last = t; if (t > next) { spawn(t); next = t + 1400 + Math.random() * 2600 } frame(t); }
+    if (!document.hidden) raf = requestAnimationFrame(loop);
+  }
+  addEventListener('resize', size);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && !still && !raf) raf = requestAnimationFrame(loop) });
+  size();
+  if (still) { shots.push({ a: 2.4, born: -1500, life: 1500, side: 1 }); frame(100); } else raf = requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

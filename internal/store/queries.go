@@ -522,6 +522,7 @@ func (s *Store) ScoreCandidate(domain string, heuristic float64, ai *float64, ai
 }
 
 func (s *Store) SetCandidateStatus(domain, status, by string) error {
+	defer s.aggregates.forget("summary|")
 	_, err := s.db.Exec(`UPDATE ad_candidates SET status=?, decided_by=?, decided_at=? WHERE domain=?`,
 		status, by, time.Now().Unix(), domain)
 	return err
@@ -912,6 +913,15 @@ func (s *Store) summary(since time.Time) (map[string]any, error) {
 
 // TopBlocked lists the domains being blocked most, for the ad-block page.
 func (s *Store) TopBlocked(since time.Time, limit int) ([]map[string]any, error) {
+	key := fmt.Sprintf("topblocked|%s|%d", window(since), limit)
+	v, err := s.aggregates.get(key, 45*time.Second, func() (any, error) { return s.topBlocked(since, limit) })
+	if err != nil {
+		return nil, err
+	}
+	return v.([]map[string]any), nil
+}
+
+func (s *Store) topBlocked(since time.Time, limit int) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT name, COALESCE(block_source,''), COUNT(*) n
 		FROM dns_queries WHERE blocked=1 AND ts >= ? GROUP BY name ORDER BY n DESC LIMIT ?`,
 		since.Unix(), clampInt(limit, 1, 500))

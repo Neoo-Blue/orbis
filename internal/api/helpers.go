@@ -144,6 +144,8 @@ func setConfigKey(c *config.Config, key string, raw any) bool {
 		return setStr(&c.DNS.LocalDomain, raw)
 	case "dns.cache_size":
 		return setInt(&c.DNS.CacheSize, raw)
+	case "dns.block_page":
+		return setBool(&c.DNS.BlockPage, raw)
 	case "dns.max_ttl":
 		return setInt(&c.DNS.MaxTTL, raw)
 

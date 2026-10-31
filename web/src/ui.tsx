@@ -291,7 +291,7 @@ export function Drawer({ title, onClose, children, actions }: {
 
 export function Bar({ value, max, tone }: { value: number; max: number; tone?: string }) {
   const w = max > 0 ? Math.min(100, (value / max) * 100) : 0
-  return <div className="bar"><i className={tone} style={{ width: `${w}%` }} /></div>
+  return <div className="bar"><i className={tone} style={{ transform: `scaleX(${w / 100})` }} /></div>
 }
 
 export function Dot({ state, label }: { state: 'on' | 'off' | 'warn' | 'err'; label?: string }) {

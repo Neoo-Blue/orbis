@@ -904,6 +904,7 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 }
 
 func (s *Store) AckEvent(id string) error {
+	defer s.aggregates.forget("summary|")
 	_, err := s.db.Exec("UPDATE events SET acknowledged=1 WHERE id=?", id)
 	return err
 }

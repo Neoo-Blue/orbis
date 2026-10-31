@@ -101,7 +101,7 @@ function qs(params: Record<string, string | number | boolean | undefined | null>
 
 export const api = {
   auth: {
-    status: () => get<{ setup_required: boolean; authenticated: boolean }>('/auth/status'),
+    status: () => get<{ setup_required: boolean; authenticated: boolean; onboarded: boolean; ui_mode: string }>('/auth/status'),
     login: (password: string) => post<{ token: string }>('/auth/login', { password }),
     logout: () => post<{ ok: boolean }>('/auth/logout'),
     setPassword: (current: string, password: string) =>

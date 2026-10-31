@@ -623,6 +623,9 @@ function DNSSection({ config, status, save, toast }: SectionProps) {
             <TextSetting label="IPv6 sinkhole" value={config.dns.sinkhole_ipv6} mono placeholder="::"
               onSave={(v) => save({ 'dns.sinkhole_ipv6': v })} />
           </div>
+          <SwitchRow label="Show a page when a site is blocked" checked={config.dns.block_page}
+            hint="A browser opening a blocked site sees what stopped it and why. Works for every plain http site, and for https on devices that trust the Orbis certificate. Other devices are detected and keep failing quietly as before."
+            onChange={(v) => save({ 'dns.block_page': v })} />
           <SwitchRow label="Explain blocks to clients" checked={config.dns.block_ede}
             hint="Attaches an RFC 8914 Extended DNS Error naming the list that blocked the query. Capable clients show it instead of a generic failure."
             onChange={(v) => save({ 'dns.block_ede': v })} />

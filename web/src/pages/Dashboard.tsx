@@ -1,60 +1,80 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import { usePoll, type LiveEvent } from '../hooks'
-import { Banner, Card, Dot, Empty, Icons, Loading, Stat } from '../ui'
+import { usePoll } from '../hooks'
+import { useLiveBatch } from '../live'
+import { OrbitChart, type OrbitDevice, type OrbitFlow, type OrbitHandle } from '../orbit/OrbitChart'
+import { Banner, Card, Dot, Empty, Icons, Loading, Sparkline, Stat } from '../ui'
 import { ago, bits, bytes, clientName, compact, duration, num, pct, countryFlag } from '../format'
-import type { Client, EventItem, Flow, Summary, SystemStatus, NodeResources } from '../types'
+import type { Client, DNSQuery, EventItem, Flow, Health, Summary, SystemStatus, NodeResources } from '../types'
+
+type Nav = 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings' | 'dnstools' | 'problems'
 
 interface Props {
   status: SystemStatus | null
   summary: Summary | null
-  events: LiveEvent[]
-  onNavigate: (r: 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings', sub?: string) => void
+  onNavigate: (r: Nav, sub?: string) => void
 }
 
-export function Dashboard({ status, summary, events, onNavigate }: Props) {
+interface Tick { rate_in: number; rate_out: number; flows_active: number }
+
+export function Dashboard({ status, summary, onNavigate }: Props) {
+  const { data: health } = usePoll<Health>(() => api.simple.health(), 15000)
   const { data: clients } = usePoll(() => api.clients.list(), 12000)
+  const { data: active } = usePoll(() => api.flows.active(160), 8000)
   const { data: recentEvents } = usePoll(() => api.events.list({ hours: 24, limit: 8 }), 20000)
   const { data: topBlocked } = usePoll(() => api.adblock.topBlocked(24, 8), 30000)
   const { data: topDest } = usePoll(() => api.flows.list({ hours: 24, order: 'bytes', limit: 8 }), 30000)
-  const { data: throughput } = usePoll(() => api.series('throughput_out', 3), 30000)
-  const { data: dnsSeries } = usePoll(() => api.series('dns_queries_total', 6), 60000)
+  const { data: blockedSeries } = usePoll(() => api.series('dns_blocked_total', 24, 48), 60000)
+  const { data: blockedLog } = usePoll(() => api.dns.log({ hours: 2, blocked_only: true, limit: 6 }), 0)
 
-  // Live counters derived from the socket, so the headline numbers move
-  // between polls instead of stepping every fifteen seconds.
-  const [liveRate, setLiveRate] = useState({ in: 0, out: 0, flows: 0 })
-  useEffect(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].type === 'stats.tick') {
-        const d = events[i].data as { rate_in: number; rate_out: number; flows_active: number }
-        setLiveRate({ in: d.rate_in, out: d.rate_out, flows: d.flows_active })
-        break
-      }
+  const orbit = useRef<OrbitHandle>(null)
+  const [tick, setTick] = useState<Tick | null>(null)
+  const [stopped, setStopped] = useState<DNSQuery[] | null>(null)
+  useLiveBatch(['stats.tick'], (batch) => {
+    const d = batch[batch.length - 1].data as Tick
+    setTick((t) => (t && t.rate_in === d.rate_in && t.rate_out === d.rate_out && t.flows_active === d.flows_active ? t : d))
+  })
+  useLiveBatch(['dns.query'], (batch) => {
+    const fresh: DNSQuery[] = []
+    for (const ev of batch) {
+      const q = ev.data as DNSQuery
+      if (q?.blocked) { fresh.push(q); if (q.client_id) orbit.current?.spark(q.client_id) }
     }
-  }, [events])
+    if (fresh.length) setStopped((prev) => [...fresh.reverse(), ...(prev ?? blockedLog?.queries ?? [])].slice(0, 6))
+  })
+  useLiveBatch(['flow.new'], (batch) => {
+    for (const ev of batch) { const f = ev.data as Flow; if (f?.id) orbit.current?.arrive(f.id) }
+  })
 
-  const onlineClients = useMemo(
+  const online = useMemo(
     () => (clients?.clients ?? []).filter((c) => c.online).sort((a, b) => (b.rate_in + b.rate_out) - (a.rate_in + a.rate_out)),
     [clients],
   )
-  const throughputPoints = useMemo(() => (throughput?.points ?? []).map((p) => p.v), [throughput])
-  const dnsPoints = useMemo(() => (dnsSeries?.points ?? []).map((p) => p.v), [dnsSeries])
+  const devices = useMemo<OrbitDevice[]>(() => online.map((c) => ({
+    id: c.id, name: clientName(c), rate: c.rate_in + c.rate_out, flows: c.active_flows, paused: c.blocked,
+  })), [online])
+  const flows = useMemo<OrbitFlow[]>(() => (active?.flows ?? []).filter((f) => f.client_id && (f.lat || f.lon)).map((f) => ({
+    id: f.id, client: f.client_id as string, lon: f.lon, blocked: f.verdict === 'block', bytes: f.bytes_in + f.bytes_out,
+  })), [active])
+  const blockedPoints = useMemo(() => (blockedSeries?.points ?? []).map((p) => p.v), [blockedSeries])
+  const names = useMemo(() => new Map((clients?.clients ?? []).map((c) => [c.id, clientName(c)])), [clients])
 
-  if (!summary) return <Loading what="dashboard" />
+  if (!summary) return <Loading what="overview" />
 
   const capture = status?.capture as Record<string, number | boolean> | undefined
   const captureOff = capture && capture.interfaces === 0
   const sysctlIssues = (status?.sysctl ?? []).filter((s) => s.critical && !s.ok)
+  const level = health?.level ?? 'ok'
+  const verdict = !health ? 'Checking your network'
+    : level !== 'ok' ? health.headline.replace(/\.$/, '')
+    : health.protection_on ? 'Your network is protected' : 'Filtering is switched off'
+  const issues = (health?.points ?? []).filter((p) => p.level !== 'ok')
+  const quiet = (health?.points ?? []).filter((p) => p.level === 'ok').slice(0, 3)
+  const review = (recentEvents?.events ?? []).filter((e) => !e.acknowledged && (e.severity === 'warning' || e.severity === 'critical')).slice(0, 3)
+  const stoppedList = stopped ?? blockedLog?.queries ?? []
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      {status?.mode === 'observe' && (
-        <Banner tone="info" action={<button className="btn sm" onClick={() => onNavigate('settings')}>Configure</button>}>
-          <strong style={{ display: 'block', marginBottom: 2 }}>Observe mode</strong>
-          Orbis is watching traffic that reaches it, but nothing is routed through this node and
-          no firewall ruleset is installed. Blocked verdicts are recorded, not enforced.
-        </Banner>
-      )}
       {captureOff && (
         <Banner tone="warn">
           Packet capture opened no interfaces. Without <code>CAP_NET_RAW</code> the flow table
@@ -68,38 +88,91 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
         </Banner>
       )}
 
-      <div className="grid c4">
-        <Stat label="Throughput out" tone="accent" spark={throughputPoints}
-          value={bits(liveRate.out || 0)}
-          sub={`${bits(liveRate.in || 0)} inbound`} />
-        <Stat label="Active connections" tone="blue"
-          value={num(liveRate.flows || summary.active_flows)}
-          sub={`${compact(summary.flows)} in 24h`} />
-        <Stat label="DNS blocked" tone={summary.block_rate > 0.35 ? 'amber' : 'accent'} spark={dnsPoints}
-          value={pct(summary.block_rate, 0)}
-          sub={`${compact(summary.dns_blocked)} of ${compact(summary.dns_queries)} queries`} />
-        <Stat label="Devices online"
-          value={`${summary.clients_online}`}
-          sub={`${summary.clients} known · ${compact(summary.blocklist_entries)} block entries`} />
-      </div>
+      <section className="plate">
+        <div className="plate-state">
+          <h2 className={`verdict-line ${level}`}>{verdict}</h2>
+          <ul className="plate-points">
+            {(issues.length ? issues : quiet).map((p) => (
+              <li key={p.text} className={p.level}>{p.text}</li>
+            ))}
+            {status?.mode === 'observe' && (
+              <li className="ok">Filtering every device that uses this resolver. Firewall rules are not enforced in observe mode.</li>
+            )}
+          </ul>
+          <div className="plate-stopped">
+            <div className="plate-figure">{compact(summary.dns_blocked)}</div>
+            <div className="plate-caption">stopped today, {pct(summary.block_rate, 0)} of lookups</div>
+            {blockedPoints.length > 1 && <Sparkline points={blockedPoints} tone="red" height={40} />}
+          </div>
+          <dl className="plate-facts">
+            <div><dt>Devices online</dt><dd>{summary.clients_online} of {summary.clients}</dd></div>
+            <div><dt>Connections</dt><dd>{num(tick?.flows_active ?? summary.active_flows)}</dd></div>
+            <div><dt>Down</dt><dd>{bits(tick?.rate_in ?? 0)}</dd></div>
+            <div><dt>Up</dt><dd>{bits(tick?.rate_out ?? 0)}</dd></div>
+          </dl>
+        </div>
+
+        <div className="plate-chart">
+          <OrbitChart ref={orbit} devices={devices} flows={flows} onSelect={(id) => onNavigate('clients', id)}
+            label={`${devices.length} devices online with ${flows.length} connections drawn. The same devices are listed under Busiest devices.`} />
+        </div>
+
+        <div className="plate-side">
+          <h3>Needs you</h3>
+          {review.length === 0 && !summary.ad_candidates ? (
+            <p className="plate-clear">Nothing right now.</p>
+          ) : (
+            <ul className="plate-list">
+              {review.map((e) => (
+                <li key={e.id}>
+                  <button type="button" className="row-btn" onClick={() => onNavigate('events')}>
+                    <span className={`issue-sev ${e.severity}`} /><span className="plate-row-title">{e.title}</span>
+                    <span className="plate-row-meta">{ago(e.ts)}</span>
+                  </button>
+                </li>
+              ))}
+              {summary.ad_candidates > 0 && (
+                <li>
+                  <button type="button" className="row-btn" onClick={() => onNavigate('adblock')}>
+                    <span className="issue-sev notice" /><span className="plate-row-title">{summary.ad_candidates} new {summary.ad_candidates === 1 ? 'host looks' : 'hosts look'} like ads</span>
+                    <span className="plate-row-meta">Review</span>
+                  </button>
+                </li>
+              )}
+            </ul>
+          )}
+
+          <h3>Stopped just now</h3>
+          {stoppedList.length === 0 ? (
+            <p className="plate-clear">Nothing blocked in the last two hours.</p>
+          ) : (
+            <ul className="plate-list">
+              {stoppedList.map((q, i) => (
+                <li key={`${q.ts}|${q.name}|${i}`}>
+                  <button type="button" className="row-btn" title="See why" onClick={() => onNavigate('dnstools', q.name)}>
+                    <span className="plate-row-title mono">{q.name}</span>
+                    <span className="plate-row-meta">{(q.client_id && names.get(q.client_id)) || q.client_ip}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
 
       {status?.resources && <NodeResourcesRow r={status.resources} version={status.version} />}
 
       <div className="grid c3">
-        <Card title="Subsystems" actions={<span className="tag">up {duration(summary.uptime_seconds)}</span>}>
-          <SubsystemList status={status} />
-        </Card>
-
         <Card title="Busiest devices"
           actions={<button className="btn sm" onClick={() => onNavigate('clients')}>All devices</button>}>
-          {onlineClients.length === 0 ? (
+          {online.length === 0 ? (
             <Empty title="No devices seen yet">
               Devices appear as soon as traffic from them reaches this node.
             </Empty>
           ) : (
             <div style={{ display: 'grid', gap: 9 }}>
-              {onlineClients.slice(0, 6).map((c) => (
-                <ClientRow key={c.id} client={c} peak={onlineClients[0]} onOpen={() => onNavigate('clients', c.id)} />
+              {online.slice(0, 6).map((c) => (
+                <ClientRow key={c.id} client={c} peak={online[0]} onOpen={() => onNavigate('clients', c.id)} />
               ))}
             </div>
           )}
@@ -116,7 +189,7 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
             <div style={{ display: 'grid', gap: 7 }}>
               {topBlocked.domains.map((d) => (
                 <button type="button" key={d.domain} className="row-btn"
-                  onClick={() => onNavigate('adblock')}
+                  onClick={() => onNavigate('dnstools', d.domain)}
                   style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 12.5, padding: '2px 4px' }}>
                   <span className="truncate mono" style={{ flex: 1 }} title={d.domain}>{d.domain}</span>
                   <span className="num" style={{ color: 'var(--red)' }}>{compact(d.count)}</span>
@@ -124,6 +197,10 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
               ))}
             </div>
           )}
+        </Card>
+
+        <Card title="Subsystems" actions={<span className="tag">up {duration(summary.uptime_seconds)}</span>}>
+          <SubsystemList status={status} />
         </Card>
       </div>
 

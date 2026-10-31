@@ -255,6 +255,9 @@ type DNSConfig struct {
 	MaxTTL int `yaml:"max_ttl" json:"max_ttl"`
 	// BlockTTL is the TTL handed out for sinkholed answers.
 	BlockTTL int `yaml:"block_ttl" json:"block_ttl"`
+	// BlockPage answers a blocked name with this node, so a browser opening a
+	// blocked site gets a page explaining why. See internal/blockpage.
+	BlockPage bool `yaml:"block_page" json:"block_page"`
 	// SinkholeIPv4/6 are returned for blocked names. Empty => NXDOMAIN.
 	SinkholeIPv4 string `yaml:"sinkhole_ipv4" json:"sinkhole_ipv4"`
 	SinkholeIPv6 string `yaml:"sinkhole_ipv6" json:"sinkhole_ipv6"`
@@ -1111,6 +1114,7 @@ func Default() *Config {
 			Strategy:     "parallel",
 			CacheSize:    50000,
 			MaxTTL:       86400,
+			BlockPage:    true,
 			BlockTTL:     10,
 			SinkholeIPv4: "0.0.0.0",
 			SinkholeIPv6: "::",

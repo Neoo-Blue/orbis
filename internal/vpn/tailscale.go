@@ -25,12 +25,13 @@ type Tailscale struct {
 	cfg *config.Config
 	log func(string, ...any)
 
-	mu        sync.Mutex
-	available bool
-	binary    string
-	lastError string
-	lastSync  time.Time
-	cached    *Status
+	mu         sync.Mutex
+	available  bool
+	binary     string
+	lastError  string
+	lastSync   time.Time
+	cached     *Status
+	refreshing bool
 }
 
 // Status is the subset of `tailscale status --json` the UI needs, plus the
@@ -329,13 +330,45 @@ type rawPrefs struct {
 
 // Status queries the daemon. Results are cached briefly because the dashboard
 // polls and each call forks a process.
+//
+// Reading it forks the tailscale binary twice, a real cost on a small board,
+// so an open page never pays for it: a caller gets the last answer at once
+// and a refresh runs behind it, at most one at a time.
 func (t *Tailscale) Status(ctx context.Context) *Status {
 	t.mu.Lock()
-	if t.cached != nil && time.Since(t.lastSync) < 5*time.Second {
+	if t.cached != nil {
 		cached := *t.cached
+		if time.Since(t.lastSync) >= statusRefresh && !t.refreshing {
+			t.refreshing = true
+			go func() {
+				bg, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+				defer cancel()
+				t.fetchStatus(bg)
+				t.mu.Lock()
+				t.refreshing = false
+				t.mu.Unlock()
+			}()
+		}
 		t.mu.Unlock()
 		return &cached
 	}
+	t.mu.Unlock()
+	return t.fetchStatus(ctx)
+}
+
+// statusRefresh is how old a cached status may get before it is read again.
+const statusRefresh = 30 * time.Second
+
+// Summary is Status without the peer lists, for the status call every page
+// polls. The Tailscale settings page asks for the full list itself.
+func (t *Tailscale) Summary(ctx context.Context) *Status {
+	st := t.Status(ctx)
+	st.Peers, st.AvailableExitNodes = []Node{}, []Node{}
+	return st
+}
+
+func (t *Tailscale) fetchStatus(ctx context.Context) *Status {
+	t.mu.Lock()
 	lastErr := t.lastError
 	t.mu.Unlock()
 
@@ -361,7 +394,13 @@ func (t *Tailscale) Status(ctx context.Context) *Status {
 		if st.LastError == "" {
 			st.LastError = err.Error()
 		}
-		return st
+		// A failure is an answer too; not caching it meant a fork per poll
+		// for exactly as long as tailscale was unwell.
+		t.mu.Lock()
+		t.cached, t.lastSync = st, time.Now()
+		t.mu.Unlock()
+		cp := *st
+		return &cp
 	}
 	var raw rawStatus
 	if err := json.Unmarshal([]byte(out), &raw); err != nil {

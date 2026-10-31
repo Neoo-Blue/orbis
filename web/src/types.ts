@@ -619,7 +619,7 @@ export interface AppConfig {
     enabled: boolean; listen: string[]; upstreams: string[]; strategy: string
     cache_size: number; max_ttl: number; block_ttl: number
     sinkhole_ipv4: string; sinkhole_ipv6: string; log_queries: boolean
-    local_domain: string; block_ede: boolean
+    local_domain: string; block_ede: boolean; block_page: boolean
   }
   adblock: {
     enabled: boolean; lists: BlockList[]; update_interval_hours: number

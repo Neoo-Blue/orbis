@@ -34,6 +34,9 @@ type Hooks struct {
 	// CountryCheck refuses an answer whose addresses land in a blocked
 	// country for this client; it returns the country that decided.
 	CountryCheck func(client netip.Addr, name string, addrs []netip.Addr) (bool, string)
+	// BlockPageAddr returns the address that serves the block page to this
+	// client, or false when the client should get the plain sinkhole.
+	BlockPageAddr func(client netip.Addr) (netip.Addr, bool)
 }
 
 type Server struct {
@@ -374,7 +377,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		if svc, hit := MatchBlockedService(name, policy.BlockedServices); hit {
 			m := s.blockedReply(r, q, cfg, adblock.Match{
 				Blocked: true, Source: "policy:" + policy.Name, Rule: "service:" + svc,
-			})
+			}, clientAddr)
 			logEntry.Blocked = true
 			logEntry.BlockSource = "service:" + svc
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
@@ -386,7 +389,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		if policy.BlockDoH && IsDoHBypass(name) {
 			m := s.blockedReply(r, q, cfg, adblock.Match{
 				Blocked: true, Source: "policy:" + policy.Name, Rule: "doh-bypass",
-			})
+			}, clientAddr)
 			logEntry.Blocked = true
 			logEntry.BlockSource = "doh-bypass"
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
@@ -418,7 +421,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	if cfg.AdBlock.Enabled && !unfiltered {
 		if match, blocked := s.evaluateBlock(name, clientAddr, cfg); blocked {
-			m := s.blockedReply(r, q, cfg, match)
+			m := s.blockedReply(r, q, cfg, match, clientAddr)
 			logEntry.Blocked = true
 			logEntry.BlockSource = match.Source
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
@@ -473,7 +476,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		if chain := cnameChain(resp); len(chain) > 0 {
 			logEntry.CNAMEChain = chain
 			if match := s.matcher.LookupChain(chain); match.Blocked {
-				m := s.blockedReply(r, q, cfg, match)
+				m := s.blockedReply(r, q, cfg, match, clientAddr)
 				logEntry.Blocked = true
 				logEntry.BlockSource = match.Source
 				logEntry.RCode = dns.RcodeToString[m.Rcode]
@@ -603,7 +606,7 @@ func (s *Server) countryBlocked(r *dns.Msg, q dns.Question, cfg config.Config, c
 	if !blocked {
 		return nil, ""
 	}
-	return s.blockedReply(r, q, cfg, adblock.Match{Blocked: true, Source: "country:" + code, Rule: code}), code
+	return s.blockedReply(r, q, cfg, adblock.Match{Blocked: true, Source: "country:" + code, Rule: code}, client), code
 }
 
 // evaluateBlock applies the global matcher and then any per-client policy.
@@ -661,7 +664,7 @@ func domainMatches(name, pattern string) bool {
 // blockedReply builds the sinkhole answer. Returning 0.0.0.0 makes the block
 // obvious in a client's own network log; NXDOMAIN is quieter but confuses
 // some apps into retrying forever. Both are offered.
-func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, match adblock.Match) *dns.Msg {
+func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, match adblock.Match, client netip.Addr) *dns.Msg {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -671,6 +674,13 @@ func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, mat
 	}
 
 	sink4, sink6 := cfg.DNS.SinkholeIPv4, cfg.DNS.SinkholeIPv6
+	if cfg.DNS.BlockPage && s.hooks.BlockPageAddr != nil {
+		if page, ok := s.hooks.BlockPageAddr(client); ok {
+			// With no AAAA a browser goes straight to the A answer. The
+			// sinkhole's :: would make it try that first and fail.
+			sink4, sink6 = page.String(), ""
+		}
+	}
 	if sink4 == "" && sink6 == "" {
 		m.Rcode = dns.RcodeNameError
 	} else {
@@ -914,6 +924,17 @@ func (s *Server) race(ctx context.Context, ups []*Upstream, query *dns.Msg) (*dn
 		return nil, "", lastErr
 	}
 	return nil, "", fmt.Errorf("all upstreams returned no answer")
+}
+
+// CachedChain returns the CNAME chain of a name's cached answer, which is how
+// the block page explains a name that is clean itself but leads somewhere that
+// is not.
+func (s *Server) CachedChain(name string) []string {
+	q := dns.Question{Name: dns.Fqdn(name), Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	if m, ok := s.cache.Get(q, false); ok {
+		return cnameChain(m)
+	}
+	return nil
 }
 
 // noteAnswers feeds resolved addresses back to the flow tracker so future

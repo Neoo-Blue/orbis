@@ -47,6 +47,13 @@ function Tester() {
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
+  // The block page links here with the name, so it opens already answered.
+  useEffect(() => {
+    const name = decodeURIComponent(location.hash.split('/')[2] ?? '')
+    if (name) run(name)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const run = useCallback(async (raw?: string) => {
     const target = (raw ?? domain).trim()
     if (!target) return

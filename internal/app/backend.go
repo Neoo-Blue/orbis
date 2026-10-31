@@ -172,7 +172,7 @@ func (a *App) SystemStatus() map[string]any {
 		"dhcp":       a.DHCP.Stats(),
 		"firewall":   a.Firewall.Status(),
 		"vpn":        a.VPN.Status(),
-		"tailscale":  a.Tailscale.Status(a.ctx),
+		"tailscale":  a.Tailscale.Summary(a.ctx),
 		"adblock":    a.Lists.Status(),
 		"geoip":      a.Geo.Source(),
 		"self":       a.Self.Status(),

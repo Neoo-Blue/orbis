@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api'
-import { usePoll, useDebounced, type LiveEvent } from '../hooks'
+import { useLiveBatch } from '../live'
+import { usePoll, useDebounced } from '../hooks'
 import { Banner, Card, Empty, Icons, Loading, Search, Segmented, Stat, useToast } from '../ui'
 import { clientName, clock, compact, pct } from '../format'
 import type { Client, DNSQuery } from '../types'
 
 import { DNSRecordsCard } from './DNSRecords'
 
-export function DNSPage({ events }: { events: LiveEvent[] }) {
+export function DNSPage() {
   const [query, setQuery] = useState('')
   const [blockedOnly, setBlockedOnly] = useState(false)
   const [clientId, setClientId] = useState('')
@@ -21,17 +22,16 @@ export function DNSPage({ events }: { events: LiveEvent[] }) {
   const { data: clients } = usePoll(() => api.clients.list(), 20000)
   const { data: log, refresh } = usePoll(
     () => api.dns.log({ hours: 2, q: debounced || undefined, blocked_only: blockedOnly, client_id: clientId || undefined, limit: 300 }),
-    paused ? 0 : 6000,
+    paused ? null : 6000,
     [debounced, blockedOnly, clientId, paused],
   )
 
   // Live queries from the socket, prepended so the log feels immediate.
   const [live, setLive] = useState<DNSQuery[]>([])
-  useEffect(() => {
+  useLiveBatch(['dns.query'], (batch) => {
     if (paused) return
     const additions: DNSQuery[] = []
-    for (const ev of events.slice(-60)) {
-      if (ev.type !== 'dns.query') continue
+    for (const ev of batch) {
       const q = ev.data as DNSQuery
       if (!q?.name) continue
       if (blockedOnly && !q.blocked) continue
@@ -40,7 +40,7 @@ export function DNSPage({ events }: { events: LiveEvent[] }) {
       additions.push(q)
     }
     if (additions.length) setLive((prev) => [...additions.reverse(), ...prev].slice(0, 200))
-  }, [events, paused, blockedOnly, clientId, debounced])
+  })
 
   const rows = useMemo(() => {
     const seen = new Set<string>()
@@ -198,10 +198,10 @@ export function DNSPage({ events }: { events: LiveEvent[] }) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((q, i) => {
+                {rows.map((q) => {
                   const c = q.client_id ? clientMap.get(q.client_id) : undefined
                   return (
-                    <tr key={`${q.id}-${i}`}>
+                    <tr key={`${q.ts}|${q.client_ip}|${q.qtype}|${q.name}`}>
                       <td className="mono" style={{ fontSize: 11, color: 'var(--text-faint)' }}>{clock(q.ts)}</td>
                       <td className="truncate" style={{ maxWidth: 140 }}>{c ? clientName(c) : q.client_ip}</td>
                       <td className="truncate mono" style={{ maxWidth: 300, fontSize: 11.5 }} title={q.name}>

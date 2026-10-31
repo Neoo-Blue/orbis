@@ -398,6 +398,11 @@ func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (
 			w("    iifname @zone_%s udp dport { 67, 68 } accept comment \"dhcp\"", sanitize(z))
 		}
 		w("    iifname @zone_%s tcp dport %d accept comment \"orbis ui\"", sanitize(z), apiPort(cfg))
+		if cfg.DNS.BlockPage {
+			// A blocked name resolves to this node. A drop here would turn
+			// the quick failure of a sinkhole into a browser timing out.
+			w("    iifname @zone_%s tcp dport { 80, 443 } accept comment \"orbis block page\"", sanitize(z))
+		}
 	}
 	if cfg.VPN.Server.Enabled {
 		w("    udp dport %d accept comment \"wireguard\"", cfg.VPN.Server.ListenPort)

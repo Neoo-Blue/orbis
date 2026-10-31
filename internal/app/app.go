@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
+	"github.com/Neoo-Blue/orbis/internal/blockpage"
 	"github.com/Neoo-Blue/orbis/internal/ai"
 	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
@@ -65,6 +66,9 @@ type App struct {
 	Smart   *adblock.SmartCapture
 
 	DNS       *dnsproxy.Server
+	// BlockPage shows why a site was stopped; BlockGuard decides who can see it.
+	BlockPage  *blockpage.Server
+	BlockGuard *blockpage.Guard
 	DNSCrypt  *dnsproxy.EncryptedServer
 	DHCP      *dhcp.Server
 	Firewall  *firewall.Engine
@@ -510,6 +514,11 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	}
 
 	// DNS.
+	a.BlockGuard = blockpage.NewGuard()
+	a.BlockPage = &blockpage.Server{Explain: a.explainBlock, Guard: a.BlockGuard, Log: logf}
+	if a.CA != nil {
+		a.BlockPage.Leaf = a.CA.Leaf
+	}
 	a.DNS = dnsproxy.New(cfg, st, a.Matcher, dnsproxy.Hooks{
 		OnAnswer:     a.Tracker.NoteHostname,
 		OnQuery:      a.onDNSQuery,
@@ -519,6 +528,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		Publish: func(q store.DNSQuery) {
 			a.Bus.Publish(Event{Type: "dns.query", Data: q})
 		},
+		BlockPageAddr: func(client netip.Addr) (netip.Addr, bool) { return a.BlockGuard.AddrFor(client, time.Now()) },
 		CountryCheck: func(client netip.Addr, name string, addrs []netip.Addr) (bool, string) {
 			if a.Country == nil {
 				return false, ""
@@ -599,6 +609,12 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 // explains the problem.
 func (a *App) Start() {
 	cfg := a.Cfg.Snapshot()
+
+	if a.BlockPage.Leaf != nil {
+		if err := a.BlockPage.ListenTLS(":443"); err != nil {
+			a.log("blockpage: https block page unavailable: %v", err)
+		}
+	}
 
 	// VLANs come first: zones, DHCP scopes and capture all refer to
 	// interfaces that have to exist before anything else looks for them.

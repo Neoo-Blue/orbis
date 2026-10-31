@@ -2,7 +2,7 @@
 
 # Orbis
 
-<img width="1280" height="698" alt="image" src="https://github.com/user-attachments/assets/ccb87f2c-92fa-41fd-b3ff-2407d330959b" />
+<img width="1280" alt="The Orbis overview: a sentence saying the network is protected, beside a live orbit chart of every device and connection. Demo data." src="docs/img/overview.png" />
 
 **The firewall that follows the ad into the stream, and knows what your network is doing.**
 
@@ -296,6 +296,8 @@ for devices that trust the Orbis certificate (`/setup` installs it in one tap). 
 does not is detected after a few refused certificates and keeps failing quietly as before, and a
 blocked ad inside someone else's page fails silently either way. Switch it off with
 `dns.block_page`.
+
+<img width="900" alt="The block page: the blocked name, why it was stopped, and the route from the device to the rule that decided. Demo data." src="docs/img/blockpage.png" />
 
 **Lists from anywhere.** Any list AdGuard Home or Pi-hole accepts works here, with the same
 meaning: hosts files, plain domains, AdGuard rules with exceptions, `$important`, `$denyallow`,

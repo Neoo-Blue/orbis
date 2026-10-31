@@ -263,9 +263,22 @@ const walTruncateFrames = 16384
 // one by chance, so once everything is copied across it is truncated
 // deliberately. A large WAL slows every read.
 func (s *Store) checkpoint() {
+	// A long copy must not hold up a shutdown; what it did not reach is simply
+	// copied next time.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-s.closed:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	var busy, frames, copied int
-	if err := s.db.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &frames, &copied); err != nil {
-		fmt.Fprintf(os.Stderr, "store: passive checkpoint failed: %v\n", err)
+	if err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &frames, &copied); err != nil {
+		if ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "store: passive checkpoint failed: %v\n", err)
+		}
 		return
 	}
 	if frames < walTruncateFrames || copied < frames {

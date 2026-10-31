@@ -23,6 +23,21 @@ var protectedDomains = []string{
 	"cooli.ai", "wakxi.com",
 }
 
+// essentialHosts are servers a whole app stops working without, which aggressive
+// lists sweep up with the tracking next door. They get an exception, and anyone
+// can still block one by hand. Only an app's own servers belong here: the
+// trackers beside them, such as an.facebook.com and pixel.facebook.com, stay
+// blocked.
+var essentialHosts = []string{
+	"b-graph.facebook.com", "b-graph-fallback.facebook.com", "mqtt-mini.facebook.com",
+}
+
+func addEssentialHosts(b *Builder) {
+	for _, d := range essentialHosts {
+		b.AddAllowFrom(d, false, false, "builtin:essential")
+	}
+}
+
 // Protected says whether an automated actor may block a domain, and why not.
 // Operators can still block any of these by hand.
 func Protected(domain string) (bool, string) {

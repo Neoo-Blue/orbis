@@ -331,6 +331,7 @@ func (m *Manager) rebuildLists(ctx context.Context) error {
 			b.AddBlock(d, "builtin:streaming-ads", "ads", true)
 		}
 	}
+	addEssentialHosts(b)
 
 	m.matcher.Commit(b)
 	m.mu.Lock()
@@ -370,7 +371,7 @@ func (m *Manager) fingerprint() string {
 	}
 	cfg := m.cfg.Snapshot()
 	var b strings.Builder
-	fmt.Fprintf(&b, "bypass=%t streaming=%t", cfg.AdBlock.BlockDNSBypass, cfg.AdBlock.StreamingAds)
+	fmt.Fprintf(&b, "bypass=%t streaming=%t essential=%s", cfg.AdBlock.BlockDNSBypass, cfg.AdBlock.StreamingAds, strings.Join(essentialHosts, ","))
 	for _, l := range metas {
 		if l.Enabled {
 			b.WriteByte('\n')

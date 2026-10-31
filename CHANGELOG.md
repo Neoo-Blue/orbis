@@ -45,6 +45,9 @@ tap.
   the sinkhole, which also shut off plain http. It now fails HTTPS at once and keeps the page, so a
   browser falling back from https shows it.
 - **Hosted apps crashed on a node with no storage devices.**
+- **Aggressive lists broke the Facebook app.** They block `b-graph.facebook.com`, the server the app
+  depends on, along with its fallback and live connection. Those three now have a built-in exception,
+  while Facebook's real trackers stay blocked.
 - **Orbis told Firefox it could skip the filter.** Firefox asks `use-application-dns.net` whether a
   network allows encrypted DNS, and any answer, even a block, means yes. It now gets NXDOMAIN, the
   agreed no, so Firefox stays on the network's resolver unless someone has forced it on.

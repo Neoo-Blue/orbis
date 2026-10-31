@@ -36,7 +36,7 @@ main {
 .mark svg { width: 24px; height: 24px; display: block; }
 h1 {
   /* The name is a security read: rn and m, l and 1 must stay distinct. */
-  font-family: var(--mono); font-size: clamp(27px, 4.6vw, 46px); line-height: 1.12; font-weight: 500; letter-spacing: -.04em;
+  font-family: var(--mono); font-size: clamp(27px, 4.6vw, 46px); line-height: 1.12; font-weight: 500; letter-spacing: -.02em;
   overflow-wrap: anywhere; text-wrap: balance;
 }
 h1.long { font-size: clamp(23px, 3.5vw, 34px); }
@@ -101,9 +101,13 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
 }
 @media (max-width: 759px) {
   /* A plate of its own above the text, so no ring runs through the words. */
-  canvas { position: absolute; height: 200px; }
-  main { padding-top: 212px; }
+  canvas { position: absolute; height: 128px; }
+  main { padding-top: 136px; gap: 20px; justify-content: flex-start; }
   .mark { position: absolute; left: 20px; top: 22px; }
+  .actions { order: 1; }
+  .route { order: 2; }
+  dl { order: 3; }
+  footer { order: 4; }
   .actions .btn { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -125,14 +129,14 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
   {{if .Blocked}}
   <p class="lede"><b>Orbis stopped this site.</b> {{.Why}}</p>
   <ol class="route" aria-label="How Orbis decided">
-    {{range $s := .Stations}}<li class="stop {{$s.Class}}"><i class="dot"></i><div><b>{{$s.Title}}</b>{{if $s.Detail}}<span>{{$s.Detail}}</span>{{end}}</div></li>
+    {{range $s := .Stations}}<li class="stop {{$s.Class}}"><i class="dot"></i><div><b>{{$s.Title}}</b>{{if $s.Detail}}<span{{if $s.Address}} class="code"{{end}}>{{$s.Detail}}</span>{{end}}</div></li>
     {{end}}
   </ol>
   <dl>
     {{if .Rule}}<dt>Rule</dt><dd class="code">{{.Rule}}</dd>{{end}}
     {{if .Source}}<dt>Decided by</dt><dd>{{.Source}}</dd>{{end}}
     {{if .Category}}<dt>Category</dt><dd>{{.Category}}</dd>{{end}}
-    {{if .Device}}<dt>This device</dt><dd>{{.Device}}</dd>{{end}}
+    {{if .Device}}<dt>This device</dt><dd{{if .DeviceAddress}} class="code"{{end}}>{{.Device}}</dd>{{end}}
     <dt>When</dt><dd>{{.When}}</dd>
   </dl>
   <div class="actions">
@@ -164,9 +168,9 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
   var w, h, cx, cy, R, dpr = Math.min(devicePixelRatio || 1, 2), wide, stars = [], raf = 0, last = 0;
   var CYCLE = 7000, TRAVEL = 1500, FROM = 1.9, TO = 3.95;
   function size() {
-    wide = innerWidth >= 760; w = innerWidth; h = wide ? innerHeight : 200;
+    wide = innerWidth >= 760; w = innerWidth; h = wide ? innerHeight : 128;
     c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
-    cx = wide ? Math.max(w * .76, 640 + h * .44) : w * .66; cy = wide ? h * .5 : 104; R = wide ? Math.min(h * .44, 440) : 90;
+    cx = wide ? Math.max(w * .76, 640 + h * .44) : w * .66; cy = wide ? h * .5 : 66; R = wide ? Math.min(h * .44, 440) : 54;
     stars = [];
     var seed = 11;
     function next() { return (seed = seed * 16807 % 2147483647) / 2147483647 }

@@ -181,7 +181,7 @@ function arcFlowMaterial(spec: ArcSpec, weight: number): THREE.ShaderMaterial {
   const w = flowWeights(spec.bytesIn, spec.bytesOut, spec.direction)
   return new THREE.ShaderMaterial({
     transparent: true,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,
     depthWrite: false,
     uniforms: {
       uBase: { value: arcColor(spec) },
@@ -420,7 +420,7 @@ export class GlobeScene {
         color: COLORS.countryLit,
         transparent: true,
         opacity: 0,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
         depthWrite: false,
       })
       const lines = new THREE.LineSegments(geom, mat)
@@ -709,7 +709,7 @@ export class GlobeScene {
         new THREE.SphereGeometry(0.7, 10, 10),
         new THREE.MeshBasicMaterial({
           color: COLORS.home, transparent: true, opacity: 1,
-          blending: THREE.AdditiveBlending, depthWrite: false,
+          blending: THREE.NormalBlending, depthWrite: false,
         }),
       )
       dot.position.copy(pos)

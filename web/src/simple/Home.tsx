@@ -48,10 +48,11 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
   return (
     <div style={{ display: 'grid', gap: 22 }}>
       <div className="simple-top">
+      <div className="simple-left">
       <div className={`hero ${health.level}`}>
         <div className="hero-title"><span className="orb" />{health.headline}</div>
         <div className="hero-sub">
-          {health.devices_online} of {health.devices_total} devices are online.
+          {clients ? devices.length : health.devices_online} of {clients?.clients.length ?? health.devices_total} devices are online.
           {' '}{health.protection_on ? `${num(health.blocked_today)} ads and trackers were blocked today.` : 'Protection is switched off.'}
         </div>
         {(health.points ?? []).length > 0 && (
@@ -76,12 +77,6 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
           )}
         </div>
       </div>
-      <div className="simple-chart">
-        <OrbitChart compact devices={devices} flows={flows} onSelect={() => onNavigate('s-devices')}
-          label={`${devices.length} devices online. Open Devices to see them all.`} />
-      </div>
-      </div>
-
       <Section title="Ask Orbis" hint="Plain questions work. It reads the network and answers with real numbers.">
         <div className="ask">
           <input className="input" value={question} placeholder="Why is the TV slow? What did the kids' tablet do today?"
@@ -95,6 +90,12 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
           ))}
         </div>
       </Section>
+      </div>
+      <div className="simple-chart">
+        <OrbitChart compact devices={devices} flows={flows} onSelect={() => onNavigate('s-devices')}
+          label={`${devices.length} devices online. Open Devices to see them all.`} />
+      </div>
+      </div>
 
       <Section title="At a glance">
         <ul className="glance">

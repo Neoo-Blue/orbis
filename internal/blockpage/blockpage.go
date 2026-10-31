@@ -52,6 +52,8 @@ type Station struct {
 	// resolver, "decided" for the stage that stopped the request and
 	// "unreached" for what the request never got to.
 	Class string
+	// Address sets Detail as an address rather than as words.
+	Address bool
 }
 
 // Page is everything shown for one blocked name.
@@ -64,10 +66,12 @@ type Page struct {
 	Source   string
 	Category string
 	Device   string
-	When     string
-	AdminURL string
-	Copy     string
-	Nonce    string
+	// DeviceAddress says Device is an address, because the device has no name.
+	DeviceAddress bool
+	When          string
+	AdminURL      string
+	Copy          string
+	Nonce         string
 	// HostParts lets a long name wrap at its dots, not in the middle of a word.
 	HostParts []string
 	Long      bool

@@ -282,8 +282,8 @@
   }
   .globe-overlay > * { pointer-events: auto; }
   .globe-legend {
-    display: flex; gap: 14px; align-items: center; font-family: var(--mono); font-size: 10.5px;
-    color: var(--text-faint); background: rgba(4,28,47,.62);
+    display: flex; gap: 14px; align-items: center; font-size: 12px;
+    color: var(--text-dim);
     padding: 0; align-self: flex-start;
   }
   .globe-legend i { width: 16px; height: 2px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: middle; }
@@ -557,6 +557,7 @@
 .orbit canvas { width: 100%; height: 100%; display: block; }
 .plate-chart .orbit-title { position: absolute; left: 16px; top: 13px; font-size: 13px; font-weight: 520; color: var(--text); }
 .plate-chart .orbit-key { position: absolute; left: 16px; bottom: 11px; font-size: 12px; color: var(--text-faint); pointer-events: none; }
+@media (max-width: 760px) { .plate-chart .orbit-key, .plate-chart .orbit-title { display: none; } }
 .orbit-tip {
   position: absolute; left: 0; top: 0; pointer-events: none; opacity: 0; z-index: 3; max-width: 200px;
   background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 10px;
@@ -602,8 +603,9 @@
 .trace-stop.block .trace-title { color: var(--red); }
 .trace-detail { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
 
-.simple-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 400px); gap: 14px; align-items: stretch; }
-.simple-chart { position: relative; min-height: 340px; background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.simple-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 400px); gap: 14px; align-items: start; }
+.simple-left { display: grid; gap: 18px; min-width: 0; }
+.simple-chart { position: relative; aspect-ratio: 1; background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: var(--radius); }
 .glance { list-style: none; padding: 0; margin: 0; background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: var(--radius); }
 .glance li + li { border-top: 1px solid var(--line-soft); }
 .glance button { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 52px; padding: 10px 16px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -612,7 +614,7 @@
 .glance .what small { display: block; font-size: 12.5px; color: var(--text-faint); }
 .glance .value { font-size: 16px; font-weight: 540; font-variant-numeric: tabular-nums; }
 .glance svg { color: var(--text-faint); flex: none; }
-@media (max-width: 880px) { .simple-top { grid-template-columns: minmax(0, 1fr); } .simple-chart { min-height: 0; aspect-ratio: 1; } }
+@media (max-width: 880px) { .simple-top { grid-template-columns: minmax(0, 1fr); } .simple-chart { aspect-ratio: 1; } }
 
 /* Tables and rows carry a hover cue and nothing else. */
 .btn:active:not(:disabled) { transform: translateY(1px); }

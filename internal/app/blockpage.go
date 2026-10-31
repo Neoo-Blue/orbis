@@ -38,6 +38,7 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 	if c := a.Registry.ByIP(client); c != nil {
 		page.Device = firstNonEmpty(c.Label, c.Hostname, c.IP)
 	}
+	page.DeviceAddress = net.ParseIP(page.Device) != nil
 	if addr, ok := a.BlockGuard.AddrFor(client, now); ok {
 		port := ""
 		if _, p, err := net.SplitHostPort(a.Cfg.Snapshot().API.Listen); err == nil && p != "80" {
@@ -57,7 +58,7 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 	}
 
 	page.Stations = []blockpage.Station{
-		{Title: "Your device", Detail: page.Device, Class: "clear"},
+		{Title: "Your device", Detail: page.Device, Class: "clear", Address: page.DeviceAddress},
 		{Title: "Orbis", Detail: "Asked for the address of " + host, Class: "clear"},
 	}
 	for _, s := range steps {

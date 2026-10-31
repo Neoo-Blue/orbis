@@ -110,6 +110,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       jade: cssVar('--accent'), red: cssVar('--red'), amber: cssVar('--amber'),
     }
     const sans = cssVar('--sans')
+    const plateColor = cssVar('--bg-1')
     const line = (a: number) => `rgba(214,190,138,${a})`
     const bodies = new Map<string, Body>()
     // The engraving never changes, so it is drawn once and stamped each frame.
@@ -120,6 +121,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
     let hovered: string | null = null
     let hoveredStrike: Strike | null = null
 
+    /** Lettering needs room; a small chart keeps the drawing without it. */
+    const lettered = () => !compact && Math.min(w, h) >= 420
     const shieldR = () => R * 0.82
     const orbitR = (ring: number) => R * (ring ? 0.6 : 0.38)
     const gateway = () => ({ x: cx + Math.cos(GATEWAY_ANGLE) * shieldR(), y: cy + Math.sin(GATEWAY_ANGLE) * shieldR() })
@@ -186,7 +189,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       ring(orbitR(0), 0.2, [2, 6])
       ring(R * 0.11, 0.55)
 
-      if (!compact) {
+      if (lettered()) {
         c.font = `500 11px ${sans}`
         c.fillStyle = color.faint
         curved(c, "People's devices", orbitR(1) + 11, Math.PI / 2 + 0.5)
@@ -373,13 +376,6 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       const g = gateway()
       ctx.fillStyle = color.brass
       ctx.fillRect(g.x - 3.5, g.y - 3.5, 7, 7)
-      if (!compact) {
-        ctx.font = `500 11px ${sans}`
-        ctx.textAlign = 'left'
-        ctx.textBaseline = 'middle'
-        ctx.fillStyle = color.dim
-        ctx.fillText('Gateway', g.x + 9, g.y + 9)
-      }
 
       // Stopped lookups: out from the device, dead at the shield, and a mark
       // left there that can be opened.
@@ -436,17 +432,44 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
           ctx.stroke()
         }
       }
-      const busiest = compact ? [] : [...devices].sort((p, q) => q.rate - p.rate).slice(0, 4)
-      ctx.font = `500 11.5px ${sans}`
-      ctx.textBaseline = 'middle'
-      for (const d of busiest) {
-        const b = bodies.get(d.id)
-        if (!b || d.id === hovered || d.rate <= 0) continue
-        const name = d.name.length > 18 ? d.name.slice(0, 17) + '…' : d.name
-        const right = b.x < cx
-        ctx.textAlign = right ? 'right' : 'left'
-        ctx.fillStyle = color.ivory
-        ctx.fillText(name, b.x + (right ? -(b.size + 7) : b.size + 7), b.y)
+
+      // Names go where they cover nothing: the side away from the centre if
+      // that is free, the other side if not, and not at all if neither is. A
+      // halo of the plate's colour keeps them readable across a line, the way
+      // a chart's lettering is knocked out of its engraving.
+      if (lettered()) {
+        ctx.font = `500 11.5px ${sans}`
+        ctx.textBaseline = 'middle'
+        ctx.lineJoin = 'round'
+        const placed: Array<{ x0: number; x1: number; y0: number; y1: number }> = []
+        const hit = (r: { x0: number; x1: number; y0: number; y1: number }) => {
+          for (const p of placed) if (r.x0 < p.x1 && r.x1 > p.x0 && r.y0 < p.y1 && r.y1 > p.y0) return true
+          for (const q of bodies.values()) if (q.x > r.x0 - q.size && q.x < r.x1 + q.size && q.y > r.y0 - q.size && q.y < r.y1 + q.size) return true
+          return false
+        }
+        const write = (text: string, x: number, y: number, side: number) => {
+          const tw = ctx.measureText(text).width
+          const box = { x0: side > 0 ? x : x - tw, x1: side > 0 ? x + tw : x, y0: y - 8, y1: y + 8 }
+          if (box.x0 < 2 || box.x1 > w - 2 || hit(box)) return false
+          ctx.textAlign = side > 0 ? 'left' : 'right'
+          ctx.lineWidth = 3.5
+          ctx.strokeStyle = plateColor
+          ctx.strokeText(text, x, y)
+          ctx.fillStyle = color.ivory
+          ctx.fillText(text, x, y)
+          placed.push(box)
+          return true
+        }
+        const gx = gateway()
+        write('Gateway', gx.x - 9, gx.y - 13, -1) || write('Gateway', gx.x + 9, gx.y - 13, 1)
+        for (const d of [...devices].sort((p, q) => q.rate - p.rate).slice(0, 4)) {
+          const b = bodies.get(d.id)
+          if (!b || d.id === hovered || d.rate <= 0) continue
+          const name = d.name.length > 18 ? d.name.slice(0, 17) + '…' : d.name
+          const out = b.x < cx ? -1 : 1, gap = b.size + 7
+          write(name, b.x + out * gap, b.y, out) || write(name, b.x - out * gap, b.y, -out)
+        }
+        ctx.lineWidth = 1
       }
 
       const tip = tipRef.current

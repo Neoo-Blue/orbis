@@ -33,6 +33,7 @@ it. Runs on a Raspberry Pi, an LXC, a VM, or in Docker.
 - [The network: cables, Wi-Fi, firewall, VPN](#the-network-cables-wi-fi-firewall-vpn)
 - [Seeing everything: globe, services, hosted apps, storage](#seeing-everything-globe-services-hosted-apps-storage)
 - [Operating it: two interfaces and the assistant](#operating-it-two-interfaces-and-the-assistant)
+- [Change timeline](#change-timeline)
 - [Problem reports](#problem-reports)
 - [Modes and placement](#modes-and-placement)
 - [Architecture](#architecture)
@@ -413,9 +414,10 @@ export.
 ## Seeing everything: globe, services, hosted apps, storage
 
 **The orbit chart.** The Overview is a live map of this network drawn as a star chart: Orbis at the
-centre, every device a body on its orbit sized by what it is doing, connections arcing out to a
-world scale read by longitude, and blocked lookups stopping dead at the shield ring. Hover a body
-to light up its traffic; click it to open the device.
+centre, devices on their orbits by what they are and sized by what they are doing, each reaching the
+world through the gateway, and traffic running round the rim in one line per region as thick as the
+bytes on it. A blocked lookup stops dead at the shield and leaves a mark that opens the reason. Hover
+a body to light up its traffic; click it to open the device.
 
 **Internet health.** The gateway and three public resolvers are probed every 10 seconds, and the
 page answers the question in one sentence: is it your network, or your provider? Latency, jitter
@@ -552,6 +554,13 @@ For the failure no software covers, the box itself dying, the same page holds a 
 for the node's placement. Placement is the strongest layer of all: in intercept mode the router
 stays the gateway and devices fall back to it on their own; a node that is the gateway needs the
 runbook.
+
+## Change timeline
+
+Every saved configuration is kept, the last 200 of them, with what changed and a line-by-line
+comparison, secrets hidden. Restore any version in one click. A change that touches the network
+asks you to confirm within 60 seconds and rolls itself back if you cannot, so a mistake that cuts
+you off undoes itself. Restores keep the current admin password and sessions.
 
 ## Modes and placement
 

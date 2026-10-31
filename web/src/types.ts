@@ -1471,3 +1471,69 @@ export interface SafetyStatus {
   config: { fallback_dns: string; lifeboat: boolean; hardware_watchdog: boolean; liveness_probe: boolean }
   last_episode?: { started: string; last_seen: string; reason: string; retries: number }
 }
+
+// ---- internet health (netwatch) ----
+
+export type NetwatchState = 'good' | 'degraded' | 'down'
+export type NetwatchStory = 'ok' | 'network' | 'isp'
+
+export interface NetwatchTarget {
+  id: string
+  name: string
+  address: string
+  interface?: string
+  role: 'gateway' | 'public'
+  state: NetwatchState
+  current_ms: number
+  last_ok: boolean
+  p50_ms: number
+  jitter_ms: number
+  loss_percent: number
+  median_24h_ms: number
+  samples_5m: number
+  samples_24h: number
+  consecutive_failures: number
+}
+
+export interface NetwatchIncident {
+  id: string
+  started_at: string
+  ended_at?: string
+  ongoing: boolean
+  duration_seconds: number
+  cause: NetwatchStory
+  summary: string
+  failed: string[]
+}
+
+export interface NetwatchStatus {
+  state: NetwatchState
+  story: NetwatchStory
+  blame: string
+  headline: string
+  detail: string
+  interval_seconds: number
+  rounds: number
+  updated_at?: string
+  targets: NetwatchTarget[]
+  incidents: NetwatchIncident[]
+}
+
+export interface NetwatchPoint {
+  t: number
+  ms: number
+  loss?: boolean
+}
+
+export interface NetwatchTargetSeries {
+  id: string
+  points: NetwatchPoint[]
+}
+
+export interface NetwatchHistory {
+  hours: number
+  from: number
+  to: number
+  targets: NetwatchTargetSeries[]
+  incidents: NetwatchIncident[]
+}

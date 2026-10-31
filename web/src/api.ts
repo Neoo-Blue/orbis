@@ -12,7 +12,8 @@ import type {
   ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
   HostedResponse, StorageDevice, PortForward, RouterInfo,
   LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus, IDSStatus,
- UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus } from './types'
+  UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus,
+  NetwatchStatus, NetwatchHistory } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -575,6 +576,11 @@ export const api = {
   report: {
     preview: (hours: number) => get<ReportData>(`/report${qs({ hours })}`),
     downloadURL: (hours: number, format: 'csv' | 'html') => `/api/report${qs({ hours, format })}`,
+  },
+
+  netwatch: {
+    status: () => get<NetwatchStatus>('/netwatch/status'),
+    history: (hours: number) => get<NetwatchHistory>(`/netwatch/history${qs({ hours })}`),
   },
 
   config: {

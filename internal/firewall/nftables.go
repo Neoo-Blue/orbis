@@ -418,6 +418,15 @@ func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (
 			w("    %s", line)
 		}
 	}
+	if cfg.DNS.BlockPage {
+		// A blocked name resolves here for every port, not just the two the
+		// page answers on. A reset is the instant failure a sinkhole gave.
+		for _, z := range lanZones {
+			if len(zoneIfaces[z]) > 0 {
+				w("    iifname @zone_%s meta l4proto tcp reject with tcp reset comment \"blocked names fail fast\"", sanitize(z))
+			}
+		}
+	}
 	if cfg.Firewall.LogDropped {
 		w("    limit rate 10/second burst 20 packets log prefix \"orbis-input-drop \" group %d", cfg.Firewall.NFLogGroup)
 	}

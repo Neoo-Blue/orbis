@@ -8,7 +8,7 @@ under "Show release notes" when it offers an update.
 
 The interface is new, DNS is never stale, and the whole node does far less work. On the reference
 Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones from 2.5 ms to under
-1 ms, the Go heap from about 600 MB to about 170 MB, and no log rows are dropped.
+1 ms, the Go heap from about 600 MB to about 100 MB, and no log rows are dropped.
 
 ### Added
 - **The block page.** A browser opening a blocked site gets a page saying what stopped it: the
@@ -16,8 +16,10 @@ Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones fr
   with a link to review it in Orbis. It works on plain http for everyone, and on https for devices
   that trust the Orbis certificate. A device that refuses the certificate is detected after three
   tries and goes back to failing quietly for a day, so nobody is left looking at certificate
-  warnings, and an ad inside someone else's page still fails silently. Settings, DNS, "Show a page
-  when a site is blocked".
+  warnings, and an ad inside someone else's page still fails silently. Only a name blocked in its
+  own right gets the page. A name that merely leads to a blocked one, or sits in a blocked country,
+  keeps the plain sinkhole: that name belongs to whoever runs it, and pointing it at this node would
+  hand their page the node's origin. Settings, DNS, "Show a page when a site is blocked".
 - **The orbit chart.** The Overview now answers "is my network safe?" in one sentence, beside a
   live map of the network: Orbis at the centre, devices on their orbits by what they are, each
   reaching the world through the gateway, and traffic running round the rim in one line per region
@@ -30,7 +32,10 @@ Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones fr
 - **Change timeline.** Every saved configuration is kept, the last 200 of them, with what changed and
   a line-by-line comparison, secrets hidden. Restore any version in one click. For anything touching
   the network it asks you to confirm within 60 seconds and rolls itself back if you cannot, so a
-  change that cuts you off undoes itself. A restore never brings back an old admin password.
+  change that cuts you off undoes itself, even if the node restarts or loses power in that minute.
+  The rollback reloads the firewall too. Config edits are refused while a restore waits, and it
+  tells you which changes only take effect after a restart, because the timer cannot test those.
+  Neither a restore nor a rollback brings back an old admin password.
 - **Zone matrix.** Firewall, Zone matrix: a grid of what happens between every pair of zones, with
   the rules that apply and the last hour of traffic in each cell. On a node in observe mode it says
   this is what would apply, not what is applied.
@@ -44,8 +49,9 @@ Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones fr
   makes no outside requests.
 - **Restarts are quick.** The built block index is kept on disk, so filtering is back within seconds
   rather than after two and a half minutes, and shutdown no longer waits out its 20 second timeout.
-- **The firewall opens ports 80 and 443 to your zones** when the block page is on, in inline mode, so
-  a blocked site fails at once rather than timing out.
+- **The firewall opens ports 80 and 443 to your zones** when the block page is on, in inline mode, and
+  answers any other TCP port from those zones with a reset, so a blocked name fails at once on every
+  port rather than timing out.
 - **Lists refresh together, overnight.** A pass takes everything due soon, between 02:00 and 05:00
   local time, and a list that has not changed costs nothing. Lists used to drift onto separate
   clocks, which rebuilt the whole index about once an hour.

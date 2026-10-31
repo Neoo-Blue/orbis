@@ -506,6 +506,11 @@ func (a *App) ApplyConfigChanges(keys []string) {
 					a.Discover.RequestScan()
 				}
 			}
+		case key == "dns.block_page":
+			a.SyncBlockPage()
+			if a.Firewall != nil {
+				go a.ReapplyThreatEnforcement()
+			}
 		case key == "threat" || strings.HasPrefix(key, "threat."):
 			if !didThreat {
 				didThreat = true
@@ -530,6 +535,28 @@ func (a *App) ApplyConfigChanges(keys []string) {
 					a.AI.Router().RequestProbe()
 				}
 			}
+		}
+	}
+}
+
+// applyRestored brings the running system in line after a restore or rollback.
+// A PATCH leaves the ruleset for the operator to apply, but a rollback exists to
+// undo a bad change, and one that leaves the bad rules loaded has undone nothing.
+func (a *App) applyRestored(keys []string) {
+	a.ApplyConfigChanges(keys)
+	var firewall, intercept bool
+	for _, k := range keys {
+		firewall = firewall || k == "mode" || k == "firewall" || strings.HasPrefix(k, "firewall.")
+		intercept = intercept || strings.HasPrefix(k, "network.intercept")
+	}
+	if firewall && a.Firewall != nil {
+		if err := a.ApplyFirewall(a.ctx); err != nil {
+			a.Log("confighistory: firewall: %v", err)
+		}
+	}
+	if intercept {
+		if err := a.SyncIntercept(); err != nil {
+			a.Log("confighistory: intercept: %v", err)
 		}
 	}
 }

@@ -177,3 +177,14 @@ func TestDueRefreshOnlyTouchesNamesInUse(t *testing.T) {
 		t.Fatal("a 5 s answer must not be refreshed")
 	}
 }
+
+func TestATruncatedAnswerIsNotCached(t *testing.T) {
+	c := NewCache(10)
+	q := aQuestion("big.example.com.")
+	m := aAnswer(q, 300)
+	m.Truncated = true
+	c.Put(q, false, m, 86400)
+	if _, ok := c.Get(q, false); ok {
+		t.Fatal("a truncated answer would be served as if it were whole")
+	}
+}

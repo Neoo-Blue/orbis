@@ -221,8 +221,8 @@ func capTTLs(m *dns.Msg, limit uint32) {
 // Put stores a response for as long as its records say and no longer. maxTTL
 // lowers what upstreams claim: a 7-day TTL would make a changed record
 // invisible for a week. TTLs in msg are capped in place, so the client that
-// asked gets the same bound. A TTL of 0 means do not cache, and only NOERROR
-// and NXDOMAIN are ever stored.
+// asked gets the same bound. A TTL of 0 means do not cache, and only whole
+// NOERROR and NXDOMAIN answers are ever stored.
 func (c *Cache) Put(q dns.Question, dnssecOK bool, msg *dns.Msg, maxTTL int) {
 	if msg == nil {
 		return
@@ -237,7 +237,7 @@ func (c *Cache) Put(q dns.Question, dnssecOK bool, msg *dns.Msg, maxTTL int) {
 		}
 	}
 	capTTLs(msg, limit)
-	if msg.Rcode != dns.RcodeSuccess && msg.Rcode != dns.RcodeNameError {
+	if msg.Truncated || (msg.Rcode != dns.RcodeSuccess && msg.Rcode != dns.RcodeNameError) {
 		return
 	}
 	ttl := lowestTTL(msg)

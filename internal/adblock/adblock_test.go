@@ -1,11 +1,18 @@
 package adblock
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/store"
 )
 
 func TestParseListFormats(t *testing.T) {
@@ -334,11 +341,11 @@ func TestSavedIndexAnswersLikeTheOriginal(t *testing.T) {
 	m := New()
 	m.Commit(b)
 	path := filepath.Join(t.TempDir(), "index.bin")
-	if err := m.SaveIndex(path); err != nil {
+	if err := m.SaveIndex(path, "lists"); err != nil {
 		t.Fatal(err)
 	}
 	loaded := New()
-	if err := loaded.LoadIndex(path); err != nil {
+	if err := loaded.LoadIndex(path, "lists"); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"ads.example.com", "x.tracker.example.net", "ok.tracker.example.net", "ad7.example.org", "safe1.tracker.example.net", "fine.example.org"} {
@@ -357,7 +364,7 @@ func TestDamagedIndexIsRefused(t *testing.T) {
 	b.AddBlock("ads.example.com", "list-a", "ads", false)
 	m := New()
 	m.Commit(b)
-	if err := m.SaveIndex(path); err != nil {
+	if err := m.SaveIndex(path, "lists"); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -368,10 +375,76 @@ func TestDamagedIndexIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := New()
-	if err := fresh.LoadIndex(path); err == nil {
+	if err := fresh.LoadIndex(path, "lists"); err == nil {
 		t.Fatal("a truncated index must be refused")
 	}
 	if fresh.Count() != 0 {
 		t.Fatal("a refused index must leave the matcher untouched")
+	}
+}
+
+func TestAnIndexBuiltFromOtherListsIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.bin")
+	b := NewBuilder()
+	b.AddBlock("ads.example.com", "list-a", "ads", false)
+	m := New()
+	m.Commit(b)
+	if err := m.SaveIndex(path, "lists"); err != nil {
+		t.Fatal(err)
+	}
+	if err := New().LoadIndex(path, "other lists"); err == nil {
+		t.Fatal("a list switched off in the YAML must not come back from the snapshot")
+	}
+}
+
+func TestImpossibleTablesAreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		head [2]uint64
+		keys []uint64
+	}{
+		{"no empty slot, so a lookup would spin", [2]uint64{4, 4}, []uint64{1, 2, 3, 4}},
+		{"count disagrees with the keys", [2]uint64{3, 4}, []uint64{1, 0, 0, 0}},
+		{"larger than the file", [2]uint64{0, 1 << 40}, nil},
+		{"size that overflows", [2]uint64{0, 1 << 62}, nil},
+	} {
+		var buf bytes.Buffer
+		_ = binary.Write(&buf, binary.LittleEndian, tc.head)
+		_ = binary.Write(&buf, binary.LittleEndian, tc.keys)
+		_ = binary.Write(&buf, binary.LittleEndian, make([]uint32, len(tc.keys)))
+		var s domainSet
+		if err := s.read(bufio.NewReader(&buf), int64(buf.Len())); err == nil {
+			t.Errorf("%s: accepted", tc.name)
+		}
+	}
+}
+
+func TestListRowsChangingForcesARebuildAtBoot(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "orbis.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Default()
+	cfg.Store.Path = filepath.Join(dir, "orbis.db")
+	mgr := NewManager(st, New(), cfg, func(string, ...any) {})
+	if err := mgr.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !mgr.restore() {
+		t.Fatal("a saved index should load")
+	}
+	if _, err := st.ReplaceListDomains(context.Background(), "some-list", "ads", store.ListEntries{Exact: []string{"ads.example.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if mgr.restore() {
+		t.Fatal("the rows moved on, so the saved index is stale")
+	}
+	if err := mgr.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !mgr.restore() {
+		t.Fatal("a rebuild should clear the marker")
 	}
 }

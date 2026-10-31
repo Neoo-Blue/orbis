@@ -13,8 +13,11 @@ import (
 
 // ClaimsBlockedHost reports whether a request reached this node because the
 // resolver answered a blocked name with it, as opposed to someone opening
-// Orbis itself. Anything Orbis would not block falls through to the interface.
-func (a *App) ClaimsBlockedHost(hostport string) bool {
+// Orbis itself. It asks the same question the resolver did for this client, so
+// a name blocked by a profile counts, and it answers no for anything else: the
+// request then falls through to the interface, which is why the resolver only
+// ever points a name here when the name itself is blocked.
+func (a *App) ClaimsBlockedHost(hostport string, client netip.Addr) bool {
 	host := hostport
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		host = h
@@ -25,8 +28,24 @@ func (a *App) ClaimsBlockedHost(hostport string) bool {
 	if a.Matcher.Lookup(host).Blocked {
 		return true
 	}
-	chain := a.DNS.CachedChain(host)
-	return len(chain) > 0 && a.Matcher.LookupChain(chain).Blocked
+	clientID, _ := a.clientForAddr(client)
+	out, err := a.DiagnoseDomain(context.Background(), host, clientID, false)
+	return err == nil && out["verdict"] == "block"
+}
+
+// SyncBlockPage starts or stops the HTTPS listener to match the setting.
+func (a *App) SyncBlockPage() {
+	want := a.Cfg.Snapshot().DNS.BlockPage && a.BlockPage.Leaf != nil
+	if want == a.BlockPage.Listening() {
+		return
+	}
+	if !want {
+		a.BlockPage.Close()
+		return
+	}
+	if err := a.BlockPage.ListenTLS(":443"); err != nil {
+		a.log("blockpage: https block page unavailable: %v", err)
+	}
 }
 
 // explainBlock turns the same trace the domain tester and the assistant use
@@ -85,8 +104,6 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 // resolver is.
 func (a *App) whyBlocked(host string, s DiagnoseStep) string {
 	switch {
-	case s.Stage == "CNAME uncloak":
-		return fmt.Sprintf("The name looks harmless, but it leads to %s, which is blocked.", s.Rule)
 	case s.Stage == "Blocked service":
 		return fmt.Sprintf("%s is switched off for this device.", s.Rule)
 	case s.Stage == "DoH bypass":

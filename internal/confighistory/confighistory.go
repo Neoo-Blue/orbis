@@ -5,6 +5,7 @@ package confighistory
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -65,6 +66,9 @@ type RestoreResult struct {
 	Keys       []string      `json:"keys"`
 	Summary    string        `json:"summary"`
 	Pending    PendingStatus `json:"pending"`
+	// RestartRequired lists changed keys that only take effect at the next
+	// start, so the confirm window has not tested them.
+	RestartRequired []string `json:"restart_required"`
 }
 
 // Hooks connects config restoration to the live subsystems and audit log.
@@ -74,6 +78,8 @@ type Hooks struct {
 	OnApply func(keys []string)
 	// OnAutoRevert runs after an unconfirmed restore automatically reverts.
 	OnAutoRevert func(restoredID, revertToID string, err error)
+	// OnEditsLost runs when a rollback overwrote changes saved during the window.
+	OnEditsLost func(restoredID string)
 }
 
 type pendingRestore struct {
@@ -85,6 +91,7 @@ type pendingRestore struct {
 	expiresAt  time.Time
 	preBytes   []byte
 	timer      *time.Timer
+	generation uint64 // config generation right after the restore
 }
 
 // Manager reads, compares and restores archived configuration snapshots.
@@ -131,7 +138,9 @@ func (m *Manager) ConfirmUnit() time.Duration {
 	return m.confirmUnit
 }
 
-// Stop cancels any active commit-confirm timer on daemon shutdown.
+// Stop cancels the timer on daemon shutdown. The pending restore stays on disk:
+// a restart is exactly what someone does when a restore cut them off, so Resume
+// picks the rollback up again at the next start.
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	if m.pending != nil && m.pending.timer != nil {
@@ -139,6 +148,89 @@ func (m *Manager) Stop() {
 	}
 	m.pending = nil
 	m.mu.Unlock()
+}
+
+// pendingFile records a restore waiting for confirmation.
+const pendingFile = "pending.json"
+
+// minResumeWindow is the least time a restart leaves to confirm, so the owner
+// has a chance once the node is back.
+const minResumeWindow = 30 * time.Second
+
+type savedPending struct {
+	RestoredID string    `json:"restored_id"`
+	RevertToID string    `json:"revert_to_id"`
+	Summary    string    `json:"summary"`
+	StartedAt  time.Time `json:"started_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+func (m *Manager) savePending(p *pendingRestore) error {
+	raw, err := json.Marshal(savedPending{p.restoredID, p.revertToID, p.summary, p.startedAt, p.expiresAt})
+	if err != nil {
+		return err
+	}
+	tmp := filepath.Join(m.dir, pendingFile+".tmp")
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(m.dir, pendingFile))
+}
+
+func (m *Manager) clearPendingFile() {
+	_ = os.Remove(filepath.Join(m.dir, pendingFile))
+}
+
+// Resume picks up a restore that was waiting when the daemon stopped. Call it
+// before anything reads the configuration: a window that has already expired
+// rolls back here, so the node starts on the configuration that was safe.
+func (m *Manager) Resume() error {
+	raw, err := os.ReadFile(filepath.Join(m.dir, pendingFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var saved savedPending
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		m.clearPendingFile()
+		return fmt.Errorf("pending restore unreadable: %w", err)
+	}
+	path, err := m.versionPath(saved.RevertToID)
+	if err != nil {
+		m.clearPendingFile()
+		return err
+	}
+	preBytes, err := os.ReadFile(path)
+	if err != nil {
+		m.clearPendingFile()
+		return err
+	}
+	remaining := time.Until(saved.ExpiresAt)
+	if remaining <= 0 {
+		_, err := m.applyPreBytes(preBytes)
+		if m.hooks.OnAutoRevert != nil {
+			m.hooks.OnAutoRevert(saved.RestoredID, saved.RevertToID, err)
+		}
+		if err != nil {
+			return err
+		}
+		m.clearPendingFile()
+		return nil
+	}
+	remaining = max(remaining, minResumeWindow)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextToken++
+	tok := m.nextToken
+	m.pending = &pendingRestore{
+		token: tok, restoredID: saved.RestoredID, revertToID: saved.RevertToID, summary: saved.Summary,
+		startedAt: saved.StartedAt, expiresAt: time.Now().Add(remaining), preBytes: preBytes,
+		generation: m.cfg.Generation(),
+		timer:      time.AfterFunc(remaining, func() { m.expirePending(tok) }),
+	}
+	return nil
 }
 
 type diskVersion struct {
@@ -405,6 +497,13 @@ func (m *Manager) Restore(id string, confirmFor time.Duration) (*RestoreResult, 
 		m.mu.Unlock()
 		return nil, err
 	}
+	if confirmFor > 0 {
+		// A rollback that could not apply is no rollback: find out now.
+		if _, err := decodeAndValidate(preBytes); err != nil {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("the current configuration could not be rolled back to: %w", err)
+		}
+	}
 
 	backupID, err := writeHistorySnapshot(m.dir, preBytes)
 	if err != nil {
@@ -418,50 +517,87 @@ func (m *Manager) Restore(id string, confirmFor time.Duration) (*RestoreResult, 
 	}
 	summary := SummarizeKeys(keys)
 
-	if err := m.cfg.Update(func(c *config.Config) {
-		// Undoing a network change must not bring back a password the owner
-		// has since changed, or sign everyone out.
-		adminHash, sessionKey := c.API.AdminHash, c.API.SessionKey
-		c.ApplyValues(candidate)
-		c.API.AdminHash, c.API.SessionKey = adminHash, sessionKey
-	}); err != nil {
+	var pend *pendingRestore
+	if confirmFor > 0 {
+		m.nextToken++
+		now := time.Now().UTC()
+		pend = &pendingRestore{
+			token:      m.nextToken,
+			restoredID: id,
+			revertToID: backupID,
+			summary:    summary,
+			startedAt:  now,
+			expiresAt:  now.Add(confirmFor),
+			preBytes:   preBytes,
+		}
+		// On disk before the change: a power cut straight after it must still
+		// end in a rollback.
+		if err := m.savePending(pend); err != nil {
+			_ = os.Remove(filepath.Join(m.dir, backupID+".yaml"))
+			m.mu.Unlock()
+			return nil, fmt.Errorf("record the pending restore: %w", err)
+		}
+	}
+
+	if err := m.cfg.Update(func(c *config.Config) { adopt(c, candidate) }); err != nil {
 		_ = os.Remove(filepath.Join(m.dir, backupID+".yaml"))
+		m.clearPendingFile()
 		m.mu.Unlock()
 		return nil, err
 	}
 
 	var status PendingStatus
-	if confirmFor > 0 {
-		m.nextToken++
-		tok := m.nextToken
-		now := time.Now().UTC()
-		exp := now.Add(confirmFor)
-		pend := &pendingRestore{
-			token:      tok,
-			restoredID: id,
-			revertToID: backupID,
-			summary:    summary,
-			startedAt:  now,
-			expiresAt:  exp,
-			preBytes:   preBytes,
-		}
+	if pend != nil {
+		tok := pend.token
+		pend.generation = m.cfg.Generation()
 		pend.timer = time.AfterFunc(confirmFor, func() {
 			m.expirePending(tok)
 		})
 		m.pending = pend
-		status = pendingStatusLocked(pend, now)
+		status = pendingStatusLocked(pend, pend.startedAt)
 	}
 	m.mu.Unlock()
 
-	m.notifyApply(keys)
+	if confirmFor > 0 {
+		// Applying can take minutes (a list change rebuilds the index), and
+		// the window to confirm is already running.
+		go m.notifyApply(keys)
+	} else {
+		m.notifyApply(keys)
+	}
 
 	return &RestoreResult{
-		RestoredID: id,
-		BackupID:   backupID,
-		Keys:       keys,
-		Summary:    summary,
-		Pending:    status,
+		RestoredID:      id,
+		BackupID:        backupID,
+		Keys:            keys,
+		Summary:         summary,
+		Pending:         status,
+		RestartRequired: NeedsRestart(keys),
 	}, nil
+}
+
+// adopt takes a stored configuration, except what a restore must not move:
+// undoing a network change must not bring back a password the owner has since
+// changed or sign everyone out, and where the database and the interface live
+// are set in the file by hand, never through the API.
+func adopt(c, src *config.Config) {
+	adminHash, sessionKey, listen, store := c.API.AdminHash, c.API.SessionKey, c.API.Listen, c.Store.Path
+	c.ApplyValues(src)
+	c.API.AdminHash, c.API.SessionKey, c.API.Listen, c.Store.Path = adminHash, sessionKey, listen, store
+}
+
+// NeedsRestart picks out the keys that no running subsystem reloads.
+func NeedsRestart(keys []string) []string {
+	out := []string{}
+	for _, k := range keys {
+		switch {
+		case strings.HasPrefix(k, "network.intercept"):
+		case k == "mode", k == "dns.listen", k == "network", k == "dhcp",
+			strings.HasPrefix(k, "network."), strings.HasPrefix(k, "dhcp."):
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // Confirm cancels an active commit-confirm timer and keeps the restored version.
@@ -476,6 +612,7 @@ func (m *Manager) Confirm() (string, error) {
 	}
 	restoredID := m.pending.restoredID
 	m.pending = nil
+	m.clearPendingFile()
 	m.mu.Unlock()
 	return restoredID, nil
 }
@@ -492,8 +629,7 @@ func (m *Manager) Revert() (string, error) {
 		m.pending.timer.Stop()
 	}
 	pend := m.pending
-	m.pending = nil
-	revertKeys, err := m.applyPreBytesLocked(pend.preBytes)
+	revertKeys, err := m.rollbackLocked(pend)
 	m.mu.Unlock()
 	if err != nil {
 		return "", err
@@ -502,6 +638,28 @@ func (m *Manager) Revert() (string, error) {
 	return pend.revertToID, nil
 }
 
+// rollbackLocked puts the pre-restore configuration back. If that fails the
+// restore stays pending and is tried again: stopping here would leave the
+// restored configuration in place with nothing left to undo it.
+func (m *Manager) rollbackLocked(p *pendingRestore) ([]string, error) {
+	edited := m.cfg.Generation() != p.generation
+	keys, err := m.applyPreBytes(p.preBytes)
+	if err != nil {
+		tok := p.token
+		p.timer = time.AfterFunc(revertRetry, func() { m.expirePending(tok) })
+		return nil, err
+	}
+	m.pending = nil
+	m.clearPendingFile()
+	if edited && m.hooks.OnEditsLost != nil {
+		m.hooks.OnEditsLost(p.restoredID)
+	}
+	return keys, nil
+}
+
+// revertRetry is how soon a rollback that failed is tried again.
+const revertRetry = time.Minute
+
 func (m *Manager) expirePending(token uint64) {
 	m.mu.Lock()
 	if m.pending == nil || m.pending.token != token {
@@ -509,8 +667,7 @@ func (m *Manager) expirePending(token uint64) {
 		return
 	}
 	pend := m.pending
-	m.pending = nil
-	revertKeys, err := m.applyPreBytesLocked(pend.preBytes)
+	revertKeys, err := m.rollbackLocked(pend)
 	m.mu.Unlock()
 
 	if err == nil {
@@ -521,16 +678,14 @@ func (m *Manager) expirePending(token uint64) {
 	}
 }
 
-func (m *Manager) applyPreBytesLocked(preBytes []byte) ([]string, error) {
+func (m *Manager) applyPreBytes(preBytes []byte) ([]string, error) {
 	preCfg, err := decodeAndValidate(preBytes)
 	if err != nil {
 		return nil, err
 	}
 	curBytes, _ := m.currentBytes()
 	keys := ChangedKeys(curBytes, preBytes)
-	if err := m.cfg.Update(func(c *config.Config) {
-		c.ApplyValues(preCfg)
-	}); err != nil {
+	if err := m.cfg.Update(func(c *config.Config) { adopt(c, preCfg) }); err != nil {
 		return nil, err
 	}
 	return keys, nil
@@ -691,6 +846,8 @@ func redactNode(n *yaml.Node, parent string) {
 	if n == nil {
 		return
 	}
+	// A hand-edited file can hold a commented-out key beside any line.
+	n.HeadComment, n.LineComment, n.FootComment = "", "", ""
 	switch n.Kind {
 	case yaml.DocumentNode:
 		for _, child := range n.Content {
@@ -700,11 +857,10 @@ func redactNode(n *yaml.Node, parent string) {
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			kNode := n.Content[i]
 			vNode := n.Content[i+1]
+			// The parser hangs most comments on the key, not the value.
+			kNode.HeadComment, kNode.LineComment, kNode.FootComment = "", "", ""
 			hookField := strings.Contains(strings.ToLower(parent), "webhook") && (kNode.Value == "url" || kNode.Value == "headers")
 			if IsSecretKey(kNode.Value) || hookField {
-				kNode.HeadComment = ""
-				kNode.LineComment = ""
-				kNode.FootComment = ""
 				// Mutate vNode in place as well so any YAML alias pointing at
 				// this node also sees the redacted placeholder.
 				*vNode = yaml.Node{
@@ -909,8 +1065,8 @@ func isEmptyCollectionOrNull(n *yaml.Node) bool {
 	if n == nil {
 		return true
 	}
-	if n.Kind == yaml.ScalarNode && (n.Tag == "!!null" || n.Value == "") {
-		return false
+	if n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
+		return true
 	}
 	if (n.Kind == yaml.SequenceNode || n.Kind == yaml.MappingNode) && len(n.Content) == 0 {
 		return true

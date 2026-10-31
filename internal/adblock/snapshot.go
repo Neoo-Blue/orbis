@@ -15,7 +15,7 @@ import (
 // rebuild runs instead.
 
 // indexVersion changes when the hash or the layout does.
-const indexVersion = 1
+const indexVersion = 2
 
 type savedRegex struct {
 	Pattern, Source, Category string
@@ -28,7 +28,9 @@ type savedEntry struct {
 }
 
 type savedHeader struct {
-	Version      int
+	Version int
+	// Fingerprint names what the index was built from; see Manager.fingerprint.
+	Fingerprint  string
 	Count        int
 	Entries      []savedEntry
 	Regexes      []savedRegex
@@ -45,26 +47,37 @@ func (s *domainSet) write(w *bufio.Writer) error {
 	return binary.Write(w, binary.LittleEndian, s.vals)
 }
 
-func (s *domainSet) read(r *bufio.Reader) error {
+// read loads one table. A table the file cannot hold, or one with no empty
+// slot, would otherwise exhaust memory or spin a lookup forever on the DNS path.
+func (s *domainSet) read(r *bufio.Reader, fileSize int64) error {
 	var head [2]uint64
 	if err := binary.Read(r, binary.LittleEndian, &head); err != nil {
 		return err
 	}
 	size := head[1]
-	if size&(size-1) != 0 || size > 1<<30 || head[0] > size {
+	if size&(size-1) != 0 || size > uint64(fileSize)/12 || head[0] >= max(size, 1) {
 		return fmt.Errorf("bad table size %d", size)
 	}
 	s.n, s.keys, s.vals = int(head[0]), make([]uint64, size), make([]uint32, size)
 	if err := binary.Read(r, binary.LittleEndian, s.keys); err != nil {
 		return err
 	}
+	used := 0
+	for _, k := range s.keys {
+		if k != 0 {
+			used++
+		}
+	}
+	if used != s.n {
+		return fmt.Errorf("table says %d entries, holds %d", s.n, used)
+	}
 	return binary.Read(r, binary.LittleEndian, s.vals)
 }
 
 // SaveIndex writes the list index to path, atomically.
-func (m *Matcher) SaveIndex(path string) error {
+func (m *Matcher) SaveIndex(path, fingerprint string) error {
 	idx := m.idx.Load()
-	head := savedHeader{Version: indexVersion, Count: idx.count}
+	head := savedHeader{Version: indexVersion, Fingerprint: fingerprint, Count: idx.count}
 	for _, e := range idx.entries {
 		head.Entries = append(head.Entries, savedEntry{e.source, e.category, e.important, e.local})
 	}
@@ -99,13 +112,18 @@ func (m *Matcher) SaveIndex(path string) error {
 	return os.Rename(tmp, path)
 }
 
-// LoadIndex replaces the list index with one saved by SaveIndex.
-func (m *Matcher) LoadIndex(path string) error {
+// LoadIndex replaces the list index with one saved by SaveIndex for the same
+// fingerprint.
+func (m *Matcher) LoadIndex(path, fingerprint string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
 	r := bufio.NewReaderSize(f, 1<<20)
 	var head savedHeader
 	if err := gob.NewDecoder(r).Decode(&head); err != nil {
@@ -114,13 +132,16 @@ func (m *Matcher) LoadIndex(path string) error {
 	if head.Version != indexVersion {
 		return fmt.Errorf("index version %d, want %d", head.Version, indexVersion)
 	}
+	if head.Fingerprint != fingerprint {
+		return fmt.Errorf("built from a different set of lists")
+	}
 	idx := newIndex()
 	idx.ids, idx.count = nil, head.Count
 	for _, e := range head.Entries {
 		idx.entries = append(idx.entries, entry{e.Source, e.Category, e.Important, e.Local})
 	}
 	for _, s := range []*domainSet{&idx.exact, &idx.wildcard, &idx.allowExact, &idx.allowWildcard} {
-		if err := s.read(r); err != nil {
+		if err := s.read(r, info.Size()); err != nil {
 			return err
 		}
 		for i, k := range s.keys {

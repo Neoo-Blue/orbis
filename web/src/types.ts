@@ -1606,4 +1606,5 @@ export interface ConfigHistoryRestoreResult {
   summary: string
   pending: ConfigHistoryPending
   config: AppConfig
+  restart_required: string[]
 }

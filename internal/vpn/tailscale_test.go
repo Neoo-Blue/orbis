@@ -83,3 +83,17 @@ func TestGenerateKeypairProducesUsableKeys(t *testing.T) {
 		t.Error("two generated private keys were identical")
 	}
 }
+
+func TestAStatusReadBeforeAChangeIsNotCachedAfterIt(t *testing.T) {
+	ts := &Tailscale{}
+	era := ts.era
+	ts.invalidate()
+	ts.remember(&Status{}, era)
+	if ts.cached != nil {
+		t.Fatal("this describes the state before the change")
+	}
+	ts.remember(&Status{}, ts.era)
+	if ts.cached == nil {
+		t.Fatal("a current read should be kept")
+	}
+}

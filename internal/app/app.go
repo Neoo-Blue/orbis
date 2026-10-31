@@ -214,7 +214,11 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	historyDir := filepath.Join(filepath.Dir(cfg.Store.Path), "config-history")
 	cfg.SetHistoryDir(historyDir)
 	a.History = confighistory.New(historyDir, cfg, confighistory.Hooks{
-		OnApply: a.ApplyConfigChanges,
+		OnApply: a.applyRestored,
+		OnEditsLost: func(restoredID string) {
+			logf("confighistory: rolling back %s also undid changes saved while it was waiting", restoredID)
+			st.Audit("timer", "config.history.edits_lost", restoredID, "", "", "ok")
+		},
 		OnAutoRevert: func(restoredID, revertToID string, err error) {
 			if err != nil {
 				logf("confighistory: auto-revert from %s to %s failed: %v", restoredID, revertToID, err)
@@ -225,6 +229,11 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 			st.Audit("timer", "config.history.autorevert", restoredID, restoredID, revertToID, "ok")
 		},
 	})
+	// Before the subsystems below read the configuration: if the node went down
+	// with a restore unconfirmed, it has to come up on the one that was safe.
+	if err := a.History.Resume(); err != nil {
+		logf("confighistory: %v", err)
+	}
 
 	// Flow tracking.
 	flows.SetAppClassifier(dpi.ClassifyApp)
@@ -541,7 +550,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 
 	// DNS.
 	a.BlockGuard = blockpage.NewGuard()
-	a.BlockPage = &blockpage.Server{Explain: a.explainBlock, Guard: a.BlockGuard, Log: logf}
+	a.BlockPage = &blockpage.Server{Explain: a.explainBlock, Claims: a.ClaimsBlockedHost, Guard: a.BlockGuard, Log: logf}
 	if a.CA != nil {
 		a.BlockPage.Leaf = a.CA.Leaf
 	}
@@ -639,11 +648,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 func (a *App) Start() {
 	cfg := a.Cfg.Snapshot()
 
-	if a.BlockPage.Leaf != nil {
-		if err := a.BlockPage.ListenTLS(":443"); err != nil {
-			a.log("blockpage: https block page unavailable: %v", err)
-		}
-	}
+	a.SyncBlockPage()
 
 	// VLANs come first: zones, DHCP scopes and capture all refer to
 	// interfaces that have to exist before anything else looks for them.

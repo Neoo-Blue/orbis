@@ -1305,6 +1305,11 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // writable through the API; anything that could brick the node (the store
 // path, the API listener) is deliberately config-file-only.
 func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	// A rollback puts back the whole file, so this edit would vanish with it.
+	if mgr := s.historyManager(); mgr != nil && mgr.Pending().Pending {
+		writeErr(w, http.StatusConflict, "a restore is waiting for confirmation: keep it or undo it first")
+		return
+	}
 	var patch map[string]any
 	if err := decodeJSON(r, &patch); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())

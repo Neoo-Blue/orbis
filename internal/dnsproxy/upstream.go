@@ -32,6 +32,7 @@ type Upstream struct {
 	httpc    *http.Client
 	mu       sync.Mutex
 	idle     []idleConn
+	closed   bool
 	lastErr  error
 	failures int
 	// coolUntil suppresses an upstream that keeps failing so a dead resolver
@@ -240,8 +241,10 @@ func (u *Upstream) Exchange(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
 }
 
 // exchangeStream runs one query over a reused connection, one query at a time
-// per connection. A connection the resolver hung up on while it sat idle is
-// replaced once, invisibly; anything that fails on a fresh dial is real.
+// per connection. A connection that fails after sitting idle is replaced once,
+// invisibly, and the rest of the pool goes with it: what killed one, a NAT flap
+// say, killed them all, and trying each in turn would use up the whole timeout
+// without dialling. Anything that fails on a fresh dial is real.
 func (u *Upstream) exchangeStream(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
 	for {
 		conn, reused := u.takeConn(), true
@@ -267,6 +270,7 @@ func (u *Upstream) exchangeStream(ctx context.Context, m *dns.Msg) (*dns.Msg, er
 		if !reused || ctx.Err() != nil {
 			return nil, err
 		}
+		u.dropIdle()
 	}
 }
 
@@ -294,7 +298,7 @@ func (u *Upstream) takeConn() *dns.Conn {
 
 func (u *Upstream) putConn(conn *dns.Conn) {
 	u.mu.Lock()
-	if len(u.idle) >= maxIdleConns {
+	if u.closed || len(u.idle) >= maxIdleConns {
 		u.mu.Unlock()
 		conn.Close()
 		return
@@ -303,8 +307,15 @@ func (u *Upstream) putConn(conn *dns.Conn) {
 	u.mu.Unlock()
 }
 
-// Close drops the idle connections when the upstream leaves the pool.
+// Close retires the upstream when it leaves the pool.
 func (u *Upstream) Close() {
+	u.mu.Lock()
+	u.closed = true
+	u.mu.Unlock()
+	u.dropIdle()
+}
+
+func (u *Upstream) dropIdle() {
 	u.mu.Lock()
 	idle := u.idle
 	u.idle = nil

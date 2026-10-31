@@ -400,3 +400,70 @@ func TestBlockPageIsOfferedOnlyWhereItCanWork(t *testing.T) {
 		t.Fatalf("switched off, answered %v", a.A)
 	}
 }
+
+func TestACloakedNameNeverResolvesToThisNode(t *testing.T) {
+	up := startUpstream(t, 0, func(q dns.Question, m *dns.Msg) {
+		m.Answer = []dns.RR{
+			&dns.CNAME{Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 300}, Target: "adnet.example."},
+			&dns.A{Hdr: dns.RR_Header{Name: "adnet.example.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: []byte{93, 184, 216, 34}},
+		}
+	})
+	s, matcher := newTestServer(t, true, up)
+	b := adblock.NewBuilder()
+	b.AddBlock("adnet.example", "test", "ads", true)
+	matcher.Commit(b)
+	s.cfg.DNS.SinkholeIPv4, s.cfg.DNS.SinkholeIPv6 = "0.0.0.0", "::"
+	s.cfg.DNS.BlockPage = true
+	s.hooks.BlockPageAddr = func(netip.Addr) (netip.Addr, bool) { return netip.MustParseAddr("192.168.50.75"), true }
+
+	// Whoever owns this name owns what it serves. Pointing it at this node
+	// would give their page our origin, which is DNS rebinding.
+	for _, label := range []string{"forwarded", "cached"} {
+		got := ask(t, s, "harmless.attacker.example", dns.TypeA)
+		if len(got.Answer) != 1 {
+			t.Fatalf("%s: %v", label, got.Answer)
+		}
+		if a := got.Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
+			t.Fatalf("%s answer %v", label, a.A)
+		}
+	}
+	if a := ask(t, s, "adnet.example", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4(192, 168, 50, 75)) {
+		t.Fatalf("the blocked name itself should get the page, got %v", a.A)
+	}
+}
+
+func TestOneDeadPooledConnectionFlushesTheRest(t *testing.T) {
+	good := startUpstream(t, 0, goodAnswer)
+	s, _ := newTestServer(t, false, good)
+	u := s.upstreams[0]
+	for range maxIdleConns {
+		a, b := net.Pipe()
+		b.Close()
+		u.idle = append(u.idle, idleConn{conn: &dns.Conn{Conn: a}, since: time.Now()})
+	}
+	start := time.Now()
+	m := new(dns.Msg)
+	m.SetQuestion("example.com.", dns.TypeA)
+	if _, err := u.Exchange(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("working through dead connections took %v", elapsed)
+	}
+	if n := good.conns.Load(); n != 1 {
+		t.Fatalf("dialled %d times", n)
+	}
+}
+
+func TestAConnectionReturnedAfterCloseIsNotKept(t *testing.T) {
+	good := startUpstream(t, 0, goodAnswer)
+	s, _ := newTestServer(t, false, good)
+	u := s.upstreams[0]
+	u.Close()
+	a, b := net.Pipe()
+	defer b.Close()
+	u.putConn(&dns.Conn{Conn: a})
+	if len(u.idle) != 0 {
+		t.Fatal("a retired upstream kept a connection")
+	}
+}

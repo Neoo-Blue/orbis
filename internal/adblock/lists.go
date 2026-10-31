@@ -41,7 +41,7 @@ func NewManager(st *store.Store, m *Matcher, cfg *config.Config, log func(string
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Manager{
+	mgr := &Manager{
 		st:      st,
 		matcher: m,
 		cfg:     cfg,
@@ -58,6 +58,8 @@ func NewManager(st *store.Store, m *Matcher, cfg *config.Config, log func(string
 			},
 		},
 	}
+	st.OnListChange(mgr.markDirty)
+	return mgr
 }
 
 // SyncConfig reconciles the configured list set with what is in the database,
@@ -286,6 +288,9 @@ func (m *Manager) Rebuild(ctx context.Context) error {
 }
 
 func (m *Manager) rebuildLists(ctx context.Context) error {
+	if err := m.SyncConfig(); err != nil {
+		return err
+	}
 	b := NewBuilder()
 	badRegex := 0
 	if err := m.st.AllBlockDomains(ctx, func(domain, source, category string, kind int, important bool) {
@@ -333,11 +338,45 @@ func (m *Manager) rebuildLists(ctx context.Context) error {
 	m.mu.Unlock()
 	m.log("adblock: index rebuilt, %d entries", b.Count())
 	if path := m.snapshotPath(); path != "" {
-		if err := m.matcher.SaveIndex(path); err != nil {
+		if err := m.matcher.SaveIndex(path, m.fingerprint()); err != nil {
 			m.log("adblock: index not saved: %v", err)
+		} else {
+			_ = os.Remove(path + dirtySuffix)
 		}
 	}
 	return m.RebuildLocal()
+}
+
+// dirtySuffix names the marker left while the stored rows are ahead of the
+// saved index. It goes down before the first row changes and comes up only once
+// a new index is on disk, so a power cut in between means a rebuild at boot
+// rather than serving the old index until some list next changes.
+const dirtySuffix = ".dirty"
+
+func (m *Manager) markDirty() {
+	if path := m.snapshotPath(); path != "" {
+		_ = os.WriteFile(path+dirtySuffix, nil, 0o600)
+	}
+}
+
+// fingerprint is what the index is built from besides list contents: which
+// lists are on and the built-in sets. Editing any of them in the YAML and
+// restarting must not bring back an index built without that edit.
+func (m *Manager) fingerprint() string {
+	metas, err := m.st.ListMetas()
+	if err != nil {
+		return ""
+	}
+	cfg := m.cfg.Snapshot()
+	var b strings.Builder
+	fmt.Fprintf(&b, "bypass=%t streaming=%t", cfg.AdBlock.BlockDNSBypass, cfg.AdBlock.StreamingAds)
+	for _, l := range metas {
+		if l.Enabled {
+			b.WriteByte('\n')
+			b.WriteString(l.Name)
+		}
+	}
+	return b.String()
 }
 
 // snapshotPath is where the built index is kept, next to the database.
@@ -356,7 +395,15 @@ func (m *Manager) restore() bool {
 		return false
 	}
 	start := time.Now()
-	if err := m.matcher.LoadIndex(path); err != nil {
+	if err := m.SyncConfig(); err != nil {
+		m.log("adblock: %v", err)
+		return false
+	}
+	if _, err := os.Stat(path + dirtySuffix); err == nil {
+		m.log("adblock: lists changed after the saved index was built, rebuilding")
+		return false
+	}
+	if err := m.matcher.LoadIndex(path, m.fingerprint()); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			m.log("adblock: saved index unusable, rebuilding: %v", err)
 		}

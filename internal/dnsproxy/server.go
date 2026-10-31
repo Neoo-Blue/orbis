@@ -476,7 +476,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		if chain := cnameChain(resp); len(chain) > 0 {
 			logEntry.CNAMEChain = chain
 			if match := s.matcher.LookupChain(chain); match.Blocked {
-				m := s.blockedReply(r, q, cfg, match, clientAddr)
+				m := s.blockedReply(r, q, cfg, match, netip.Addr{})
 				logEntry.Blocked = true
 				logEntry.BlockSource = match.Source
 				logEntry.RCode = dns.RcodeToString[m.Rcode]
@@ -606,7 +606,7 @@ func (s *Server) countryBlocked(r *dns.Msg, q dns.Question, cfg config.Config, c
 	if !blocked {
 		return nil, ""
 	}
-	return s.blockedReply(r, q, cfg, adblock.Match{Blocked: true, Source: "country:" + code, Rule: code}, client), code
+	return s.blockedReply(r, q, cfg, adblock.Match{Blocked: true, Source: "country:" + code, Rule: code}, netip.Addr{}), code
 }
 
 // evaluateBlock applies the global matcher and then any per-client policy.
@@ -674,7 +674,11 @@ func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, mat
 	}
 
 	sink4, sink6 := cfg.DNS.SinkholeIPv4, cfg.DNS.SinkholeIPv6
-	if cfg.DNS.BlockPage && s.hooks.BlockPageAddr != nil {
+	// The page is only offered for a name blocked in its own right, passed
+	// here with the client. A CNAME or country verdict is about where a name
+	// leads, and the name still belongs to whoever runs it: answering it with
+	// this node would be DNS rebinding, putting their page on our origin.
+	if cfg.DNS.BlockPage && s.hooks.BlockPageAddr != nil && client.IsValid() {
 		if page, ok := s.hooks.BlockPageAddr(client); ok {
 			// With no AAAA a browser goes straight to the A answer. The
 			// sinkhole's :: would make it try that first and fail.
@@ -924,17 +928,6 @@ func (s *Server) race(ctx context.Context, ups []*Upstream, query *dns.Msg) (*dn
 		return nil, "", lastErr
 	}
 	return nil, "", fmt.Errorf("all upstreams returned no answer")
-}
-
-// CachedChain returns the CNAME chain of a name's cached answer, which is how
-// the block page explains a name that is clean itself but leads somewhere that
-// is not.
-func (s *Server) CachedChain(name string) []string {
-	q := dns.Question{Name: dns.Fqdn(name), Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	if m, ok := s.cache.Get(q, false); ok {
-		return cnameChain(m)
-	}
-	return nil
 }
 
 // noteAnswers feeds resolved addresses back to the flow tracker so future

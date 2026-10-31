@@ -240,6 +240,9 @@ export function ChangeTimelinePage() {
       } else {
         toast('Configuration restored and previous version archived.', 'ok')
       }
+      if (res.restart_required.length) {
+        toast(`Takes effect after a restart, so the safety timer cannot test it: ${res.restart_required.join(', ')}`, 'info')
+      }
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Restore failed', 'err')
     } finally {

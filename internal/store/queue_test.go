@@ -599,3 +599,26 @@ func TestWriteFlowsDuplicateIDInOneBatch(t *testing.T) {
 		}
 	}
 }
+
+func TestAListChangeIsAnnouncedAndUnblessedBeforeItsFirstRow(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.ReplaceListDomains(ctx, "l", "ads", ListEntries{Exact: []string{"a.example"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertListMeta(ListMeta{Name: "l", URL: "https://example.com/l", ETag: "etag-1"}); err != nil {
+		t.Fatal(err)
+	}
+	notes := 0
+	s.OnListChange(func() { notes++ })
+	if _, err := s.ReplaceListDomains(ctx, "l", "ads", ListEntries{Exact: []string{"a.example"}}); err != nil || notes != 0 {
+		t.Fatalf("no change, %d notes: %v", notes, err)
+	}
+	if _, err := s.ReplaceListDomains(ctx, "l", "ads", ListEntries{Exact: []string{"b.example"}}); err != nil || notes != 1 {
+		t.Fatalf("%d notes: %v", notes, err)
+	}
+	metas, err := s.ListMetas()
+	if err != nil || len(metas) != 1 || metas[0].ETag != "" {
+		t.Fatalf("the etag survived a rewrite: %+v %v", metas, err)
+	}
+}

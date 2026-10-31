@@ -258,3 +258,39 @@ func TestConfigHistoryAuthRedactionRestoreConfirmAndAudit(t *testing.T) {
 		}
 	}
 }
+
+func TestAConfigEditIsRefusedWhileARestoreWaits(t *testing.T) {
+	h, cfg, _, mgr := newTestConfigHistoryHandler(t)
+	for _, name := range []string{"before", "current"} {
+		if err := cfg.Update(func(c *config.Config) { c.Node.Name = name }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := mgr.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := mgr.Restore(entries[0].ID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RestartRequired == nil {
+		t.Fatal("the reply must always carry the list")
+	}
+	patch := func() int {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPatch, "/api/config", strings.NewReader(`{"node.name":"edited"}`))
+		r.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := patch(); code != http.StatusConflict {
+		t.Fatalf("code %d, and the rollback would throw this edit away", code)
+	}
+	if _, err := mgr.Confirm(); err != nil {
+		t.Fatal(err)
+	}
+	if code := patch(); code != http.StatusOK {
+		t.Fatalf("code %d once the restore is settled", code)
+	}
+}

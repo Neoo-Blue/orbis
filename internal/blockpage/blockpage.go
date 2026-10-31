@@ -81,13 +81,65 @@ type Page struct {
 type Server struct {
 	// Explain fills in a page for a name asked for by a client.
 	Explain func(ctx context.Context, host string, client netip.Addr) Page
+	// Claims reports whether a name is one this client was pointed here for.
+	Claims func(hostport string, client netip.Addr) bool
 	// Leaf mints a certificate for a name from the Orbis CA.
 	Leaf func(host string) (*tls.Certificate, error)
 	// Guard learns which devices can show the page over HTTPS.
 	Guard *Guard
 	Log   func(string, ...any)
 
+	mu  sync.Mutex
 	srv *http.Server
+}
+
+// maxMinting bounds certificates signed at once. Each one is a signature with
+// the CA key, tens of milliseconds on a Raspberry Pi that also answers DNS, so
+// a device looping through names gets a failed handshake, not all four cores.
+const maxMinting = 2
+
+var errNotBlocked = errors.New("not a blocked name")
+
+// hostname reports a plausible DNS name, and nothing else reaches the CA.
+func hostname(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// certificate answers a TLS hello: only for a name this client was sent here
+// for, and only as fast as the node can spare.
+func (s *Server) certificate(hello *tls.ClientHelloInfo, refused *sync.Map, minting chan struct{}) (*tls.Certificate, error) {
+	client := netip.Addr{}
+	remote := ""
+	if hello.Conn != nil {
+		remote = hello.Conn.RemoteAddr().String()
+		if ap, err := netip.ParseAddrPort(remote); err == nil {
+			client = ap.Addr().Unmap()
+		}
+	}
+	name := hello.ServerName
+	if !hostname(name) || (s.Claims != nil && !s.Claims(name, client)) {
+		// This one says nothing about whether the client trusts the CA.
+		refused.Store(remote, true)
+		return nil, errNotBlocked
+	}
+	select {
+	case minting <- struct{}{}:
+		defer func() { <-minting }()
+	default:
+		refused.Store(remote, true)
+		return nil, errors.New("too many certificates at once")
+	}
+	return s.Leaf(name)
 }
 
 // ServeHTTP renders the page for a browser opening the blocked site, and
@@ -168,8 +220,10 @@ func (s *Server) ListenTLS(addr string) error {
 	if err != nil {
 		return err
 	}
-	var seen sync.Map // net.Conn that sent a request or finished a handshake
-	s.srv = &http.Server{
+	var seen sync.Map    // net.Conn that sent a request or finished a handshake
+	var refused sync.Map // remote address we turned away ourselves
+	minting := make(chan struct{}, maxMinting)
+	srv := &http.Server{
 		Handler:           s,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       30 * time.Second,
@@ -179,11 +233,7 @@ func (s *Server) ListenTLS(addr string) error {
 			MinVersion: tls.VersionTLS12,
 			NextProtos: []string{"http/1.1"},
 			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				name := hello.ServerName
-				if name == "" {
-					name = "orbis.lan"
-				}
-				return s.Leaf(name)
+				return s.certificate(hello, &refused, minting)
 			},
 		},
 		ConnState: func(c net.Conn, st http.ConnState) {
@@ -193,7 +243,7 @@ func (s *Server) ListenTLS(addr string) error {
 			case http.StateClosed:
 				_, ok := seen.LoadAndDelete(c)
 				tc, isTLS := c.(*tls.Conn)
-				if !isTLS || s.Guard == nil {
+				if _, ours := refused.LoadAndDelete(c.RemoteAddr().String()); ours || !isTLS || s.Guard == nil {
 					return
 				}
 				ok = ok || tc.ConnectionState().HandshakeComplete
@@ -205,17 +255,30 @@ func (s *Server) ListenTLS(addr string) error {
 		// A refused certificate is expected here, not worth a journal line.
 		ErrorLog: log.New(io.Discard, "", 0),
 	}
+	s.mu.Lock()
+	s.srv = srv
+	s.mu.Unlock()
 	go func() {
-		if err := s.srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) && s.Log != nil {
+		if err := srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) && s.Log != nil {
 			s.Log("blockpage: listener stopped: %v", err)
 		}
 	}()
 	return nil
 }
 
+// Listening reports whether the HTTPS listener is up.
+func (s *Server) Listening() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.srv != nil
+}
+
 func (s *Server) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.srv != nil {
 		_ = s.srv.Close()
+		s.srv = nil
 	}
 }
 

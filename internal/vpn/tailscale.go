@@ -32,6 +32,7 @@ type Tailscale struct {
 	lastSync   time.Time
 	cached     *Status
 	refreshing bool
+	era        uint64 // bumped when the cache is invalidated
 }
 
 // Status is the subset of `tailscale status --json` the UI needs, plus the
@@ -370,6 +371,7 @@ func (t *Tailscale) Summary(ctx context.Context) *Status {
 func (t *Tailscale) fetchStatus(ctx context.Context) *Status {
 	t.mu.Lock()
 	lastErr := t.lastError
+	era := t.era
 	t.mu.Unlock()
 
 	// Every slice is initialised, not left nil. A nil Go slice marshals to
@@ -396,9 +398,7 @@ func (t *Tailscale) fetchStatus(ctx context.Context) *Status {
 		}
 		// A failure is an answer too; not caching it meant a fork per poll
 		// for exactly as long as tailscale was unwell.
-		t.mu.Lock()
-		t.cached, t.lastSync = st, time.Now()
-		t.mu.Unlock()
+		t.remember(st, era)
 		cp := *st
 		return &cp
 	}
@@ -482,12 +482,19 @@ func (t *Tailscale) fetchStatus(ctx context.Context) *Status {
 		st.LastError = strings.Join(raw.Health, "; ")
 	}
 
-	t.mu.Lock()
-	t.cached = st
-	t.lastSync = time.Now()
-	t.mu.Unlock()
+	t.remember(st, era)
 	cp := *st
 	return &cp
+}
+
+// remember keeps a status unless a change invalidated the cache while it was
+// being read, in which case it describes the state before that change.
+func (t *Tailscale) remember(st *Status, era uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if era == t.era {
+		t.cached, t.lastSync = st, time.Now()
+	}
 }
 
 func convertNode(n *rawNode) Node {
@@ -527,7 +534,9 @@ func (t *Tailscale) OverlappingRoutes(ctx context.Context) []string {
 	if len(local) == 0 {
 		return nil
 	}
-	st := t.Status(ctx)
+	// This guards against taking the node off its own LAN, so it reads what is
+	// true now, not the last answer the status page was given.
+	st := t.fetchStatus(ctx)
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range st.Peers {
@@ -654,6 +663,7 @@ func (t *Tailscale) setError(msg string) {
 func (t *Tailscale) invalidate() {
 	t.mu.Lock()
 	t.cached = nil
+	t.era++
 	t.mu.Unlock()
 }
 

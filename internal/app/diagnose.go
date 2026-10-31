@@ -185,10 +185,6 @@ func (a *App) DiagnoseDomain(ctx context.Context, domain, clientID string, resol
 	var answers []string
 	if resolve {
 		chain, answers = a.resolveChain(ctx, name)
-	} else if a.DNS != nil {
-		chain = a.DNS.CachedChain(name)
-	}
-	if resolve || len(chain) > 0 {
 		if len(chain) > 0 && cfg.AdBlock.CNAMEUncloak {
 			if cm := a.Matcher.LookupChain(chain); cm.Blocked {
 				steps = append(steps, DiagnoseStep{

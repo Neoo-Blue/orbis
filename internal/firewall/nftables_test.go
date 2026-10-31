@@ -242,3 +242,22 @@ func TestParseCounters(t *testing.T) {
 		t.Error("a comment without an id separator should be ignored")
 	}
 }
+
+func TestBlockedNamesFailFastOnEveryOtherPort(t *testing.T) {
+	cfg := testConfig()
+	cfg.DNS.BlockPage = true
+	out, _ := renderRuleset(cfg, nil, renderExtras{})
+	if !strings.Contains(out, "iifname @zone_lan meta l4proto tcp reject with tcp reset") {
+		t.Fatalf("lan clients would wait for a timeout:\n%s", out)
+	}
+	if strings.Contains(out, "iifname @zone_wan meta l4proto tcp reject") {
+		t.Fatal("the WAN stays silent")
+	}
+	if strings.Index(out, "tcp dport { 80, 443 }") > strings.Index(out, "tcp reset") {
+		t.Fatal("the reset would shadow the page itself")
+	}
+	cfg.DNS.BlockPage = false
+	if out, _ = renderRuleset(cfg, nil, renderExtras{}); strings.Contains(out, "tcp reset") {
+		t.Fatal("with the page off there is nothing to fail fast for")
+	}
+}

@@ -2,10 +2,12 @@ package blockpage
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -129,5 +131,37 @@ func TestOnePinnedAppDoesNotUndoWhatABrowserProved(t *testing.T) {
 	}
 	if _, ok := g.AddrFor(c, now); !ok {
 		t.Fatal("a pinned app on a device that trusts the CA must not switch the page off")
+	}
+}
+
+func TestOnlyPlausibleHostnamesReachTheCA(t *testing.T) {
+	for name, want := range map[string]bool{
+		"ads.example.com": true, "a_b-c.example": true,
+		"": false, "bad name.example": false, "new\nline.example": false, "evil/../x": false,
+		strings.Repeat("a", 254): false,
+	} {
+		if got := hostname(name); got != want {
+			t.Errorf("%q = %v", name, got)
+		}
+	}
+}
+
+func TestCertificatesAreOnlyMintedForClaimedNames(t *testing.T) {
+	minted := 0
+	s := &Server{
+		Claims: func(host string, _ netip.Addr) bool { return host == "ads.example.com" },
+		Leaf:   func(string) (*tls.Certificate, error) { minted++; return &tls.Certificate{}, nil },
+	}
+	var refused sync.Map
+	minting := make(chan struct{}, 1)
+	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "bank.example.com"}, &refused, minting); err == nil || minted != 0 {
+		t.Fatalf("minted %d for a name nobody was sent here for: %v", minted, err)
+	}
+	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "ads.example.com"}, &refused, minting); err != nil || minted != 1 {
+		t.Fatalf("minted %d: %v", minted, err)
+	}
+	minting <- struct{}{}
+	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "ads.example.com"}, &refused, minting); err == nil || minted != 1 {
+		t.Fatalf("minted %d with no capacity left: %v", minted, err)
 	}
 }

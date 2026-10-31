@@ -240,6 +240,17 @@ func (s *Store) ReplaceListDomains(ctx context.Context, list, category string, e
 	}
 
 	changed := len(remove) + len(want)
+	if changed > 0 {
+		s.noteListChange()
+		// Until this finishes the rows are a mix of old and new, so a stale
+		// mirror answering "not modified" must not be able to bless them.
+		s.writeMu.Lock()
+		_, err := s.db.ExecContext(ctx, "UPDATE list_meta SET etag='' WHERE name=?", list)
+		s.writeMu.Unlock()
+		if err != nil {
+			return 0, err
+		}
+	}
 	for len(remove) > 0 {
 		if err := ctx.Err(); err != nil {
 			return 0, err
@@ -315,6 +326,22 @@ func (s *Store) deleteListRows(list string, domains []string) error {
 	return tx.Commit()
 }
 
+// OnListChange registers fn to run before any stored list row changes.
+func (s *Store) OnListChange(fn func()) {
+	s.mu.Lock()
+	s.listChanged = fn
+	s.mu.Unlock()
+}
+
+func (s *Store) noteListChange() {
+	s.mu.Lock()
+	fn := s.listChanged
+	s.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // TouchList records that a list was checked and has not changed, so it is not
 // fetched again until it is next due.
 func (s *Store) TouchList(name string) error {
@@ -370,6 +397,7 @@ func (s *Store) ListMetas() ([]ListMeta, error) {
 // DeleteList drops a list a chunk at a time, like ReplaceListDomains and for
 // the same reason.
 func (s *Store) DeleteList(name string) error {
+	s.noteListChange()
 	for {
 		s.writeMu.Lock()
 		res, err := s.db.Exec(`DELETE FROM block_domains WHERE rowid IN

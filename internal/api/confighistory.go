@@ -156,6 +156,8 @@ func (s *Server) handleRestoreConfigHistory(w http.ResponseWriter, r *http.Reque
 		"summary":     res.Summary,
 		"pending":     res.Pending,
 		"config":      s.cfg.Redacted(),
+
+		"restart_required": res.RestartRequired,
 	})
 }
 

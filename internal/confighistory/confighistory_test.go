@@ -521,3 +521,221 @@ func TestRestoreKeepsTheCurrentPasswordAndSessions(t *testing.T) {
 		t.Fatalf("restoring old settings brought back old credentials: %q %q", got.API.AdminHash, got.API.SessionKey)
 	}
 }
+
+// restorable leaves history holding "before" with "current" live.
+func restorable(t *testing.T, cfg *config.Config, mgr *Manager) string {
+	t.Helper()
+	for _, name := range []string{"before", "current"} {
+		if err := cfg.Update(func(c *config.Config) { c.Node.Name = name }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := mgr.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries[0].ID
+}
+
+func setExpiry(t *testing.T, dir string, at time.Time) {
+	t.Helper()
+	path := filepath.Join(dir, pendingFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved savedPending
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	saved.ExpiresAt = at
+	raw, _ = json.Marshal(saved)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestARestartInsideTheWindowKeepsTheRollback(t *testing.T) {
+	cfg, mgr, dir := newTestManager(t, Hooks{})
+	id := restorable(t, cfg, mgr)
+	if _, err := mgr.Restore(id, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	mgr.Stop()
+	setExpiry(t, dir, time.Now().Add(time.Second))
+
+	again := New(dir, cfg, Hooks{})
+	t.Cleanup(again.Stop)
+	if err := again.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	p := again.Pending()
+	if !p.Pending || p.RemainingSeconds < 25 {
+		t.Fatalf("the rollback must survive with time to confirm: %+v", p)
+	}
+	if _, err := again.Revert(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Snapshot().Node.Name; got != "current" {
+		t.Fatalf("node %q after the rollback", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, pendingFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a finished rollback left its record: %v", err)
+	}
+}
+
+func TestAWindowThatRanOutWhileDownRollsBackAtStart(t *testing.T) {
+	cfg, mgr, dir := newTestManager(t, Hooks{})
+	id := restorable(t, cfg, mgr)
+	if _, err := mgr.Restore(id, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	mgr.Stop()
+	setExpiry(t, dir, time.Now().Add(-time.Minute))
+
+	var revertedTo string
+	again := New(dir, cfg, Hooks{OnAutoRevert: func(_, to string, _ error) { revertedTo = to }})
+	t.Cleanup(again.Stop)
+	if err := again.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Snapshot().Node.Name; got != "current" || revertedTo == "" {
+		t.Fatalf("node %q, reverted to %q", got, revertedTo)
+	}
+	if again.Pending().Pending {
+		t.Fatal("nothing should be pending after the rollback")
+	}
+}
+
+func TestConfirmingEndsTheRollbackForGood(t *testing.T) {
+	cfg, mgr, dir := newTestManager(t, Hooks{})
+	id := restorable(t, cfg, mgr)
+	if _, err := mgr.Restore(id, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Confirm(); err != nil {
+		t.Fatal(err)
+	}
+	again := New(dir, cfg, Hooks{})
+	t.Cleanup(again.Stop)
+	if err := again.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if again.Pending().Pending || cfg.Snapshot().Node.Name != "before" {
+		t.Fatalf("a confirmed restore came back: %q", cfg.Snapshot().Node.Name)
+	}
+}
+
+func TestARollbackKeepsAPasswordChangedInTheWindow(t *testing.T) {
+	cfg, mgr, _ := newTestManager(t, Hooks{})
+	id := restorable(t, cfg, mgr)
+	if _, err := mgr.Restore(id, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Update(func(c *config.Config) {
+		c.API.AdminHash, c.API.SessionKey = "changed-hash", "changed-key"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Revert(); err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Snapshot()
+	if got.API.AdminHash != "changed-hash" || got.API.SessionKey != "changed-key" {
+		t.Fatalf("the rollback restored old credentials: %q %q", got.API.AdminHash, got.API.SessionKey)
+	}
+}
+
+func TestARestoreNeverMovesTheDatabaseOrTheInterface(t *testing.T) {
+	c, old := config.Default(), config.Default()
+	c.Store.Path, c.API.Listen = "/var/lib/orbis/orbis.db", ":8080"
+	old.Store.Path, old.API.Listen = "/somewhere/else.db", ":9"
+	old.Node.Name = "old"
+	adopt(c, old)
+	if c.Store.Path != "/var/lib/orbis/orbis.db" || c.API.Listen != ":8080" || c.Node.Name != "old" {
+		t.Fatalf("store %q listen %q node %q", c.Store.Path, c.API.Listen, c.Node.Name)
+	}
+}
+
+func TestARollbackThatFailsStaysPending(t *testing.T) {
+	cfg, mgr, dir := newTestManager(t, Hooks{})
+	id := restorable(t, cfg, mgr)
+	if _, err := mgr.Restore(id, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	mgr.mu.Lock()
+	tok := mgr.pending.token
+	mgr.pending.preBytes = []byte("mode: [unterminated")
+	mgr.mu.Unlock()
+	mgr.expirePending(tok)
+	if !mgr.Pending().Pending {
+		t.Fatal("a failed rollback must stay pending so it is tried again")
+	}
+	if _, err := os.Stat(filepath.Join(dir, pendingFile)); err != nil {
+		t.Fatalf("its record went too: %v", err)
+	}
+}
+
+func TestARestoreWithNoWayBackIsRefused(t *testing.T) {
+	cfg, mgr, dir := newTestManager(t, Hooks{})
+	id := restorable(t, cfg, mgr)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), "orbis.yaml"), []byte("mode: [unterminated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Restore(id, time.Hour); err == nil {
+		t.Fatal("the current file cannot be rolled back to, so the restore must not start")
+	}
+	if got := cfg.Snapshot().Node.Name; got != "current" {
+		t.Fatalf("a refused restore changed the node to %q", got)
+	}
+}
+
+func TestARollbackSaysWhenItUndidEdits(t *testing.T) {
+	lost := ""
+	cfg, mgr, _ := newTestManager(t, Hooks{OnEditsLost: func(id string) { lost = id }})
+	id := restorable(t, cfg, mgr)
+	if _, err := mgr.Restore(id, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Revert(); err != nil {
+		t.Fatal(err)
+	}
+	if lost != "" {
+		t.Fatal("nothing was edited in that window")
+	}
+	if _, err := mgr.Restore(id, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Update(func(c *config.Config) { c.Node.Name = "edited" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Revert(); err != nil {
+		t.Fatal(err)
+	}
+	if lost != id {
+		t.Fatalf("lost = %q", lost)
+	}
+}
+
+func TestNeedsRestart(t *testing.T) {
+	got := NeedsRestart([]string{"dns.upstreams", "mode", "network.routes", "network.intercept.enabled", "dhcp.scopes", "node.name"})
+	if strings.Join(got, ",") != "mode,network.routes,dhcp.scopes" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestRedactionDropsComments(t *testing.T) {
+	out, err := RedactYAML([]byte("node:\n  # api_key: COMMENTED_VALUE\n  name: a # token COMMENTED_VALUE\n# FOOT_VALUE\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "COMMENTED_VALUE") || strings.Contains(string(out), "FOOT_VALUE") {
+		t.Fatalf("a comment reached the output:\n%s", out)
+	}
+}
+
+func TestUnsetAndEmptyAreTheSameChange(t *testing.T) {
+	if got := ChangedKeys([]byte("dns:\n  upstreams: null\n"), []byte("dns:\n  upstreams: []\n")); len(got) != 0 {
+		t.Fatalf("got %v", got)
+	}
+}

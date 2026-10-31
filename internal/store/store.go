@@ -40,6 +40,8 @@ type Store struct {
 	// holds one row per flow rather than one per checkpoint.
 	flowIdx map[string]int
 	dnsBuf  []DNSQuery
+	// listChanged runs before stored list rows change; see OnListChange.
+	listChanged func()
 
 	closed chan struct{}
 	// kick wakes flushLoop when a buffer hits maxBatch. Capacity 1 so
@@ -294,7 +296,10 @@ func (s *Store) checkpoint() {
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	if ctx.Err() != nil {
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "store: truncating checkpoint failed: %v\n", err)
 	}
 }

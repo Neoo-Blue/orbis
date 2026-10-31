@@ -622,3 +622,46 @@ func TestAListChangeIsAnnouncedAndUnblessedBeforeItsFirstRow(t *testing.T) {
 		t.Fatalf("the etag survived a rewrite: %+v %v", metas, err)
 	}
 }
+
+func TestGeoRepairsKeepWorkingInBatches(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	for i := range geoBatch*2 + 3 {
+		f := flowRow(i)
+		f.DstIP, f.Country = fmt.Sprintf("10.9.0.%d", i), "AU"
+		s.QueueFlow(f)
+	}
+	local := flowRow(1000)
+	local.Direction, local.Country, local.DstIP = "local", "AU", "192.168.1.1"
+	s.QueueFlow(local)
+	s.flush()
+
+	var ips []string
+	for i := range geoBatch*2 + 3 {
+		ips = append(ips, fmt.Sprintf("10.9.0.%d", i))
+	}
+	n, err := s.ClearFlowGeo(ctx, ips)
+	if err != nil || n != int64(geoBatch*2+4) {
+		t.Fatalf("cleared %d: %v", n, err)
+	}
+	n, err = s.ApplyGeoUpdates(ctx, []GeoUpdate{{IP: "10.9.0.1", Country: "US"}})
+	if err != nil || n != 1 {
+		t.Fatalf("updated %d: %v", n, err)
+	}
+}
+
+func TestABackfillStopsWithTheDaemon(t *testing.T) {
+	s := openTestStore(t)
+	f := flowRow(1)
+	f.Country = "AU"
+	s.QueueFlow(f)
+	s.flush()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.ClearFlowGeo(ctx, []string{f.DstIP}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := s.ApplyGeoUpdates(ctx, []GeoUpdate{{IP: f.DstIP, Country: "US"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+}

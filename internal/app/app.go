@@ -849,7 +849,7 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.Unblocker.Run(a.ctx) }()
 
 	// Installing a GeoIP database should fix the history too, not just new
-	// traffic, so reconcile stored rows once at startup.
+	// traffic, so reconcile stored rows after a new one appears.
 	if cfg.GeoIP.CityDB != "" || cfg.GeoIP.ASNDB != "" {
 		a.wg.Add(1)
 		go func() {
@@ -859,9 +859,7 @@ func (a *App) Start() {
 				return
 			case <-time.After(15 * time.Second):
 			}
-			if _, err := a.BackfillGeo(a.ctx, 20000); err != nil && a.ctx.Err() == nil {
-				a.log("geoip: backfill failed: %v", err)
-			}
+			a.backfillGeoOnce(cfg)
 		}()
 	}
 

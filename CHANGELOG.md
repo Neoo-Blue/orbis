@@ -69,6 +69,10 @@ Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones fr
   a day. Refreshes now write only what changed, in short transactions. This is also what tripped
   the interception load guard.
 - **The write-ahead log grew past 1 GB** and is now cut back once it has been checkpointed.
+- **A geo repair held the database write lock for minutes after every boot.** Logging stopped, devices
+  and open ports failed to save with "database is locked", and a restart in that window waited out
+  the 20 second shutdown timeout with DNS already down. It now runs only when a GeoIP database
+  changes, searches without the lock, writes in short batches and stops with the daemon.
 - **Cloaked trackers went upstream on every lookup,** because blocked CNAME answers were never
   cached. They now cost one query per TTL, and a rule change reaches what is already cached.
 - **Every cached and allowed lookup scanned all 1,200 list regexes,** 2.5 ms a time on a Pi. A verdict

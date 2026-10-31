@@ -1038,8 +1038,8 @@ type GeoBackfillTarget struct {
 // no location, or only a coarse region-level one. Rows written before a GeoIP
 // database was installed keep whatever the fallback guessed — often the wrong
 // continent — and nothing else would ever correct them.
-func (s *Store) FlowsNeedingGeo(limit int) ([]GeoBackfillTarget, error) {
-	rows, err := s.db.Query(`
+func (s *Store) FlowsNeedingGeo(ctx context.Context, limit int) ([]GeoBackfillTarget, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT dst_ip, COUNT(*) n FROM flows
 		WHERE (country IS NULL OR country = '' OR as_org IS NULL OR as_org = '')
 		  AND dst_ip NOT LIKE '10.%'
@@ -1080,81 +1080,99 @@ type GeoUpdate struct {
 	ASOrg   string
 }
 
-// ApplyGeoUpdates writes resolved locations onto every matching flow row.
-func (s *Store) ApplyGeoUpdates(updates []GeoUpdate) (int64, error) {
-	if len(updates) == 0 {
-		return 0, nil
-	}
-	tx, unlock, err := s.beginWrite()
-	if err != nil {
-		return 0, err
-	}
-	defer unlock()
-	defer tx.Rollback()
+// geoBatch is how many updates share a transaction. One destination can be tens
+// of thousands of rows, so even this many is a noticeable hold on the write lock.
+const geoBatch = 32
 
-	stmt, err := tx.Prepare(`UPDATE flows SET country=?, city=?, lat=?, lon=?, asn=?, as_org=?
-		WHERE dst_ip=?`)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-
+// updateInBatches runs one statement n times in short transactions, letting the
+// log writer in between them and stopping as soon as ctx ends. A backfill spans
+// the whole flow history, and in one transaction it stopped all logging and
+// outlasted the daemon's shutdown.
+func (s *Store) updateInBatches(ctx context.Context, n int, query string, args func(i int) []any) (int64, error) {
 	var total int64
-	for _, u := range updates {
-		res, err := stmt.Exec(u.Country, u.City, u.Lat, u.Lon, u.ASN, u.ASOrg, u.IP)
+	for start := 0; start < n; start += geoBatch {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		changed, err := s.updateBatch(ctx, start, min(start+geoBatch, n), query, args)
 		if err != nil {
 			return total, err
 		}
-		n, _ := res.RowsAffected()
-		total += n
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
+		total += changed
 	}
 	return total, nil
 }
 
-// ClearFlowGeo strips the location from the rows named. Used for local flows
-// and for bogon destinations that an earlier, coarser fallback placed on a
-// continent — an arc from the living room to Asia is worse than no arc.
-func (s *Store) ClearFlowGeo(dstIPs []string) (int64, error) {
+func (s *Store) updateBatch(ctx context.Context, from, to int, query string, args func(i int) []any) (int64, error) {
 	tx, unlock, err := s.beginWrite()
 	if err != nil {
 		return 0, err
 	}
 	defer unlock()
 	defer tx.Rollback()
-
-	res, err := tx.Exec(`UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''
-		WHERE direction = 'local' AND (country != '' OR lat != 0 OR lon != 0)`)
+	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
 		return 0, err
 	}
-	total, _ := res.RowsAffected()
-
-	if len(dstIPs) > 0 {
-		stmt, err := tx.Prepare(`UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''
-			WHERE dst_ip = ? AND (country != '' OR lat != 0 OR lon != 0 OR city != '')`)
+	defer stmt.Close()
+	var total int64
+	for i := from; i < to; i++ {
+		res, err := stmt.ExecContext(ctx, args(i)...)
 		if err != nil {
-			return total, err
+			return 0, err
 		}
-		defer stmt.Close()
-		for _, ip := range dstIPs {
-			r, err := stmt.Exec(ip)
-			if err != nil {
-				return total, err
-			}
-			n, _ := r.RowsAffected()
-			total += n
-		}
+		n, _ := res.RowsAffected()
+		total += n
 	}
 	return total, tx.Commit()
 }
 
+// ApplyGeoUpdates writes resolved locations onto every matching flow row.
+func (s *Store) ApplyGeoUpdates(ctx context.Context, updates []GeoUpdate) (int64, error) {
+	return s.updateInBatches(ctx, len(updates), `UPDATE flows SET country=?, city=?, lat=?, lon=?, asn=?, as_org=?
+		WHERE dst_ip=?`, func(i int) []any {
+		u := updates[i]
+		return []any{u.Country, u.City, u.Lat, u.Lon, u.ASN, u.ASOrg, u.IP}
+	})
+}
+
+// ClearFlowGeo strips the location from local flows and the rows named. Used
+// for bogon destinations that an earlier, coarser fallback placed on a
+// continent: an arc from the living room to Asia is worse than no arc.
+func (s *Store) ClearFlowGeo(ctx context.Context, dstIPs []string) (int64, error) {
+	const clear = `UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''`
+	// No index covers this search, so it scans the table. It reads outside the
+	// write lock, and only the rows it finds pay for one.
+	rows, err := s.db.QueryContext(ctx, `SELECT rowid FROM flows
+		WHERE direction = 'local' AND (country != '' OR lat != 0 OR lon != 0)`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var local []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		local = append(local, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	total, err := s.updateInBatches(ctx, len(local), clear+` WHERE rowid = ?`, func(i int) []any { return []any{local[i]} })
+	if err != nil {
+		return total, err
+	}
+	n, err := s.updateInBatches(ctx, len(dstIPs), clear+` WHERE dst_ip = ? AND (country != '' OR lat != 0 OR lon != 0 OR city != '')`,
+		func(i int) []any { return []any{dstIPs[i]} })
+	return total + n, err
+}
+
 // AllFlowDestinations lists every distinct destination in history, so the
 // backfill can decide which are bogons that should never have a position.
-func (s *Store) AllFlowDestinations(limit int) ([]string, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT dst_ip FROM flows
+func (s *Store) AllFlowDestinations(ctx context.Context, limit int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT dst_ip FROM flows
 		WHERE country != '' OR lat != 0 OR lon != 0 OR city != '' LIMIT ?`, clampInt(limit, 1, 100000))
 	if err != nil {
 		return nil, err

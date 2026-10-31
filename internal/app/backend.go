@@ -574,7 +574,7 @@ func (a *App) Context() context.Context { return a.ctx }
 func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error) {
 	// Anything not globally routable that picked up a position from an
 	// earlier, coarser fallback gets it stripped.
-	dests, err := a.Store.AllFlowDestinations(50000)
+	dests, err := a.Store.AllFlowDestinations(ctx, 50000)
 	if err != nil {
 		return nil, err
 	}
@@ -584,12 +584,12 @@ func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error
 			bogons = append(bogons, ip)
 		}
 	}
-	cleared, err := a.Store.ClearFlowGeo(bogons)
+	cleared, err := a.Store.ClearFlowGeo(ctx, bogons)
 	if err != nil {
 		return nil, err
 	}
 
-	targets, err := a.Store.FlowsNeedingGeo(limit)
+	targets, err := a.Store.FlowsNeedingGeo(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -645,7 +645,7 @@ func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error
 		})
 	}
 
-	rows, err := a.Store.ApplyGeoUpdates(updates)
+	rows, err := a.Store.ApplyGeoUpdates(ctx, updates)
 	if err != nil {
 		return nil, err
 	}
@@ -659,6 +659,37 @@ func (a *App) BackfillGeo(ctx context.Context, limit int) (map[string]any, error
 		"local_rows_cleared": cleared,
 		"unresolved":         unresolved,
 	}, nil
+}
+
+// geoStamp names the GeoIP databases as they are on disk now.
+func geoStamp(paths ...string) string {
+	var b strings.Builder
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil {
+			fmt.Fprintf(&b, "%s %d %d\n", p, info.Size(), info.ModTime().Unix())
+		}
+	}
+	return b.String()
+}
+
+// backfillGeoOnce reconciles history when the GeoIP databases have changed
+// since the last time. The search reads the whole flow table, which on a
+// database of many gigabytes is minutes of disk on every boot for no new answer.
+func (a *App) backfillGeoOnce(cfg config.Config) {
+	path := filepath.Join(filepath.Dir(cfg.Store.Path), "geo-backfill.stamp")
+	stamp := geoStamp(cfg.GeoIP.CityDB, cfg.GeoIP.ASNDB)
+	if done, err := os.ReadFile(path); err == nil && string(done) == stamp {
+		return
+	}
+	if _, err := a.BackfillGeo(a.ctx, 20000); err != nil {
+		if a.ctx.Err() == nil {
+			a.log("geoip: backfill failed: %v", err)
+		}
+		return
+	}
+	if err := os.WriteFile(path, []byte(stamp), 0o600); err != nil {
+		a.log("geoip: %v", err)
+	}
 }
 
 // ---- build / backup support ----

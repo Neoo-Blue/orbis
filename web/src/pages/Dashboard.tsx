@@ -1,9 +1,11 @@
 import { lazy, Suspense, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import { usePoll } from '../hooks'
+import { useLocalStorage, usePoll } from '../hooks'
 import { useLiveBatch } from '../live'
 import { OrbitChart, type OrbitDevice, type OrbitFlow, type OrbitHandle } from '../orbit/OrbitChart'
-import { Card, Dot, Empty, Icons, Loading, Sparkline } from '../ui'
+import { Card, Dot, Empty, Icons, Loading, Segmented, Sparkline, useToast } from '../ui'
+import { Tween } from '../motion'
+import { WhyDrawer } from './Why'
 import { ago, bits, bytes, clientName, compact, duration, num, pct } from '../format'
 import type { Client, DNSQuery, EventItem, Flow, Health, Summary, SystemStatus, NodeResources } from '../types'
 
@@ -44,6 +46,11 @@ const ClientDrawer = lazy(() => import('./Clients').then((m) => ({ default: m.Cl
 
 export function Dashboard({ status, summary, onNavigate }: Props) {
   const [openDevice, setOpenDevice] = useState<string | null>(null)
+  const [why, setWhy] = useState<{ name: string; client?: string } | null>(null)
+  // The device under the pointer, on the chart or on a row: each lights the other.
+  const [lit, setLit] = useState<string | null>(null)
+  const [hours, setHours] = useLocalStorage<'1' | '6' | '24'>('orbis.overview.hours', '24')
+  const toast = useToast()
   const { data: health } = usePoll<Health>(() => api.simple.health(), 15000)
   const { data: clients } = usePoll(() => api.clients.list(), 12000)
   const { data: active } = usePoll(() => api.flows.active(160), 8000)
@@ -51,7 +58,7 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
   const { data: recentEvents } = usePoll(() => api.events.list({ hours: 24, limit: 8 }), 20000)
   const { data: topBlocked } = usePoll(() => api.adblock.topBlocked(24, 8), 30000)
   const { data: topDest } = usePoll(() => api.flows.list({ hours: 24, order: 'bytes', limit: 8 }), 30000)
-  const { data: blockedSeries } = usePoll(() => api.series('dns_blocked_total', 24, 48), 60000)
+  const { data: blockedSeries } = usePoll(() => api.series('dns_blocked_total', Number(hours), 48), 60000, [hours])
   const { data: blockedLog } = usePoll(() => api.dns.log({ hours: 2, blocked_only: true, limit: 6 }), 0)
 
   const orbit = useRef<OrbitHandle>(null)
@@ -81,6 +88,24 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
   const flows = useMemo(() => orbitFlows(active?.flows ?? []), [active])
   const blockedPoints = useMemo(() => (blockedSeries?.points ?? []).map((p) => p.v), [blockedSeries])
   const names = useMemo(() => new Map((clients?.clients ?? []).map((c) => [c.id, clientName(c)])), [clients])
+
+  const allow = async (name: string) => {
+    try {
+      await api.dnstools.allow(name)
+      setStopped((prev) => (prev ?? blockedLog?.queries ?? []).filter((q) => q.name !== name))
+      toast(`${name} is allowed`, 'ok', { label: 'Undo', onClick: async () => { await api.adblock.deleteRule(name) } })
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not allow that', 'err')
+    }
+  }
+  const pause = async (c: Client) => {
+    try {
+      await api.simple.pause(c.id, 60)
+      toast(`${clientName(c)} is paused for an hour`, 'ok', { label: 'Undo', onClick: async () => { await api.simple.resume(c.id) } })
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not pause that device', 'err')
+    }
+  }
 
   if (!summary) return <Loading what="overview" />
 
@@ -129,30 +154,42 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
           {status && health && (
             <dl className="plate-ledger">
               {protectionLayers(status, health).map((l) => (
-                <div key={l.name}><dt>{l.name}</dt><dd className={l.on ? 'on' : undefined}>{l.state}</dd></div>
+                <div key={l.name}>
+                  <button type="button" onClick={() => onNavigate(l.page)}>
+                    <dt>{l.name}</dt><dd className={l.on ? 'on' : undefined}>{l.state}</dd>
+                  </button>
+                </div>
               ))}
             </dl>
           )}
           <div className="plate-stopped">
-            <div className="plate-caption"><b className="plate-figure">{compact(summary.dns_blocked)}</b> stopped today, {pct(summary.block_rate, 0)} of lookups</div>
+            <div className="plate-range">
+              <div className="plate-caption"><b className="plate-figure"><Tween rise value={summary.dns_blocked} format={(n) => compact(Math.round(n))} /></b> stopped today, {pct(summary.block_rate, 0)} of lookups</div>
+              <Segmented value={hours} onChange={setHours}
+                options={[{ value: '1', label: '1h' }, { value: '6', label: '6h' }, { value: '24', label: '24h' }]} />
+            </div>
             {blockedPoints.length > 1 && (
               <>
-                <Sparkline points={blockedPoints} tone="red" height={96} />
-                <div className="plate-axis"><span>24h ago</span><span>now</span></div>
+                <Sparkline points={blockedPoints} tone="red" height={96}
+                  readout={(i) => {
+                    const p = blockedSeries?.points?.[i]
+                    return p ? `${compact(p.v)} at ${new Date(p.t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''
+                  }} />
+                <div className="plate-axis"><span>{hours}h ago</span><span>now</span></div>
               </>
             )}
           </div>
           <dl className="plate-facts">
-            <div><dt>Devices online</dt><dd>{clients ? online.length : summary.clients_online} of {clients?.clients.length ?? summary.clients}</dd></div>
-            <div><dt>Connections</dt><dd>{num(tick?.flows_active ?? summary.active_flows)}</dd></div>
-            <div><dt>Down</dt><dd>{bits(tick?.rate_in ?? 0)}</dd></div>
-            <div><dt>Up</dt><dd>{bits(tick?.rate_out ?? 0)}</dd></div>
+            <button type="button" className="fact" onClick={() => onNavigate('clients')}><dt>Devices online</dt><dd>{clients ? online.length : summary.clients_online} of {clients?.clients.length ?? summary.clients}</dd></button>
+            <button type="button" className="fact" onClick={() => onNavigate('flows')}><dt>Connections</dt><dd><Tween value={tick?.flows_active ?? summary.active_flows} format={(n) => num(Math.round(n))} /></dd></button>
+            <button type="button" className="fact" onClick={() => onNavigate('flows')}><dt>Down</dt><dd><Tween value={tick?.rate_in ?? 0} format={bits} /></dd></button>
+            <button type="button" className="fact" onClick={() => onNavigate('flows')}><dt>Up</dt><dd><Tween value={tick?.rate_out ?? 0} format={bits} /></dd></button>
           </dl>
         </div>
 
         <div className="plate-chart">
           <OrbitChart ref={orbit} devices={devices} flows={flows} title={status?.node} tone={tone}
-            onSelect={setOpenDevice} onStrike={(name) => onNavigate('dnstools', name)}
+            onSelect={setOpenDevice} onHover={setLit} onStrike={(name) => setWhy({ name })}
             label={`${devices.length} devices online with ${flows.length} connections. Every device is listed under Devices.`} />
         </div>
 
@@ -179,13 +216,18 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
           ) : (
             <ul className="plate-list">
               {stoppedList.map((q, i) => (
-                <li key={`${q.ts}|${q.name}|${i}`}>
-                  <button type="button" className="row-btn" title="See why" onClick={() => onNavigate('dnstools', q.name)}>
+                <li key={`${q.ts}|${q.name}|${i}`} className={`acts${q.client_id && q.client_id === lit ? ' lit' : ''}`}
+                  onPointerEnter={() => q.client_id && orbit.current?.focus(q.client_id)}
+                  onPointerLeave={() => orbit.current?.focus(null)}>
+                  <button type="button" className="row-btn" title="See why" onClick={() => setWhy({ name: q.name, client: q.client_id })}>
                     <span className="plate-row-title mono"><i className="struck" />{q.name}</span>
                     {q.client_id && names.get(q.client_id)
                       ? <span className="plate-row-meta">{names.get(q.client_id)}</span>
                       : <span className="plate-row-meta mono">{q.client_ip}</span>}
                   </button>
+                  <span className="row-acts">
+                    <button type="button" className="btn sm" onClick={() => void allow(q.name)}>Allow</button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -193,6 +235,7 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
         </div>
       </section>
 
+      {why && <WhyDrawer name={why.name} clientId={why.client} onClose={() => setWhy(null)} />}
       {openDevice && (
         <Suspense fallback={null}>
           <ClientDrawer id={openDevice} onClose={() => setOpenDevice(null)} onChanged={() => undefined} />
@@ -209,7 +252,11 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
           ) : (
             <div style={{ display: 'grid', gap: 9 }}>
               {online.slice(0, 6).map((c) => (
-                <ClientRow key={c.id} client={c} peak={online[0]} onOpen={() => onNavigate('clients', c.id)} />
+                <div key={c.id} className={`acts${c.id === lit ? ' lit' : ''}`}
+                  onPointerEnter={() => orbit.current?.focus(c.id)} onPointerLeave={() => orbit.current?.focus(null)}>
+                  <ClientRow client={c} peak={online[0]} onOpen={() => setOpenDevice(c.id)} />
+                  <span className="row-acts"><button type="button" className="btn sm" onClick={() => void pause(c)}>Pause 1h</button></span>
+                </div>
               ))}
             </div>
           )}
@@ -444,10 +491,10 @@ function protectionLayers(status: SystemStatus, health: Health) {
   const proxy = Boolean((status.filter_proxy as Record<string, unknown>)?.running)
   const threat = Boolean((status.threat as Record<string, unknown> | undefined)?.enabled)
   return [
-    { name: 'DNS filtering', on: health.protection_on, state: health.protection_on ? 'On' : 'Off' },
-    { name: 'Firewall', on: inline && applied, state: !inline ? 'Not enforced' : applied ? 'Enforced' : 'Not applied' },
-    { name: 'In-stream ads', on: proxy, state: proxy ? 'Removed' : 'Off' },
-    { name: 'Threat feeds', on: threat, state: threat ? 'On' : 'Off' },
+    { name: 'DNS filtering', page: 'adblock' as const, on: health.protection_on, state: health.protection_on ? 'On' : 'Off' },
+    { name: 'Firewall', page: 'firewall' as const, on: inline && applied, state: !inline ? 'Not enforced' : applied ? 'Enforced' : 'Not applied' },
+    { name: 'In-stream ads', page: 'adblock' as const, on: proxy, state: proxy ? 'Removed' : 'Off' },
+    { name: 'Threat feeds', page: 'firewall' as const, on: threat, state: threat ? 'On' : 'Off' },
   ]
 }
 

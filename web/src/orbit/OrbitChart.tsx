@@ -23,13 +23,20 @@ export interface OrbitHandle {
   strike(clientId: string, name: string): void
   /** A connection just opened: run a light along its route. */
   arrive(clientId: string, lon: number | null): void
+  /** Light a device from outside the chart, such as a row under the pointer. */
+  focus(clientId: string | null): void
 }
+
+/** The chart draws itself in once a visit, not every time the page returns. */
+let introduced = false
 
 interface Props {
   devices: OrbitDevice[]
   flows: OrbitFlow[]
   /** The Overview's verdict, so the chart cannot look safe during a fault. */
   tone?: 'ok' | 'attention' | 'problem'
+  /** The device under the pointer changed. */
+  onHover?: (clientId: string | null) => void
   onSelect?: (id: string) => void
   /** Called with the name behind a mark on the shield. */
   onStrike?: (name: string) => void
@@ -78,13 +85,14 @@ const binLon = (bin: number) => bin * BIN - 180 + BIN / 2
  *  shield leave a mark that can be opened. It draws straight to a canvas from
  *  refs, so a busy network costs a frame, never a React render. */
 export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
-  { devices, flows, onSelect, onStrike, title, label, compact, tone }, ref) {
+  { devices, flows, onSelect, onStrike, onHover, title, label, compact, tone }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const tipRef = useRef<HTMLDivElement>(null)
   const data = useRef({ devices, flows, tone })
   data.current = { devices, flows, tone }
-  const handlers = useRef({ onSelect, onStrike })
-  handlers.current = { onSelect, onStrike }
+  const handlers = useRef({ onSelect, onStrike, onHover })
+  handlers.current = { onSelect, onStrike, onHover }
+  const pinned = useRef<string | null>(null)
   const strikes = useRef<Strike[]>([])
   const arrivals = useRef<Array<{ client: string; lon: number; born: number }>>([])
   const repaint = useRef<() => void>(() => {})
@@ -97,6 +105,10 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
     },
     arrive(client, lon) {
       if (lon != null && arrivals.current.length < 24) arrivals.current.push({ client, lon, born: performance.now() })
+    },
+    focus(client) {
+      pinned.current = client
+      repaint.current()
     },
   }), [])
 
@@ -123,6 +135,9 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
     let pointer: { x: number; y: number } | null = null
     let hovered: string | null = null
     let hoveredStrike: Strike | null = null
+    let reported: string | null = null
+    const born = introduced || still ? -1e9 : performance.now()
+    introduced = true
 
     /** Lettering needs room; a small chart keeps the drawing without it. */
     const lettered = () => !compact && Math.min(w, h) >= 420
@@ -249,7 +264,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
     const trunk = (bin: number) => {
       const end = lonAngle(binLon(bin))
       const delta = Math.atan2(Math.sin(end - GATEWAY_ANGLE), Math.cos(end - GATEWAY_ANGLE))
-      return { r: trunkR(bin), from: GATEWAY_ANGLE, to: end, ccw: delta < 0 }
+      return { r: trunkR(bin), from: GATEWAY_ANGLE, to: end, ccw: delta < 0, delta }
     }
 
     const frame = (t: number) => {
@@ -258,8 +273,18 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       // At rest the lines themselves say whether things are well.
       const rest = !tone || tone === 'ok' ? color.jadeDim : color.amberDim
       layout()
+      // The focal moment: the plate opens from the centre, the devices rise to
+      // their orbits and the lines run out to the rim.
+      const intro = 1 - (1 - Math.min(1, (t - born) / 1200)) ** 3
       ctx.clearRect(0, 0, w, h)
-      ctx.drawImage(plate, 0, 0, w, h)
+      if (intro < 1) {
+        ctx.save()
+        ctx.beginPath()
+        ctx.arc(cx, cy, Math.hypot(w, h) * 0.6 * intro, 0, TAU)
+        ctx.clip()
+        ctx.drawImage(plate, 0, 0, w, h)
+        ctx.restore()
+      } else ctx.drawImage(plate, 0, 0, w, h)
 
       const peak = devices.reduce((m, d) => Math.max(m, d.rate), 1)
       const ringOf = new Map(devices.map((d) => [d.id, d.ring]))
@@ -268,7 +293,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
         if (!b) continue
         b.a += Math.atan2(Math.sin(b.target - b.a), Math.cos(b.target - b.a)) * 0.05
         if (!still) b.target += (b.drift / 1000) * FRAME_MS
-        const r = orbitR(ringOf.get(d.id) ?? 0)
+        const r = orbitR(ringOf.get(d.id) ?? 0) * intro
         b.x = cx + Math.cos(b.a) * r
         b.y = cy + Math.sin(b.a) * r
         b.size = 2.4 + Math.sqrt(d.rate / peak) * 4.6
@@ -292,7 +317,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
           }
         }
         canvas.style.cursor = best || hoveredStrike ? 'pointer' : 'default'
-      }
+        if (best !== reported) { reported = best; handlers.current.onHover?.(best) }
+      } else hovered = pinned.current
 
       // Group what is flowing by region once, then draw one line per group.
       const bins = new Map<number, { bytes: number; lit: boolean }>()
@@ -319,8 +345,23 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
           ctx.quadraticCurveTo(c.x, c.y, c.g.x, c.g.y)
           ctx.lineWidth = lit ? 1.6 : 0.7 + Math.sqrt(d.rate / peak) * 1.3
           ctx.strokeStyle = lit ? color.jade : rest
-          ctx.globalAlpha = lit ? 0.9 : hovered ? 0.16 : 1
+          ctx.globalAlpha = (lit ? 0.9 : hovered ? 0.16 : 1) * intro
           ctx.stroke()
+        }
+      }
+      ctx.globalAlpha = 1
+
+      // Traffic is seen moving: dots along each busy line, faster the busier.
+      if (!still) {
+        ctx.fillStyle = color.jade
+        for (const d of [...devices].filter((x) => talking.has(x.id)).sort((p, q) => q.rate - p.rate).slice(0, 12)) {
+          const b = bodies.get(d.id)
+          if (!b || (hovered && hovered !== d.id)) continue
+          const c = spokeControl(b), load = Math.sqrt(d.rate / peak), dots = 1 + Math.round(load * 2)
+          for (let k = 0; k < dots; k++) {
+            const e = ((t / 2400) * (0.4 + load) + k / dots + (hash(d.id) % 97) / 97) % 1, u = 1 - e
+            ctx.fillRect(u * u * b.x + 2 * u * e * c.x + e * e * c.g.x - 1, u * u * b.y + 2 * u * e * c.y + e * e * c.g.y - 1, 2, 2)
+          }
         }
       }
 
@@ -328,14 +369,19 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       for (const [bin, e] of bins) {
         const tr = trunk(bin)
         ctx.beginPath()
-        ctx.arc(cx, cy, tr.r, tr.from, tr.to, tr.ccw)
-        ctx.lineTo(cx + Math.cos(tr.to) * R, cy + Math.sin(tr.to) * R)
+        ctx.arc(cx, cy, tr.r, tr.from, tr.from + tr.delta * intro, tr.ccw)
+        if (intro === 1) ctx.lineTo(cx + Math.cos(tr.to) * R, cy + Math.sin(tr.to) * R)
         // Never wider than the gap to the next trunk, or they merge into a band.
         ctx.lineWidth = Math.min(0.8 + Math.sqrt(e.bytes / heaviest) * 2.6, ((R - shield) * 0.6 * BIN) / 360 - 0.5)
         ctx.strokeStyle = e.lit ? color.jade : rest
         ctx.globalAlpha = e.lit ? 0.95 : hovered ? 0.2 : 1
         ctx.stroke()
         ctx.globalAlpha = 1
+        if (!still && intro === 1) {
+          const a = tr.from + tr.delta * ((t / 3400 + bin * 0.137) % 1)
+          ctx.fillStyle = color.jade
+          ctx.fillRect(cx + Math.cos(a) * tr.r - 1, cy + Math.sin(a) * tr.r - 1, 2, 2)
+        }
         ctx.beginPath()
         ctx.arc(cx + Math.cos(tr.to) * R, cy + Math.sin(tr.to) * R, 2.2, 0, TAU)
         ctx.fillStyle = e.lit ? color.jade : color.dim
@@ -343,6 +389,27 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       }
       ctx.globalAlpha = 1
       ctx.lineWidth = 1
+
+      // The watch: one slow sweep round the shield, always moving.
+      if (!still && ctx.createConicGradient) {
+        const a = (t / 14000) * TAU, ink = !tone || tone === 'ok' ? '98,216,178' : '242,181,68'
+        const fall = ctx.createConicGradient(a, cx, cy)
+        fall.addColorStop(0, `rgba(${ink},0)`)
+        fall.addColorStop(0.86, `rgba(${ink},0)`)
+        fall.addColorStop(1, `rgba(${ink},.2)`)
+        ctx.globalAlpha = intro
+        ctx.fillStyle = fall
+        ctx.beginPath()
+        ctx.arc(cx, cy, R, 0, TAU)
+        ctx.arc(cx, cy, shield, 0, TAU, true)
+        ctx.fill()
+        ctx.beginPath()
+        ctx.moveTo(cx + Math.cos(a) * shield, cy + Math.sin(a) * shield)
+        ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R)
+        ctx.strokeStyle = `rgba(${ink},.55)`
+        ctx.stroke()
+        ctx.globalAlpha = 1
+      }
 
       // The orbit of whatever is under the pointer.
       if (hovered) {
@@ -515,6 +582,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
     const leave = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return
       pointer = null; hovered = null
+      if (reported) { reported = null; handlers.current.onHover?.(null) }
       if (still) frame(performance.now())
     }
     // On a touch screen the first tap lights a body and the second opens it.

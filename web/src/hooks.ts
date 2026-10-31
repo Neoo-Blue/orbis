@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { ApiError } from './api'
+
+/** False while a kept-alive page sits hidden: it holds its data and its filters
+ *  but asks the node for nothing until it is shown again. */
+export const ViewVisible = createContext(true)
 
 /** usePoll fetches on mount and on an interval, keeping the previous value
  *  visible while a refresh is in flight so the UI never flashes empty.
@@ -7,9 +11,11 @@ import { ApiError } from './api'
  *  is hidden or paused. */
 export function usePoll<T>(
   fn: () => Promise<T>,
-  intervalMs: number | null,
+  wantedMs: number | null,
   deps: unknown[] = [],
 ): { data: T | null; error: string | null; loading: boolean; refresh: () => void } {
+  const visible = useContext(ViewVisible)
+  const intervalMs = visible ? wantedMs : null
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)

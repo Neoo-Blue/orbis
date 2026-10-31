@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from 'react'
+import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react'
+import { flushSync } from 'react-dom'
 import { api, setUnauthorizedHandler } from './api'
-import { usePoll, useLocalStorage, useMediaQuery } from './hooks'
+import { usePoll, useLocalStorage, useMediaQuery, ViewVisible } from './hooks'
 import { useLiveConnected } from './live'
-import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast, Drawer } from './ui'
+import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast, Loading } from './ui'
+import { transition, useThumb } from './motion'
 import type { AppConfig, SystemStatus, Summary } from './types'
 import { Dashboard } from './pages/Dashboard'
 import { UpdateBanner } from './pages/UpdateCard'
@@ -51,38 +53,52 @@ type Route =
   | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services' | 'threats' | 'hosted' | 'links'
   | 'profiles' | 'health' | 'changes' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
 
-type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; group?: string; short?: string }
-const ROUTES: NavRoute[] = [
-  { id: 'dashboard', label: 'Overview', icon: 'orbit', group: 'Observe' },
-  { id: 'globe', label: 'Globe', icon: 'globe' },
-  { id: 'flows', label: 'Connections', icon: 'activity' },
-  { id: 'services', label: 'Services', icon: 'stack' },
-  { id: 'analytics', label: 'Analytics', icon: 'chart' },
-  { id: 'clients', label: 'Devices', icon: 'devices' },
-  { id: 'topology', label: 'Topology', icon: 'nodes' },
-  { id: 'health', label: 'Internet health', icon: 'pulse' },
-  { id: 'dns', label: 'DNS', icon: 'dns', group: 'Filtering' },
-  { id: 'adblock', label: 'Ad blocking', icon: 'block' },
-  { id: 'profiles', label: 'Profiles', icon: 'user' },
-  { id: 'dnstools', label: 'Domain tester', icon: 'search' },
-  { id: 'youtube', label: 'YouTube', icon: 'tv' },
-  { id: 'consent', label: 'Ask first', icon: 'question' },
-  { id: 'firewall', label: 'Firewall', icon: 'shield', group: 'Network' },
-  { id: 'threats', label: 'Threats', icon: 'target' },
-  { id: 'hosted', label: 'Hosted apps', icon: 'server' },
-  { id: 'links', label: 'Cables & Wi-Fi', icon: 'cable' },
-  { id: 'network', label: 'DHCP & LAN', icon: 'route' },
-  { id: 'gateway', label: 'Gateway', icon: 'door' },
-  { id: 'intercept', label: 'Interception', icon: 'split' },
-  { id: 'vpn', label: 'VPN', icon: 'key' },
-  { id: 'assistant', label: 'Assistant', icon: 'chat', group: 'Operate' },
-  { id: 'problems', label: 'Problems', icon: 'alert', group: 'Operate' },
-  { id: 'events', label: 'Events', icon: 'bell' },
-  { id: 'alerts', label: 'Alerts', icon: 'flag' },
-  { id: 'reports', label: 'Reports', icon: 'doc' },
-  { id: 'changes', label: 'Change timeline', icon: 'history' },
-  { id: 'settings', label: 'Settings', icon: 'gear' },
+type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; short?: string }
+/** A section of the product: one place in the rail, its pages as tabs. Every
+ *  page keeps its own address, so old links and the palette still land. */
+type Hub = { id: string; label: string; short?: string; icon: keyof typeof Icons; routes: NavRoute[] }
+const HUBS: Hub[] = [
+  { id: 'overview', label: 'Overview', short: 'Home', icon: 'orbit', routes: [{ id: 'dashboard', label: 'Overview', icon: 'orbit' }] },
+  { id: 'traffic', label: 'Traffic', icon: 'activity', routes: [
+    { id: 'flows', label: 'Connections', icon: 'activity' },
+    { id: 'globe', label: 'Globe', icon: 'globe' },
+    { id: 'services', label: 'Services', icon: 'stack' },
+    { id: 'analytics', label: 'Analytics', icon: 'chart' },
+    { id: 'topology', label: 'Topology', icon: 'nodes' },
+    { id: 'health', label: 'Internet health', icon: 'pulse' },
+  ] },
+  { id: 'devices', label: 'Devices', icon: 'devices', routes: [
+    { id: 'clients', label: 'All devices', icon: 'devices' },
+    { id: 'profiles', label: 'Profiles', icon: 'user' },
+    { id: 'consent', label: 'Ask first', icon: 'question' },
+  ] },
+  { id: 'protection', label: 'Protection', short: 'Protect', icon: 'shield', routes: [
+    { id: 'dns', label: 'DNS', icon: 'dns' },
+    { id: 'adblock', label: 'Ad blocking', icon: 'block' },
+    { id: 'firewall', label: 'Firewall', icon: 'shield' },
+    { id: 'threats', label: 'Threats', icon: 'target' },
+    { id: 'youtube', label: 'YouTube', icon: 'tv' },
+    { id: 'dnstools', label: 'Domain tester', icon: 'search' },
+  ] },
+  { id: 'network', label: 'Network', icon: 'route', routes: [
+    { id: 'links', label: 'Cables & Wi-Fi', icon: 'cable' },
+    { id: 'network', label: 'DHCP & LAN', icon: 'route' },
+    { id: 'gateway', label: 'Gateway', icon: 'door' },
+    { id: 'vpn', label: 'VPN', icon: 'key' },
+    { id: 'intercept', label: 'Interception', icon: 'split' },
+    { id: 'hosted', label: 'Hosted apps', icon: 'server' },
+  ] },
+  { id: 'system', label: 'System', icon: 'gear', routes: [
+    { id: 'problems', label: 'Problems', icon: 'alert' },
+    { id: 'events', label: 'Events', icon: 'bell' },
+    { id: 'alerts', label: 'Alerts', icon: 'flag' },
+    { id: 'reports', label: 'Reports', icon: 'doc' },
+    { id: 'changes', label: 'Change timeline', icon: 'history' },
+    { id: 'settings', label: 'Settings', icon: 'gear' },
+  ] },
 ]
+const ASSISTANT: NavRoute = { id: 'assistant', label: 'Ask Orbis', icon: 'chat' }
+const ROUTES: NavRoute[] = [...HUBS.flatMap((h) => h.routes), ASSISTANT]
 
 /** The simple interface: seven plain words, one screen each. */
 const SIMPLE_ROUTES: NavRoute[] = [
@@ -94,9 +110,34 @@ const SIMPLE_ROUTES: NavRoute[] = [
   { id: 's-alerts', label: 'Alerts', icon: 'bell' },
   { id: 's-settings', label: 'Settings', icon: 'gear' },
 ]
+const SIMPLE_HUBS: Hub[] = SIMPLE_ROUTES.map((r) => ({ ...r, routes: [r] }))
 const ALL_ROUTES = [...ROUTES, ...SIMPLE_ROUTES]
-/** On a phone the advanced interface shows these four and a "More" sheet. */
-const MOBILE_PRIMARY: Route[] = ['dashboard', 'flows', 'clients', 'assistant']
+
+/** Where a page sits, which decides the direction a move between pages takes. */
+function placeOf(r: Route) {
+  for (const hubs of [HUBS, SIMPLE_HUBS]) {
+    const hub = hubs.findIndex((h) => h.routes.some((x) => x.id === r))
+    if (hub >= 0) return { hub, tab: hubs[hub].routes.findIndex((x) => x.id === r) }
+  }
+  return { hub: HUBS.length, tab: 0 }
+}
+
+/** The code behind each page, so it can be fetched before it is asked for. The
+ *  globe is left out: three.js is the one heavy download. */
+const PAGE_CODE: Partial<Record<Route, () => Promise<unknown>>> = {
+  flows: () => import('./pages/Flows'), services: () => import('./pages/Services'), analytics: () => import('./pages/Analytics'),
+  topology: () => import('./pages/Topology'), health: () => import('./pages/InternetHealth'), clients: () => import('./pages/Clients'),
+  profiles: () => import('./pages/Profiles'), consent: () => import('./pages/Consent'), dns: () => import('./pages/DNS'),
+  adblock: () => import('./pages/AdBlock'), firewall: () => import('./pages/Firewall'), threats: () => import('./pages/Threats'),
+  youtube: () => import('./pages/YouTube'), dnstools: () => import('./pages/DNSTools'), links: () => import('./pages/Links'),
+  network: () => import('./pages/Network'), gateway: () => import('./pages/Gateway'), vpn: () => import('./pages/VPN'),
+  intercept: () => import('./pages/Intercept'), hosted: () => import('./pages/Hosted'), problems: () => import('./pages/Problems'),
+  events: () => import('./pages/Events'), alerts: () => import('./pages/Alerts'), reports: () => import('./pages/Reports'),
+  changes: () => import('./pages/ChangeTimeline'), settings: () => import('./pages/Settings'), assistant: () => import('./pages/Assistant'),
+}
+/** How many visited pages stay mounted, hidden and paused, so going back is
+ *  instant and keeps filters and scroll position. */
+const KEPT_PAGES = 8
 
 function routeFromHash(): Route {
   const raw = location.hash.replace(/^#\/?/, '').split('/')[0]
@@ -147,20 +188,42 @@ export default function App() {
 
 function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean; onAuthChange: () => void; nodeUI: string }) {
   const [route, setRoute] = useState<Route>(routeFromHash)
+  const routeRef = useRef(route)
+  routeRef.current = route
+  const pageRef = useRef<HTMLDivElement>(null)
+  const scrolled = useRef<Partial<Record<string, number>>>({})
+  const [kept, setKept] = useState<Route[]>([])
+
+  const show = useCallback((next: Route, apply: () => void) => {
+    const was = routeRef.current
+    if (next === was) { apply(); return }
+    const from = placeOf(was), to = placeOf(next)
+    const dx = from.hub === to.hub ? Math.sign(to.tab - from.tab) : 0
+    const dy = from.hub === to.hub ? 0 : Math.sign(to.hub - from.hub)
+    if (pageRef.current) scrolled.current[was] = pageRef.current.scrollTop
+    const go = () => transition(dx, dy, () => {
+      flushSync(() => { apply(); setRoute(next) })
+      pageRef.current?.scrollTo(0, scrolled.current[next] ?? 0)
+    })
+    // Wait for the page's code, briefly, so the move lands on the page and not
+    // on its placeholder.
+    Promise.race([PAGE_CODE[next]?.(), new Promise((r) => setTimeout(r, 160))]).then(go, go)
+  }, [])
 
   useEffect(() => {
-    const onHash = () => setRoute(routeFromHash())
+    const onHash = () => show(routeFromHash(), () => undefined)
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
-  }, [])
+  }, [show])
 
   // sub is a deep link inside the page (a device id, a settings section);
-  // pages read it from the hash. Without one the hash is reset to the page
-  // root, so a sidebar click always leaves a deep link.
+  // pages read it from the hash when they mount, so a kept page starts afresh.
+  // Without one the hash is reset to the page root, so a sidebar click always
+  // leaves a deep link.
   const navigate = useCallback((r: Route, sub?: string) => {
-    location.hash = sub ? `#/${r}/${encodeURIComponent(sub)}` : `#/${r}`
-    setRoute(r)
-  }, [])
+    if (sub) setKept((list) => list.filter((x) => x !== r))
+    show(r, () => { location.hash = sub ? `#/${r}/${encodeURIComponent(sub)}` : `#/${r}` })
+  }, [show])
 
   // Simple or advanced. The browser's own choice wins, otherwise the node's.
   const [uiPref, setUIPref] = useLocalStorage<'simple' | 'advanced' | ''>('orbis.ui', '')
@@ -203,30 +266,100 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
   const candidates = summary?.ad_candidates ?? 0
 
   const narrow = useMediaQuery('(max-width: 880px)')
-  const [moreOpen, setMoreOpen] = useState(false)
-  // The sheet is a navigation aid, so any route change (a tap inside it, the
-  // palette, a link in a page) closes it, as does growing past phone width.
-  useEffect(() => { setMoreOpen(false) }, [route, narrow])
-  const navRoutes = ui === 'simple' ? SIMPLE_ROUTES : narrow ? ROUTES.filter((r) => MOBILE_PRIMARY.includes(r.id)) : ROUTES
-  const grouped = useMemo(() => {
-    const out: Array<{ group: string; items: NavRoute[] }> = []
-    for (const r of navRoutes) {
-      const g = r.group ?? (out.length ? out[out.length - 1].group : '')
-      let b = out.find((x) => x.group === g)
-      if (!b) { b = { group: g, items: [] }; out.push(b) }
-      b.items.push(r)
-    }
-    return out
-  }, [navRoutes])
-
   // The hash default is the advanced overview; in simple mode that means Home.
   const shown: Route = ui === 'simple' && route === 'dashboard' ? 's-home' : route
-  const title = ALL_ROUTES.find((r) => r.id === shown)?.label ?? 'Orbis'
+  const hubs = ui === 'simple' ? SIMPLE_HUBS : HUBS
+  const hub = hubs.find((h) => h.routes.some((r) => r.id === shown))
+  const title = hub?.label ?? ALL_ROUTES.find((r) => r.id === shown)?.label ?? 'Orbis'
   const go = (r: string) => navigate(r as Route)
   const onAsk = (q: string) => { setPendingQuestion(q); navigate('assistant') }
-
   const tabs = ui === 'simple' || narrow
-  const inPrimary = ui === 'simple' || MOBILE_PRIMARY.includes(shown)
+
+  useEffect(() => {
+    if (shown !== 'globe') setKept((list) => [shown, ...list.filter((r) => r !== shown)].slice(0, KEPT_PAGES))
+  }, [shown])
+
+  // A section remembers which of its pages you were on.
+  const lastTab = useRef<Record<string, Route>>({})
+  if (hub) lastTab.current[hub.id] = shown
+  const openHub = useCallback((h: Hub) => { navigate(lastTab.current[h.id] ?? h.routes[0].id) }, [navigate])
+
+  // Fetch every page's code once the node has finished the first screen.
+  useEffect(() => {
+    const idle = window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 1200))
+    idle(() => { for (const load of Object.values(PAGE_CODE)) void load() })
+  }, [])
+
+  // 1 to 6 change section, [ and ] change tab, / goes to the page's search.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement
+      if (e.metaKey || e.ctrlKey || e.altKey || el.closest('input, textarea, select, [contenteditable]')) return
+      const pages = hub?.routes ?? []
+      const at = pages.findIndex((r) => r.id === shown)
+      if (/^[1-7]$/.test(e.key) && hubs[Number(e.key) - 1]) openHub(hubs[Number(e.key) - 1])
+      else if (e.key === ']' && pages[at + 1]) navigate(pages[at + 1].id)
+      else if (e.key === '[' && pages[at - 1]) navigate(pages[at - 1].id)
+      else if (e.key === '/') {
+        const search = document.querySelector<HTMLInputElement>('.view:not([hidden]) .search input')
+        if (search) { e.preventDefault(); search.focus() }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [hub, hubs, shown, navigate, openHub])
+
+  const railThumb = useThumb<HTMLDivElement>(`${hub?.id}|${narrow}|${ui}`)
+  const tabThumb = useThumb<HTMLDivElement>(shown)
+
+  const page = (r: Route) => {
+    switch (r) {
+      case 'dashboard': return <Dashboard status={status} summary={summary} onNavigate={navigate} />
+      case 'globe': return <GlobePage />
+      case 'flows': return <FlowsPage />
+      case 'analytics': return <AnalyticsPage />
+      case 'clients': return <ClientsPage />
+      case 'health': return <InternetHealthPage />
+      case 'topology': return <TopologyPage />
+      case 'dns': return <DNSPage />
+      case 'adblock': return <AdBlockPage />
+      case 'dnstools': return <DNSToolsPage />
+      case 'youtube': return <YouTubePage />
+      case 'consent': return <ConsentPage />
+      case 'gateway': return <GatewayPage />
+      case 'intercept': return <InterceptPage />
+      case 'firewall': return <FirewallPage status={status} />
+      case 'network': return <NetworkPage status={status} />
+      case 'vpn': return <VPNPage />
+      case 'assistant': return <AssistantPage initialQuestion={pendingQuestion ?? undefined} onConsumed={() => setPendingQuestion(null)} />
+      case 'profiles': return <ProfilesPage />
+      case 's-home': return <SimpleHome onNavigate={go} onAsk={onAsk} />
+      case 's-devices': return <SimpleDevices onNavigate={go} />
+      case 's-protection': return config ? <SimpleProtection config={config} save={saveConfig} onNavigate={go} /> : <Loading what="protection" />
+      case 's-usage': return (
+        <div style={{ display: 'grid', gap: 14 }}>
+          <div className="hint" style={{ fontSize: 13.5, lineHeight: 1.6, maxWidth: 760 }}>
+            What is using the internet, by app and by device. Devices marked "DNS only" are seen but not measured;
+            press Intercept on one to measure it.
+          </div>
+          <ServicesPage onNavigate={(x) => navigate(x)} />
+        </div>
+      )
+      case 's-alerts': return <SimpleAlerts onNavigate={go} />
+      case 's-settings': return config ? <SimpleSettings config={config} status={status} save={saveConfig} uiMode={ui} setUIMode={(m) => setUIPref(m)} onNavigate={go} /> : <Loading what="settings" />
+      case 'problems': return <ProblemsPage />
+      case 'threats': return <ThreatsPage />
+      case 'hosted': return <HostedPage />
+      case 'links': return <LinksPage />
+      case 'services': return <ServicesPage onNavigate={(x) => navigate(x)} />
+      case 'events': return <EventsPage />
+      case 'alerts': return <AlertsPage />
+      case 'reports': return <ReportsPage />
+      case 'changes': return <ChangeTimelinePage />
+      case 'settings': return <SettingsPage status={status} onAuthChange={onAuthChange} />
+      default: return null
+    }
+  }
 
   return (
     <div className={`shell${ui === 'simple' ? ' simple' : ''}${tabs ? ' tabs' : ''}`}>
@@ -244,31 +377,31 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
           </div>
         </div>
 
-        {grouped.map((g, gi) => (
-          <div key={gi} className="nav-section">
-            {g.group && !(narrow && ui === 'advanced') && <div className="nav-group">{g.group}</div>}
-            {g.items.map((r) => {
-              const Icon = Icons[r.icon]
-              const badge =
-                r.id === 'events' && alerts > 0 ? <span className="nav-badge alert">{alerts}</span>
-                : r.id === 'adblock' && candidates > 0 ? <span className="nav-badge live">{candidates}</span>
-                : null
-              return (
-                <button key={r.id} className="nav-item" onClick={() => navigate(r.id)} title={r.label}
-                  aria-current={shown === r.id ? 'page' : undefined}>
-                  <Icon />
-                  <span>{narrow && r.short ? r.short : r.label}</span>
-                  {badge}
-                </button>
-              )
-            })}
-          </div>
-        ))}
-        {narrow && ui === 'advanced' && (
-          <button className="nav-item" onClick={() => setMoreOpen(true)} title="All pages"
-            aria-current={!inPrimary ? 'page' : undefined}>
-            <Icons.grid />
-            <span>More</span>
+        <div className="nav-section" ref={railThumb}>
+          <span className="thumb" aria-hidden="true" />
+          {hubs.map((h, i) => {
+            const Icon = Icons[h.icon]
+            const badge =
+              h.id === 'system' && alerts > 0 ? <span className="nav-badge alert">{alerts}</span>
+              : h.id === 'protection' && candidates > 0 ? <span className="nav-badge live">{candidates}</span>
+              : null
+            return (
+              <button key={h.id} className="nav-item" onClick={() => openHub(h)} title={`${h.label} (${i + 1})`}
+                onPointerEnter={() => { for (const r of h.routes) void PAGE_CODE[r.id]?.() }}
+                aria-current={hub?.id === h.id ? 'page' : undefined}>
+                <Icon />
+                <span>{narrow && h.short ? h.short : h.label}</span>
+                {badge}
+              </button>
+            )
+          })}
+        </div>
+
+        {ui === 'advanced' && !narrow && (
+          <button className="nav-item nav-ask" onClick={() => navigate('assistant')}
+            aria-current={shown === 'assistant' ? 'page' : undefined}>
+            <Icons.chat />
+            <span>Ask Orbis</span>
           </button>
         )}
 
@@ -282,57 +415,27 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
       <main className="main">
         <header className="topbar">
           <h1>{title}</h1>
-          <div className="spacer" />
-          {narrow && ui === 'advanced' && (
-            <button className="btn sm" title="Search pages, devices and settings" aria-label="Search"
-              onClick={() => window.dispatchEvent(new Event('orbis:palette'))}><Icons.search size={14} /></button>
+          {hub && hub.routes.length > 1 && (
+            <div className="subnav" role="navigation" aria-label={`${hub.label} pages`} ref={tabThumb}>
+              <span className="thumb" aria-hidden="true" />
+              {hub.routes.map((r) => (
+                <button key={r.id} onClick={() => navigate(r.id)}
+                  onPointerEnter={() => void PAGE_CODE[r.id]?.()}
+                  aria-current={shown === r.id ? 'page' : undefined}>{r.label}</button>
+              ))}
+            </div>
           )}
+          <div className="spacer" />
+          <button className="search-pill" title="Search pages, devices and settings" aria-label="Search"
+            onClick={() => window.dispatchEvent(new Event('orbis:palette'))}>
+            <Icons.search size={14} /><span>Search</span><kbd>⌘K</kbd>
+          </button>
           <Segmented value={ui} onChange={(v) => setUIPref(v)}
             options={[{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Advanced' }]} />
           <GlossaryButton />
-          {mode === 'observe' && (
-            <span className="tag info" title="Nothing is routed through this node yet">
-              observe mode
-            </span>
-          )}
-          <span className="tag" title="Live event stream">
-            <span className={`dot ${connected ? 'on' : 'off'}`} /> {connected ? 'live' : 'offline'}
-          </span>
         </header>
 
-        {moreOpen && (
-          <Drawer title="All pages" onClose={() => setMoreOpen(false)}>
-            <div style={{ display: 'grid', gap: 14 }}>
-              {(() => {
-                const out: Array<{ group: string; items: NavRoute[] }> = []
-                for (const r of ROUTES) {
-                  const g = r.group ?? (out.length ? out[out.length - 1].group : 'Observe')
-                  let b = out.find((x) => x.group === g)
-                  if (!b) { b = { group: g, items: [] }; out.push(b) }
-                  b.items.push(r)
-                }
-                return out
-              })().map((g) => (
-                <div key={g.group}>
-                  <div className="nav-group" style={{ display: 'block', padding: '0 0 6px' }}>{g.group}</div>
-                  <div className="more-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
-                    {g.items.map((r) => {
-                      const Icon = Icons[r.icon]
-                      return (
-                        <button key={r.id} className="nav-item"
-                          aria-current={shown === r.id ? 'page' : undefined}
-                          onClick={() => { setMoreOpen(false); navigate(r.id) }}>
-                          <Icon /><span>{r.label}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Drawer>
-        )}
-        <div className={`page${shown === 'globe' || shown === 'assistant' ? ' flush' : ''}`}>
+        <div ref={pageRef} className={`page${shown === 'globe' || shown === 'assistant' ? ' flush' : ''}`}>
           {updated && (
             <div className={route === 'globe' || route === 'assistant' ? 'flush-banner' : undefined}>
               <Banner tone="info" action={
@@ -358,53 +461,15 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
             </div>
           )}
 
-          <ErrorBoundary name={title} key={shown}>
-            <Suspense fallback={<Spinner />}>
-              {shown === 'dashboard' && <Dashboard status={status} summary={summary} onNavigate={navigate} />}
-              {route === 'globe' && <GlobePage />}
-              {route === 'flows' && <FlowsPage />}
-              {route === 'analytics' && <AnalyticsPage />}
-              {route === 'clients' && <ClientsPage />}
-              {route === 'health' && <InternetHealthPage />}
-              {route === 'topology' && <TopologyPage />}
-              {route === 'dns' && <DNSPage />}
-              {route === 'adblock' && <AdBlockPage />}
-              {route === 'dnstools' && <DNSToolsPage />}
-              {route === 'youtube' && <YouTubePage />}
-              {route === 'consent' && <ConsentPage />}
-              {route === 'gateway' && <GatewayPage />}
-              {route === 'intercept' && <InterceptPage />}
-              {route === 'firewall' && <FirewallPage status={status} />}
-              {route === 'network' && <NetworkPage status={status} />}
-              {route === 'vpn' && <VPNPage />}
-              {route === 'assistant' && <AssistantPage initialQuestion={pendingQuestion ?? undefined} onConsumed={() => setPendingQuestion(null)} />}
-              {route === 'profiles' && <ProfilesPage />}
-              {shown === 's-home' && <SimpleHome onNavigate={go} onAsk={onAsk} />}
-              {shown === 's-devices' && <SimpleDevices onNavigate={go} />}
-              {shown === 's-protection' && (config ? <SimpleProtection config={config} save={saveConfig} onNavigate={go} /> : <Spinner />)}
-              {shown === 's-usage' && (
-                <div style={{ display: 'grid', gap: 14 }}>
-                  <div className="hint" style={{ fontSize: 13.5, lineHeight: 1.6, maxWidth: 760 }}>
-                    What is using the internet, by app and by device. Devices marked "DNS only" are seen but not measured;
-                    press Intercept on one to measure it.
-                  </div>
-                  <ServicesPage onNavigate={(r) => navigate(r)} />
-                </div>
-              )}
-              {shown === 's-alerts' && <SimpleAlerts onNavigate={go} />}
-              {shown === 's-settings' && (config ? <SimpleSettings config={config} status={status} save={saveConfig} uiMode={ui} setUIMode={(m) => setUIPref(m)} onNavigate={go} /> : <Spinner />)}
-              {route === 'problems' && <ProblemsPage />}
-              {route === 'threats' && <ThreatsPage />}
-              {route === 'hosted' && <HostedPage />}
-              {route === 'links' && <LinksPage />}
-              {route === 'services' && <ServicesPage onNavigate={(r) => setRoute(r)} />}
-              {route === 'events' && <EventsPage />}
-              {route === 'alerts' && <AlertsPage />}
-              {route === 'reports' && <ReportsPage />}
-              {route === 'changes' && <ChangeTimelinePage />}
-              {route === 'settings' && <SettingsPage status={status} onAuthChange={onAuthChange} />}
-            </Suspense>
-          </ErrorBoundary>
+          {(kept.includes(shown) ? kept : [shown, ...kept]).map((r) => (
+            <div key={r} className="view" hidden={r !== shown}>
+              <ViewVisible.Provider value={r === shown}>
+                <ErrorBoundary name={ALL_ROUTES.find((x) => x.id === r)?.label ?? title}>
+                  <Suspense fallback={<Loading what="this page" />}>{page(r)}</Suspense>
+                </ErrorBoundary>
+              </ViewVisible.Provider>
+            </div>
+          ))}
         </div>
       </main>
     </div>

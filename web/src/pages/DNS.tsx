@@ -7,7 +7,7 @@ import { clientName, clock, compact, pct } from '../format'
 import type { Client, DNSQuery } from '../types'
 
 import { DNSRecordsCard } from './DNSRecords'
-import { WhyDrawer } from './Why'
+import { useSiteActions, WhyDrawer } from './Why'
 
 export function DNSPage() {
   const [query, setQuery] = useState('')
@@ -15,6 +15,7 @@ export function DNSPage() {
   const [clientId, setClientId] = useState('')
   const [paused, setPaused] = useState(false)
   const [why, setWhy] = useState<{ name: string; client?: string } | null>(null)
+  const sites = useSiteActions()
   const [lookup, setLookup] = useState('')
   const [lookupResult, setLookupResult] = useState<Awaited<ReturnType<typeof api.adblock.check>> | null>(null)
   const debounced = useDebounced(query, 250)
@@ -198,6 +199,7 @@ export function DNSPage() {
                   <th>Answer</th>
                   <th style={{ width: 88 }}>Result</th>
                   <th className="num" style={{ width: 64 }}>Latency</th>
+                  <th style={{ width: 76 }} />
                 </tr>
               </thead>
               <tbody>
@@ -229,6 +231,11 @@ export function DNSPage() {
                       </td>
                       <td className="num" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
                         {q.latency_ms ? `${q.latency_ms.toFixed(0)}ms` : '-'}
+                      </td>
+                      <td className="tools" onClick={(e) => e.stopPropagation()}>
+                        {q.blocked
+                          ? <button className="btn sm" onClick={() => void sites.allow(q.name)}>Allow</button>
+                          : <button className="btn sm" onClick={() => void sites.block(q.name)}>Block</button>}
                       </td>
                     </tr>
                   )

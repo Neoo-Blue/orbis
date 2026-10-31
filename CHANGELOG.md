@@ -6,7 +6,20 @@ under "Show release notes" when it offers an update.
 
 ## v1.36.2
 
+### Added
+- **Devices get their names from your router.** In observe mode Orbis never sees DHCP, so devices read as
+  bare addresses. It now asks the router what it calls each one.
+- **Act from the row.** The DNS log, Connections and a device's lookups have Allow, Block and Why on each
+  row, with Undo. A device can be marked trusted from its own page.
+
+### Changed
+- **Country codes replace emoji flags.**
+
 ### Fixed
+- **Orbis never saw a Pi running short of power.** It read a file that says 0 on some kernels. It now asks
+  the firmware, and low voltage shows in Needs you, since it can corrupt the SD card.
+- **A device's network switch read backwards.** It sat off while the device had access, and repeated the
+  Block device button beside it, so it is gone.
 - **A restart after changing lists left the network unfiltered.** Removing a list happened before the
   block index loaded, which on the reference Pi meant about seven minutes with nothing blocked. The saved
   index now loads first and keeps filtering, even if it is slightly out of date, until the rebuild lands.

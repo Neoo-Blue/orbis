@@ -3,6 +3,23 @@ import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Drawer, Loading, useToast } from '../ui'
 
+/** Allow or block a site from wherever it is showing, with an Undo. */
+export function useSiteActions() {
+  const toast = useToast()
+  const run = async (act: () => Promise<unknown>, done: string, name: string) => {
+    try {
+      await act()
+      toast(done, 'ok', { label: 'Undo', onClick: async () => { await api.adblock.deleteRule(name) } })
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'That did not work', 'err')
+    }
+  }
+  return {
+    allow: (name: string) => run(() => api.dnstools.allow(name), `${name} is allowed`, name),
+    block: (name: string) => run(() => api.dnstools.block(name), `${name} is blocked`, name),
+  }
+}
+
 /** Why a name was stopped, and what to do about it, without leaving the page
  *  you were on. */
 export function WhyDrawer({ name, clientId, onClose, onChanged }: {

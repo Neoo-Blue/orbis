@@ -7,7 +7,7 @@ import { Globe } from '../globe/Globe'
 import { FlatMap } from '../globe/FlatMap'
 import { KINDS, BLOCKED_COLOR, arcKind, kindColor, kindLabel, type ColorBy } from '../globe/kind'
 import { Banner, Icons, Segmented, useToast } from '../ui'
-import { bytes, clientName, countryFlag, compact, flowTarget } from '../format'
+import { bytes, clientName, compact, flowTarget } from '../format'
 import type { Client, Flow, GlobeArc } from '../types'
 
 type ViewMode = 'live' | 'history'
@@ -311,7 +311,6 @@ function CountryPanel({ countries, onFocus }: {
           <button key={c.country} onClick={() => onFocus(c.lat, c.lon)}
             style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textAlign: 'left', color: 'inherit' }}>
             <div style={{ display: 'flex', gap: 7, alignItems: 'baseline', fontSize: 11.5, marginBottom: 2 }}>
-              <span>{countryFlag(c.country)}</span>
               <span style={{ flex: 1 }}>{c.country}</span>
               <span className="num" style={{ color: 'var(--text-dim)', fontSize: 10.5 }}>{bytes(c.bytes)}</span>
             </div>
@@ -370,7 +369,7 @@ function ArcDetail({ arc, onClose, onBlock }: { arc: GlobeArc; onClose: () => vo
           {arc.app && <><dt>Application</dt><dd>{arc.app}</dd></>}
           {arc.org && <><dt>Network</dt><dd>{arc.org}</dd></>}
           {arc.country && (
-            <><dt>Location</dt><dd>{countryFlag(arc.country)} {arc.city || arc.country}</dd></>
+            <><dt>Location</dt><dd>{arc.city || arc.country}</dd></>
           )}
           <dt>Received</dt><dd>{bytes(arc.bytes_in ?? 0)}</dd>
           <dt>Sent</dt><dd>{bytes(arc.bytes_out ?? 0)}</dd>

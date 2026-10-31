@@ -101,13 +101,6 @@ export function flowTarget(f: { hostname?: string; sni?: string; dst_ip: string 
   return f.hostname || f.sni || f.dst_ip
 }
 
-export function countryFlag(code: string | undefined): string {
-  if (!code || code.length !== 2) return ''
-  // Regional indicator symbols start at U+1F1E6 for 'A'.
-  const base = 0x1f1e6
-  const cc = code.toUpperCase()
-  return String.fromCodePoint(base + (cc.charCodeAt(0) - 65), base + (cc.charCodeAt(1) - 65))
-}
 
 const DEVICE_GLYPHS: Record<string, string> = {
   phone: '▯', tablet: '▭', laptop: '▬', desktop: '▮', tv: '◫', console: '◈',

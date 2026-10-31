@@ -7,7 +7,7 @@ import { arcKind, kindColor, type ColorBy } from './kind'
 
 /** One ring of one country, tagged with its ISO 3166-1 alpha-2 code. */
 interface CountryShape { c: string; n: string; r: number[] }
-import { bytes, countryFlag } from '../format'
+import { bytes } from '../format'
 
 /**
  * The flat (equirectangular) view of the same data the globe shows.
@@ -532,7 +532,7 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate: wantsMotion = t
             ↓ {bytes(hover.arc.bytes_in ?? 0)} received · ↑ {bytes(hover.arc.bytes_out ?? 0)} sent
           </div>
           <div className="meta">
-            {hover.arc.country && <>{countryFlag(hover.arc.country)} {hover.arc.city || hover.arc.country} · </>}
+            {hover.arc.country && <>{hover.arc.city || hover.arc.country} · </>}
             {hover.arc.org || hover.arc.dst}
           </div>
         </div>

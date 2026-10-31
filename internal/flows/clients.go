@@ -232,6 +232,23 @@ func (r *ClientRegistry) NoteDHCP(ip netip.Addr, mac, hostname, vendorClass, fin
 	r.pending[c.ID] = true
 }
 
+// NameDevice records a name learned from somewhere other than the device. Unlike
+// Observe it says nothing about the device being online. A record with no MAC is
+// keyed by its address, so a newer name replaces an older one.
+func (r *ClientRegistry) NameDevice(ip netip.Addr, hostname string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c := r.byIP[ip]
+	if c == nil || c.Hostname == hostname || (c.Hostname != "" && c.MAC != "") {
+		return
+	}
+	c.Hostname = hostname
+	if class, os := ident.DeviceClass(c.Vendor, hostname, "", ""); class != "unknown" {
+		c.DeviceType, c.OSGuess = class, os
+	}
+	r.pending[c.ID] = true
+}
+
 func (r *ClientRegistry) ByIP(ip netip.Addr) *store.Client {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

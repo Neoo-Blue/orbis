@@ -47,6 +47,8 @@ type Store struct {
 	kick chan struct{}
 	wg   sync.WaitGroup
 
+	checkpointing atomic.Bool
+
 	dropped       atomic.Uint64
 	flushes       atomic.Uint64
 	failedFlushes atomic.Uint64
@@ -236,7 +238,16 @@ func (s *Store) flushLoop() {
 		}
 		s.flush()
 		if time.Since(lastCheckpoint) >= time.Minute {
-			s.checkpoint()
+			// Copying a backlog into the database can take minutes on an SD
+			// card, and the log writer must not wait for it.
+			if s.checkpointing.CompareAndSwap(false, true) {
+				s.wg.Add(1)
+				go func() {
+					defer s.wg.Done()
+					defer s.checkpointing.Store(false)
+					s.checkpoint()
+				}()
+			}
 			lastCheckpoint = time.Now()
 		}
 	}

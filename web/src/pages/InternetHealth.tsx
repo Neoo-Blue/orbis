@@ -97,7 +97,6 @@ export function InternetHealthPage() {
   const fromSec = history?.from ?? nowSec - windowHours * 3600
   const toSec = history?.to ?? nowSec
   const gw = targets.find((t) => t.role === 'gateway')
-  const missingGateway = !warmingUp && gw && !gw.address
 
   return (
     <div className="nw-page">

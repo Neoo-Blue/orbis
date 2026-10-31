@@ -143,12 +143,25 @@ func TestEveryUpstreamFailingIsAFailureNotAnEmptySuccess(t *testing.T) {
 func TestPositiveAnswerBeatsAFasterStaleNegative(t *testing.T) {
 	stale := startUpstream(t, 0, nxdomain)
 	stale2 := startUpstream(t, 0, nxdomain)
-	stale3 := startUpstream(t, 0, nxdomain)
 	fresh := startUpstream(t, 60*time.Millisecond, goodAnswer)
-	s, _ := newTestServer(t, false, stale, stale2, stale3, fresh)
+	fresh2 := startUpstream(t, 80*time.Millisecond, goodAnswer)
+	s, _ := newTestServer(t, false, stale, stale2, fresh, fresh2)
 	got := ask(t, s, "new.example.com", dns.TypeA)
 	if got.Rcode != dns.RcodeSuccess || len(got.Answer) != 1 {
 		t.Fatalf("got %s with %d answers", dns.RcodeToString[got.Rcode], len(got.Answer))
+	}
+}
+
+func TestAMajorityOfResolversSettlesANegative(t *testing.T) {
+	var ups []*fakeUpstream
+	for i := 0; i < 3; i++ {
+		ups = append(ups, startUpstream(t, 0, nxdomain))
+	}
+	s, _ := newTestServer(t, false, append(ups, startUpstream(t, 2*time.Second, nxdomain), startUpstream(t, 2*time.Second, nxdomain))...)
+	start := time.Now()
+	ask(t, s, "gone.example.com", dns.TypeA)
+	if d := time.Since(start); d >= doubtWindow {
+		t.Fatalf("waited %v with a majority already in", d)
 	}
 }
 

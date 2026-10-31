@@ -833,18 +833,22 @@ func settled(m *dns.Msg) bool {
 	return !m.Truncated && (m.Rcode == dns.RcodeSuccess || m.Rcode == dns.RcodeNameError)
 }
 
-// doubtful reports a negative answer that needs every resolver's opinion.
-// Resolvers cache "does not exist" for as long as the zone asks, so a record
-// created after one of them looked stays invisible there while others see it.
+// agreementNeeded is how many resolvers must say a name has no answer before
+// that is believed. Resolvers cache "does not exist" for as long as the zone
+// asks, so a record created after one of them looked stays invisible there
+// while others see it: an NXDOMAIN or a missing A takes a majority. Waiting
+// for all of them would let the slowest set the price of every dead name.
 // Missing AAAA or HTTPS data is normal, does not take a name off the network,
-// and is on the path of nearly every first page load, so two resolvers
-// agreeing is enough for those.
-func doubtful(q dns.Question, m *dns.Msg) bool {
-	return m.Rcode == dns.RcodeNameError || q.Qtype == dns.TypeA
+// and is on the path of nearly every first page load, so two will do.
+func agreementNeeded(q dns.Question, m *dns.Msg, upstreams int) int {
+	if m.Rcode == dns.RcodeNameError || q.Qtype == dns.TypeA {
+		return upstreams/2 + 1
+	}
+	return 2
 }
 
 // race asks every upstream at once. Any real answer wins immediately; a
-// negative one must survive the others' opinions for up to doubtWindow;
+// negative one needs agreement, for at most doubtWindow;
 // SERVFAIL, REFUSED and errors never win while anyone can still answer.
 //
 // Asking everyone is cheap at a home network's query rate, keeps every
@@ -888,7 +892,7 @@ func (s *Server) race(ctx context.Context, ups []*Upstream, query *dns.Msg) (*dn
 					negative = &res
 					doubt = time.After(doubtWindow)
 				}
-				if agreed++; agreed >= 2 && !doubtful(q, negative.msg) {
+				if agreed++; agreed >= agreementNeeded(q, negative.msg, len(ups)) {
 					return negative.msg, negative.from, nil
 				}
 			}

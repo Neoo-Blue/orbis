@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#041c2f">
-<title>{{.Host}} stopped by Orbis</title>
+<title>{{if .Blocked}}{{.Host}} stopped by Orbis{{else}}Opening {{.Host}}{{end}}</title>
 <style nonce="{{.Nonce}}">
 @font-face { font-family: Geist; src: url(/__orbis/geist.woff2) format('woff2'); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: 'Geist Mono'; src: url(/__orbis/geist-mono.woff2) format('woff2'); font-weight: 100 900; font-display: swap; }

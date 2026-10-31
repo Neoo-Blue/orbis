@@ -179,6 +179,9 @@ func (s *Server) certificate(hello *tls.ClientHelloInfo, offered *sync.Map, mint
 // nothing at all for everything else. A blocked ad is a script or an image
 // inside someone else's page, and it should fail quietly and fast.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Keep no connection open: this page exists to be left. A browser would
+	// reuse one for its next try and land back here, even with the site allowed.
+	w.Header().Set("Connection", "close")
 	client := netip.Addr{}
 	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
 		client = ap.Addr().Unmap()

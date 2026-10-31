@@ -409,3 +409,15 @@ func TestTheApprovalPageCarriesNothingUnescaped(t *testing.T) {
 		t.Fatalf("referrer %q", w.Header().Get("Referrer-Policy"))
 	}
 }
+
+func TestThePageNeverHoldsAConnectionOpen(t *testing.T) {
+	s := testServer()
+	s.Explain = func(_ context.Context, host string, _ netip.Addr) Page { return Page{Host: host, When: "now"} }
+	w := get(s, "fine.example.com", map[string]string{"Sec-Fetch-Dest": "document"})
+	if w.Header().Get("Connection") != "close" {
+		t.Fatal("a browser would reuse this connection and land back on the page after approval")
+	}
+	if !strings.Contains(w.Body.String(), "<title>Opening fine.example.com</title>") {
+		t.Fatalf("title in the opening state: %.200s", w.Body.String())
+	}
+}

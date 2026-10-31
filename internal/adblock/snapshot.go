@@ -112,28 +112,25 @@ func (m *Matcher) SaveIndex(path, fingerprint string) error {
 	return os.Rename(tmp, path)
 }
 
-// LoadIndex replaces the list index with one saved by SaveIndex for the same
-// fingerprint.
-func (m *Matcher) LoadIndex(path, fingerprint string) error {
+// LoadIndex replaces the list index with one saved by SaveIndex and returns the
+// fingerprint it was saved with, for the caller to judge how current it is.
+func (m *Matcher) LoadIndex(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return err
+		return "", err
 	}
 	r := bufio.NewReaderSize(f, 1<<20)
 	var head savedHeader
 	if err := gob.NewDecoder(r).Decode(&head); err != nil {
-		return err
+		return "", err
 	}
 	if head.Version != indexVersion {
-		return fmt.Errorf("index version %d, want %d", head.Version, indexVersion)
-	}
-	if head.Fingerprint != fingerprint {
-		return fmt.Errorf("built from a different set of lists")
+		return "", fmt.Errorf("index version %d, want %d", head.Version, indexVersion)
 	}
 	idx := newIndex()
 	idx.ids, idx.count = nil, head.Count
@@ -142,30 +139,30 @@ func (m *Matcher) LoadIndex(path, fingerprint string) error {
 	}
 	for _, s := range []*domainSet{&idx.exact, &idx.wildcard, &idx.allowExact, &idx.allowWildcard} {
 		if err := s.read(r, info.Size()); err != nil {
-			return err
+			return "", err
 		}
 		for i, k := range s.keys {
 			if k != 0 && int(s.vals[i]) >= len(idx.entries) {
-				return fmt.Errorf("entry %d out of range", s.vals[i])
+				return "", fmt.Errorf("entry %d out of range", s.vals[i])
 			}
 		}
 	}
 	for _, sr := range head.Regexes {
 		re, err := compileRegex(sr.Pattern)
 		if err != nil {
-			return err
+			return "", err
 		}
 		idx.regexes = append(idx.regexes, regexEntry{re: re, source: sr.Source, category: sr.Category, important: sr.Important})
 	}
 	for _, sr := range head.AllowRegexes {
 		re, err := compileRegex(sr.Pattern)
 		if err != nil {
-			return err
+			return "", err
 		}
 		idx.allowRegexes = append(idx.allowRegexes, allowRegex{re: re, local: sr.Local, source: sr.Source})
 	}
 	m.buildMu.Lock()
 	m.idx.Store(idx)
 	m.buildMu.Unlock()
-	return nil
+	return head.Fingerprint, nil
 }

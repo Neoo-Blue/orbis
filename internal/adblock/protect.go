@@ -27,14 +27,16 @@ var protectedDomains = []string{
 // lists sweep up with the tracking next door. They get an exception, and anyone
 // can still block one by hand. Only an app's own servers belong here: the
 // trackers beside them, such as an.facebook.com and pixel.facebook.com, stay
-// blocked.
+// blocked. A leading *. covers a whole service's hosts.
 var essentialHosts = []string{
 	"b-graph.facebook.com", "b-graph-fallback.facebook.com", "mqtt-mini.facebook.com",
+	"*.weblab.a2z.com", // what turns on features in Amazon's shopping app
 }
 
 func addEssentialHosts(b *Builder) {
 	for _, d := range essentialHosts {
-		b.AddAllowFrom(d, false, false, "builtin:essential")
+		host, wild := strings.CutPrefix(d, "*.")
+		b.AddAllowFrom(host, wild, false, "builtin:essential")
 	}
 }
 

@@ -450,19 +450,22 @@ func TestListRowsChangingForcesARebuildAtBoot(t *testing.T) {
 }
 
 func TestAppServersWorkWhileTheirTrackersStayBlocked(t *testing.T) {
+	works := []string{"b-graph.facebook.com", "b-graph-fallback.facebook.com", "mqtt-mini.facebook.com",
+		"mshopandroidphone.triggers-v1.prod.mobile.weblab.a2z.com"}
+	trackers := []string{"an.facebook.com", "pixel.facebook.com", "unagi.amazon.com"}
 	b := NewBuilder()
-	for _, d := range append([]string{"an.facebook.com", "pixel.facebook.com"}, essentialHosts...) {
+	for _, d := range append(trackers, works...) {
 		b.AddBlock(d, "aggressive-list", "ads", false)
 	}
 	addEssentialHosts(b)
 	m := New()
 	m.Commit(b)
-	for _, d := range essentialHosts {
+	for _, d := range works {
 		if m.Lookup(d).Blocked {
 			t.Errorf("%s is blocked, and the app stops working", d)
 		}
 	}
-	for _, d := range []string{"an.facebook.com", "pixel.facebook.com"} {
+	for _, d := range trackers {
 		if !m.Lookup(d).Blocked {
 			t.Errorf("%s is a tracker and must stay blocked", d)
 		}

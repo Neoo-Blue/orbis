@@ -4,6 +4,12 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.36.1
+
+### Fixed
+- **Aggressive lists could break Amazon's shopping app.** They block the service that turns on features
+  in the app, which has a built-in exception now. Amazon's tracking stays blocked.
+
 ## v1.36.0
 
 Orbis is now far easier to get around, it moves, and a blocked site can be asked for and opened in one

@@ -13,9 +13,8 @@ import type {
   HostedResponse, StorageDevice, PortForward, RouterInfo,
   LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus, IDSStatus,
   UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus,
-  NetwatchStatus, NetwatchHistory } from './types'
-  ConfigHistoryListResponse, ConfigHistoryPending, ConfigHistoryRestoreResult,
-} from './types'
+  NetwatchStatus, NetwatchHistory,
+  ConfigHistoryListResponse, ConfigHistoryPending, ConfigHistoryRestoreResult } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {

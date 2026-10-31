@@ -1573,6 +1573,8 @@ export interface NetwatchHistory {
   to: number
   targets: NetwatchTargetSeries[]
   incidents: NetwatchIncident[]
+}
+
 export interface ConfigHistoryEntry {
   id: string
   time: string

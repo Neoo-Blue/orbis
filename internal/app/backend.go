@@ -418,7 +418,121 @@ func (a *App) RefreshBlocklists(ctx context.Context) error {
 func (a *App) ReloadPolicies() error { return a.reloadPolicies() }
 
 // Log gives the API layer access to the daemon logger.
-func (a *App) Log(format string, args ...any) { a.log(format, args...) }
+func (a *App) Log(format string, args ...any) {
+	if a.log != nil {
+		a.log(format, args...)
+	}
+}
+
+// ApplyConfigChanges nudges subsystems whose settings changed in keys without
+// requiring a full daemon restart. Shared by PATCH /config and configuration
+// history restore/revert so both paths reload identical state.
+func (a *App) ApplyConfigChanges(keys []string) {
+	if a == nil || len(keys) == 0 {
+		return
+	}
+	var (
+		didAdblock       bool
+		didDNS           bool
+		didTunnel        bool
+		didCountry       bool
+		didWiFi          bool
+		didDiscover      bool
+		didThreat        bool
+		didThreatEnforce bool
+		didAI            bool
+	)
+	for _, key := range keys {
+		switch {
+		case key == "adblock" || strings.HasPrefix(key, "adblock."):
+			if !didAdblock {
+				didAdblock = true
+				if a.Lists != nil {
+					if err := a.Lists.Rebuild(context.Background()); err != nil {
+						a.Log("adblock: rebuild after config change: %v", err)
+					}
+				}
+				if a.DNS != nil {
+					a.FlushDNSCache("")
+				}
+			}
+		case strings.HasPrefix(key, "dns.upstreams"), key == "dns.strategy":
+			if !didDNS {
+				didDNS = true
+				if a.DNS != nil {
+					if err := a.DNS.ReloadUpstreams(); err != nil {
+						a.Log("dns: reload upstreams: %v", err)
+					}
+				}
+			}
+		case key == "vpn" || strings.HasPrefix(key, "vpn."),
+			key == "tailscale" || strings.HasPrefix(key, "tailscale."),
+			key == "firewall.wan_interface":
+			// Anything that changes which interfaces carry tunnel traffic,
+			// or where it egresses, invalidates the tunnel ruleset.
+			if !didTunnel {
+				didTunnel = true
+				if a.Firewall != nil {
+					a.SyncTunnelRules()
+				}
+			}
+		case key == "country" || strings.HasPrefix(key, "country."):
+			if !didCountry {
+				didCountry = true
+				if a.Country != nil {
+					a.Country.Reconfigure()
+				}
+				if a.Firewall != nil {
+					go a.ReapplyThreatEnforcement()
+				}
+			}
+		case key == "wifi" || strings.HasPrefix(key, "wifi."):
+			if !didWiFi {
+				didWiFi = true
+				if a.WiFi != nil {
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+						defer cancel()
+						if err := a.WiFi.Reconcile(ctx); err != nil {
+							a.Log("wifi: %v", err)
+						}
+					}()
+				}
+			}
+		case key == "discover.enabled", key == "discover.extra_ports":
+			if !didDiscover {
+				didDiscover = true
+				if a.Discover != nil {
+					a.Discover.RequestScan()
+				}
+			}
+		case key == "threat" || strings.HasPrefix(key, "threat."):
+			if !didThreat {
+				didThreat = true
+				if a.Threat != nil {
+					a.Threat.Reconfigure()
+				}
+			}
+			if (key == "threat" || key == "threat.enabled" || key == "threat.block_inbound" || key == "threat.block_outbound") && !didThreatEnforce {
+				// The drop rules themselves live in the rendered rulesets.
+				didThreatEnforce = true
+				if a.Firewall != nil {
+					go a.ReapplyThreatEnforcement()
+				}
+			}
+		case key == "ai.enabled", key == "ai.provider", key == "ai.api_key", key == "ai.base_url",
+			key == "ai.auto_discover":
+			// A new provider or key deserves a fresh ranking straight away
+			// rather than at the next scheduled probe.
+			if !didAI {
+				didAI = true
+				if a.AI != nil && a.AI.Router() != nil {
+					a.AI.Router().RequestProbe()
+				}
+			}
+		}
+	}
+}
 
 // Context returns the app lifetime context.
 func (a *App) Context() context.Context { return a.ctx }

@@ -7,12 +7,17 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
@@ -67,8 +72,9 @@ type Config struct {
 	// path and mu are runtime state, not configuration. mu is a pointer so
 	// that a Snapshot — which is a by-value copy — does not carry a copied
 	// lock; snapshots set it to nil and are read-only by construction.
-	path string
-	mu   *sync.RWMutex
+	path       string
+	historyDir string
+	mu         *sync.RWMutex
 	// gen counts mutations; snap caches the last snapshot for that gen.
 	gen  uint64
 	snap *snapshotCache
@@ -1395,6 +1401,28 @@ func (c *Config) reconcileMode() string {
 
 func (c *Config) Path() string { return c.path }
 
+// SetHistoryDir enables configuration history: after each Save that changes
+// the on-disk YAML, the replaced version is written to dir as <unix-nanos>.yaml.
+func (c *Config) SetHistoryDir(dir string) {
+	c.lock()
+	c.historyDir = dir
+	c.unlock()
+}
+
+// HistoryDir returns the configured history directory, or empty when disabled.
+func (c *Config) HistoryDir() string {
+	c.rlock()
+	defer c.runlock()
+	return c.historyDir
+}
+
+// Generation returns the mutation counter incremented on each successful Update.
+func (c *Config) Generation() uint64 {
+	c.rlock()
+	defer c.runlock()
+	return c.gen
+}
+
 // Validate catches the misconfigurations that would otherwise surface as a
 // confusing runtime failure.
 func (c *Config) Validate() error {
@@ -1481,6 +1509,30 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// ValidateUpdate runs the same checks Update applies before accepting a
+// mutation, including inline-mode prerequisites, without mutating c.
+func (c *Config) ValidateUpdate() error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	cp := *c
+	if msg := cp.reconcileMode(); msg != "" {
+		return fmt.Errorf("inline mode not applied: %s", msg)
+	}
+	return nil
+}
+
+// ApplyValues copies every configuration field from src while keeping this
+// instance's path, history directory, lock and generation counter intact.
+func (c *Config) ApplyValues(src *Config) {
+	path, hist, mu, gen, snap := c.path, c.historyDir, c.mu, c.gen, c.snap
+	*c = *src
+	c.Notes = nil
+	c.path, c.historyDir, c.mu, c.gen, c.snap = path, hist, mu, gen, snap
+}
+
+const maxHistoryFiles = 200
+
 // Save writes the config atomically so a crash mid-write cannot leave the
 // node without a parseable configuration.
 func (c *Config) Save() error {
@@ -1501,11 +1553,83 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
+	var prev []byte
+	var prevErr error
+	if c.historyDir != "" {
+		prev, prevErr = os.ReadFile(c.path)
+	}
 	tmp := c.path + ".tmp"
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, c.path)
+	if err := os.Rename(tmp, c.path); err != nil {
+		return err
+	}
+	if c.historyDir != "" && prevErr == nil && !bytes.Equal(prev, out) {
+		archiveHistory(c.historyDir, prev)
+	}
+	return nil
+}
+
+func archiveHistory(dir string, prev []byte) {
+	if dir == "" || len(prev) == 0 {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	existing := listHistoryTimestamps(dir)
+	if len(existing) > 0 {
+		newest := filepath.Join(dir, strconv.FormatInt(existing[len(existing)-1], 10)+".yaml")
+		if last, err := os.ReadFile(newest); err == nil && bytes.Equal(last, prev) {
+			pruneHistory(dir, existing)
+			return
+		}
+	}
+	ts := time.Now().UnixNano()
+	if len(existing) > 0 && ts <= existing[len(existing)-1] {
+		ts = existing[len(existing)-1] + 1
+	}
+	dst := filepath.Join(dir, strconv.FormatInt(ts, 10)+".yaml")
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, prev, 0o600); err != nil {
+		return
+	}
+	_ = os.Chmod(tmp, 0o600)
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return
+	}
+	existing = append(existing, ts)
+	pruneHistory(dir, existing)
+}
+
+func listHistoryTimestamps(dir string) []int64 {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]int64, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		stem := strings.TrimSuffix(e.Name(), ".yaml")
+		if ts, err := strconv.ParseInt(stem, 10, 64); err == nil && ts > 0 {
+			out = append(out, ts)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func pruneHistory(dir string, sorted []int64) {
+	if len(sorted) <= maxHistoryFiles {
+		return
+	}
+	for _, ts := range sorted[:len(sorted)-maxHistoryFiles] {
+		_ = os.Remove(filepath.Join(dir, strconv.FormatInt(ts, 10)+".yaml"))
+	}
 }
 
 // Update applies fn under the write lock, validates the result, and persists.

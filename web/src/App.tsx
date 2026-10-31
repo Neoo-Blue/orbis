@@ -43,12 +43,13 @@ const ServicesPage = lazy(() => import('./pages/Services').then(m => ({ default:
 const ProfilesPage = lazy(() => import('./pages/Profiles').then(m => ({ default: m.ProfilesPage })))
 const EventsPage = lazy(() => import('./pages/Events').then(m => ({ default: m.EventsPage })))
 const InternetHealthPage = lazy(() => import('./pages/InternetHealth').then(m => ({ default: m.InternetHealthPage })))
+const ChangeTimelinePage = lazy(() => import('./pages/ChangeTimeline').then(m => ({ default: m.ChangeTimelinePage })))
 const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })))
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
   | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services' | 'threats' | 'hosted' | 'links'
-  | 'profiles' | 'health' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
+  | 'profiles' | 'health' | 'changes' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
 
 type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; group?: string; short?: string }
 const ROUTES: NavRoute[] = [
@@ -79,6 +80,7 @@ const ROUTES: NavRoute[] = [
   { id: 'events', label: 'Events', icon: 'bell' },
   { id: 'alerts', label: 'Alerts', icon: 'alert' },
   { id: 'reports', label: 'Reports', icon: 'grid' },
+  { id: 'changes', label: 'Change timeline', icon: 'route' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]
 
@@ -399,6 +401,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
               {route === 'events' && <EventsPage />}
               {route === 'alerts' && <AlertsPage />}
               {route === 'reports' && <ReportsPage />}
+              {route === 'changes' && <ChangeTimelinePage />}
               {route === 'settings' && <SettingsPage status={status} onAuthChange={onAuthChange} />}
             </Suspense>
           </ErrorBoundary>

@@ -138,7 +138,8 @@ func (m *Manager) UpdateAll(ctx context.Context, force bool) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			did, err := m.updateOne(ctx, meta)
-			if err != nil {
+			// Being stopped part way says nothing about the list.
+			if err != nil && ctx.Err() == nil {
 				m.log("adblock: list %q failed: %v", meta.Name, err)
 				_ = m.st.SetListError(meta.Name, err.Error())
 			}

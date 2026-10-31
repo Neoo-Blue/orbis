@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -663,5 +665,62 @@ func TestABackfillStopsWithTheDaemon(t *testing.T) {
 	}
 	if _, err := s.ApplyGeoUpdates(ctx, []GeoUpdate{{IP: f.DstIP, Country: "US"}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func addFlowAt(t *testing.T, s *Store, rowid int64, dst string) {
+	t.Helper()
+	f := flowRow(int(rowid))
+	if _, err := s.db.Exec(`INSERT INTO flows (rowid, id, started_at, last_seen, proto, src_ip, dst_ip, direction, country)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'AU')`, rowid, f.ID, f.StartedAt.Unix(), f.LastSeen.Unix(), f.Proto, f.SrcIP, dst, f.Direction); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFlowScansCoverEveryWindowAndStopBetweenThem(t *testing.T) {
+	s := openTestStore(t)
+	for i, id := range []int64{1, flowWindow, flowWindow + 1, flowWindow*2 + 5} {
+		addFlowAt(t, s, id, fmt.Sprintf("10.8.0.%d", i%3))
+	}
+	ips, err := s.AllFlowDestinations(context.Background(), 100)
+	if err != nil || len(ips) != 3 {
+		t.Fatalf("got %v: %v", ips, err)
+	}
+	if got, _ := s.AllFlowDestinations(context.Background(), 2); len(got) != 2 {
+		t.Fatalf("limit ignored: %v", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	seen := 0
+	err = s.scanFlows(ctx, `SELECT rowid FROM flows NOT INDEXED WHERE rowid > ? AND rowid <= ?`, func(*sql.Rows) error {
+		seen++
+		cancel()
+		return nil
+	})
+	// The first window holds two rows, and cancelling takes effect at its end.
+	if !errors.Is(err, context.Canceled) || seen != 2 {
+		t.Fatalf("read %d rows after cancelling: %v", seen, err)
+	}
+}
+
+func TestFlowScansStayOnTheirWindow(t *testing.T) {
+	s := openTestStore(t)
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN SELECT DISTINCT dst_ip FROM flows NOT INDEXED
+		WHERE (country != '' OR lat != 0 OR lon != 0 OR city != '') AND rowid > 1 AND rowid <= 2`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(detail + "\n")
+	}
+	if !strings.Contains(plan.String(), "rowid>? AND rowid<?") {
+		t.Fatalf("a window that scans the whole table is no window:\n%s", plan.String())
 	}
 }

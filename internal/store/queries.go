@@ -1141,23 +1141,18 @@ func (s *Store) ApplyGeoUpdates(ctx context.Context, updates []GeoUpdate) (int64
 // continent: an arc from the living room to Asia is worse than no arc.
 func (s *Store) ClearFlowGeo(ctx context.Context, dstIPs []string) (int64, error) {
 	const clear = `UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''`
-	// No index covers this search, so it scans the table. It reads outside the
-	// write lock, and only the rows it finds pay for one.
-	rows, err := s.db.QueryContext(ctx, `SELECT rowid FROM flows
-		WHERE direction = 'local' AND (country != '' OR lat != 0 OR lon != 0)`)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
+	// No index covers this search, so it reads the table. It does that outside
+	// the write lock, and only the rows it finds pay for one.
 	var local []int64
-	for rows.Next() {
+	err := s.scanFlows(ctx, `SELECT rowid FROM flows NOT INDEXED
+		WHERE direction = 'local' AND (country != '' OR lat != 0 OR lon != 0)
+		AND rowid > ? AND rowid <= ?`, func(rows *sql.Rows) error {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return 0, err
-		}
+		err := rows.Scan(&id)
 		local = append(local, id)
-	}
-	if err := rows.Err(); err != nil {
+		return err
+	})
+	if err != nil {
 		return 0, err
 	}
 	total, err := s.updateInBatches(ctx, len(local), clear+` WHERE rowid = ?`, func(i int) []any { return []any{local[i]} })
@@ -1172,21 +1167,57 @@ func (s *Store) ClearFlowGeo(ctx context.Context, dstIPs []string) (int64, error
 // AllFlowDestinations lists every distinct destination in history, so the
 // backfill can decide which are bogons that should never have a position.
 func (s *Store) AllFlowDestinations(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT dst_ip FROM flows
-		WHERE country != '' OR lat != 0 OR lon != 0 OR city != '' LIMIT ?`, clampInt(limit, 1, 100000))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	limit = clampInt(limit, 1, 100000)
+	seen := map[string]bool{}
 	out := []string{}
-	for rows.Next() {
+	err := s.scanFlows(ctx, `SELECT DISTINCT dst_ip FROM flows NOT INDEXED
+		WHERE (country != '' OR lat != 0 OR lon != 0 OR city != '')
+		AND rowid > ? AND rowid <= ?`, func(rows *sql.Rows) error {
 		var ip string
 		if err := rows.Scan(&ip); err != nil {
-			return nil, err
+			return err
 		}
-		out = append(out, ip)
+		if !seen[ip] && len(out) < limit {
+			seen[ip] = true
+			out = append(out, ip)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// flowWindow is how many rows of the flow table one read spans. sqlite honours
+// cancellation only up to a query's first row, so a single read of the whole
+// table cannot be stopped between matches and would hold up shutdown.
+const flowWindow = 100_000
+
+// scanFlows runs a query over the flow table one window of rowids at a time.
+// The query ends in rowid bounds, and NOT INDEXED keeps sqlite on them.
+func (s *Store) scanFlows(ctx context.Context, query string, each func(*sql.Rows) error) error {
+	var top int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid), 0) FROM flows`).Scan(&top); err != nil {
+		return err
 	}
-	return out, rows.Err()
+	for from := int64(0); from < top; from += flowWindow {
+		if err := s.scanWindow(ctx, query, from, each); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) scanWindow(ctx context.Context, query string, from int64, each func(*sql.Rows) error) error {
+	rows, err := s.db.QueryContext(ctx, query, from, from+flowWindow)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := each(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // ---------- ask-on-first-connection ----------

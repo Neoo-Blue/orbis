@@ -256,8 +256,10 @@ func renderForwarding(cfg ForwardConfig) string {
 		}
 	}
 	if webRedirect {
-		w("    ip saddr @%s tcp dport 80 redirect to :%d comment \"intercept: filter http\"", web, cfg.HTTPPort)
-		w("    ip saddr @%s tcp dport 443 redirect to :%d comment \"intercept: filter https\"", web, cfg.HTTPSPort)
+		// Traffic to this node stays out of it, so the block page sees the
+		// device rather than the proxy connecting back as the node.
+		w("    ip saddr @%s fib daddr type != local tcp dport 80 redirect to :%d comment \"intercept: filter http\"", web, cfg.HTTPPort)
+		w("    ip saddr @%s fib daddr type != local tcp dport 443 redirect to :%d comment \"intercept: filter https\"", web, cfg.HTTPSPort)
 	}
 	w("  }")
 

@@ -49,9 +49,12 @@ Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones fr
   makes no outside requests.
 - **Restarts are quick.** The built block index is kept on disk, so filtering is back within seconds
   rather than after two and a half minutes, and shutdown no longer waits out its 20 second timeout.
-- **The firewall opens ports 80 and 443 to your zones** when the block page is on, in inline mode, and
-  answers any other TCP port from those zones with a reset, so a blocked name fails at once on every
-  port rather than timing out.
+- **The firewall opens ports 80 and 443 to your lan and vpn zones** when the block page is on, in inline
+  mode. Everything else from your non-WAN zones gets a reset, so a blocked name fails at once on every
+  port and in every zone rather than timing out. Guest and IoT zones still cannot reach the interface.
+- **Traffic to Orbis itself skips the filter proxy,** so the block page sees the real device.
+- **URLhaus now comes from AdGuard's compiled feed.** abuse.ch withdrew its free downloads. Existing
+  installs move over on their own. 1Hosts (mini) switches itself off: it has been empty since March 2025.
 - **Lists refresh together, overnight.** A pass takes everything due soon, between 02:00 and 05:00
   local time, and a list that has not changed costs nothing. Lists used to drift onto separate
   clocks, which rebuilt the whole index about once an hour.
@@ -72,7 +75,8 @@ Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones fr
 - **A geo repair held the database write lock for minutes after every boot.** Logging stopped, devices
   and open ports failed to save with "database is locked", and a restart in that window waited out
   the 20 second shutdown timeout with DNS already down. It now runs only when a GeoIP database
-  changes, searches without the lock, writes in short batches and stops with the daemon.
+  changes, reads and writes in small steps without holding the lock, and stops with the daemon.
+- **A list download cut short by a restart was reported as a failed list.**
 - **Cloaked trackers went upstream on every lookup,** because blocked CNAME answers were never
   cached. They now cost one query per TTL, and a rule change reaches what is already cached.
 - **Every cached and allowed lookup scanned all 1,200 list regexes,** 2.5 ms a time on a Pi. A verdict

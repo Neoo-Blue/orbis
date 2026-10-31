@@ -1310,13 +1310,36 @@ func DefaultThreatFeeds() []ThreatFeed {
 	}
 }
 
+// movedLists maps a list address that has gone away to where the same list
+// lives now, so a node configured before the move keeps it. Empty means nothing
+// replaces it, and the list is switched off instead of failing every refresh.
+var movedLists = map[string]string{
+	// abuse.ch withdrew its free downloads. AdGuard compiles the same feed.
+	"https://urlhaus.abuse.ch/downloads/hostfile/": "https://adguardteam.github.io/HostlistsRegistry/assets/filter_11.txt",
+	// 1Hosts mini has been an empty file since March 2025.
+	"https://adguardteam.github.io/HostlistsRegistry/assets/filter_38.txt": "",
+}
+
+func (c *Config) moveLists() {
+	for i := range c.AdBlock.Lists {
+		l := &c.AdBlock.Lists[i]
+		if to, moved := movedLists[l.URL]; moved {
+			if to == "" {
+				l.Enabled = false
+				continue
+			}
+			l.URL = to
+		}
+	}
+}
+
 func DefaultLists() []BlockList {
 	return []BlockList{
 		{Name: "StevenBlack unified", URL: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", Enabled: true, Category: "ads"},
 		{Name: "AdGuard DNS filter", URL: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt", Enabled: true, Category: "ads"},
 		{Name: "OISD small", URL: "https://small.oisd.nl/domainswild", Enabled: true, Category: "ads"},
 		{Name: "Peter Lowe ad/tracking", URL: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext", Enabled: true, Category: "tracking"},
-		{Name: "URLhaus malware", URL: "https://urlhaus.abuse.ch/downloads/hostfile/", Enabled: true, Category: "malware"},
+		{Name: "URLhaus malware", URL: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_11.txt", Enabled: true, Category: "malware"},
 		{Name: "Phishing Army", URL: "https://phishing.army/download/phishing_army_blocklist_extended.txt", Enabled: true, Category: "malware"},
 		{Name: "Hagezi multi PRO", URL: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro.txt", Enabled: false, Category: "ads"},
 		{Name: "Hagezi TIF (threat intel)", URL: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.txt", Enabled: false, Category: "malware"},
@@ -1344,6 +1367,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(raw, c); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	c.moveLists()
 	// Decoding replaced the struct's fields; the mutex is unexported and
 	// therefore untouched, but be explicit rather than relying on that.
 	if c.mu == nil {

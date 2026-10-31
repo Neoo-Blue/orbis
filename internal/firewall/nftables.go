@@ -419,11 +419,12 @@ func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (
 		}
 	}
 	if cfg.DNS.BlockPage {
-		// A blocked name resolves here for every port, not just the two the
-		// page answers on. A reset is the instant failure a sinkhole gave.
-		for _, z := range lanZones {
-			if len(zoneIfaces[z]) > 0 {
-				w("    iifname @zone_%s meta l4proto tcp reject with tcp reset comment \"blocked names fail fast\"", sanitize(z))
+		// A blocked name resolves here for every port, and for any zone with
+		// a rule letting it reach the resolver, not just the ports and zones
+		// the page is open to. A reset is the instant failure a sinkhole gave.
+		for _, z := range cfg.Firewall.Zones {
+			if z.Trust != "wan" && len(zoneIfaces[z.Name]) > 0 {
+				w("    iifname @zone_%s meta l4proto tcp reject with tcp reset comment \"blocked names fail fast\"", sanitize(z.Name))
 			}
 		}
 	}
@@ -558,8 +559,10 @@ func renderRuleset(cfg config.Config, rules []store.Rule, extras renderExtras) (
 			if z.Trust == "wan" || len(z.Interfaces) == 0 {
 				continue
 			}
-			w("    iifname @zone_%s tcp dport 80 redirect to :%d comment \"orbis filter proxy\"", sanitize(z.Name), httpPort)
-			w("    iifname @zone_%s tcp dport 443 redirect to :%d comment \"orbis filter proxy\"", sanitize(z.Name), tlsPort)
+			// Traffic to this node stays out of it: the proxy would connect
+			// back as the node, and the block page would lose sight of who asked.
+			w("    iifname @zone_%s fib daddr type != local tcp dport 80 redirect to :%d comment \"orbis filter proxy\"", sanitize(z.Name), httpPort)
+			w("    iifname @zone_%s fib daddr type != local tcp dport 443 redirect to :%d comment \"orbis filter proxy\"", sanitize(z.Name), tlsPort)
 		}
 	}
 	if cfg.DNS.Enabled && cfg.Mode == config.ModeInline {

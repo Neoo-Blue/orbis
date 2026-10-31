@@ -424,9 +424,9 @@ func renderTunnelRuleset(tc TunnelConfig) string {
 		w("    fib saddr type local return")
 		ifaces := append([]string{}, tc.ProxyZoneIfaces...)
 		ifaces = append(ifaces, tc.ProxyTunnelIfaces...)
-		w("    iifname { %s } tcp dport 80 redirect to :%d comment \"filter proxy (http)\"",
+		w("    iifname { %s } fib daddr type != local tcp dport 80 redirect to :%d comment \"filter proxy (http)\"",
 			quoteJoin(dedupe(ifaces)), tc.ProxyHTTP)
-		w("    iifname { %s } tcp dport 443 redirect to :%d comment \"filter proxy (tls)\"",
+		w("    iifname { %s } fib daddr type != local tcp dport 443 redirect to :%d comment \"filter proxy (tls)\"",
 			quoteJoin(dedupe(ifaces)), tc.ProxyTLS)
 		w("  }")
 		w("")

@@ -4,12 +4,15 @@ import { usePoll } from '../hooks'
 import { Banner, Card, Drawer, Empty, Field, Icons, Loading, Segmented, Switch, useToast } from '../ui'
 import { bytes, compact } from '../format'
 import type { Rule, SystemStatus } from '../types'
+import { ZoneMatrixPanel } from './ZoneMatrix'
 
 const CHAINS = ['forward', 'input', 'output', 'dnat', 'snat'] as const
 type Chain = (typeof CHAINS)[number]
 
 export function FirewallPage({ status }: { status: SystemStatus | null }) {
+  const [tab, setTab] = useState<'matrix' | 'rules'>('matrix')
   const [chain, setChain] = useState<Chain>('forward')
+  const [zonePair, setZonePair] = useState<{ src: string; dst: string } | null>(null)
   const [editing, setEditing] = useState<Partial<Rule> | null>(null)
   const [preview, setPreview] = useState(false)
   const { data, refresh } = usePoll(() => api.firewall.rules(), 15000)
@@ -17,8 +20,18 @@ export function FirewallPage({ status }: { status: SystemStatus | null }) {
   const toast = useToast()
 
   const rules = useMemo(
-    () => (data?.rules ?? []).filter((r) => r.chain === chain).sort((a, b) => a.position - b.position),
-    [data, chain],
+    () => (data?.rules ?? [])
+      .filter((r) => {
+        if (r.chain !== chain) return false
+        if (!zonePair) return true
+        const srcMatch = !r.src_zone || r.src_zone.toLowerCase() === zonePair.src.toLowerCase()
+        const dstMatch = !r.dst_zone || r.dst_zone.toLowerCase() === zonePair.dst.toLowerCase()
+        if (chain === 'input') return srcMatch
+        if (chain === 'output') return dstMatch
+        return srcMatch && dstMatch
+      })
+      .sort((a, b) => a.position - b.position),
+    [data, chain, zonePair],
   )
 
   const fw = status?.firewall as Record<string, unknown> | undefined
@@ -56,7 +69,7 @@ export function FirewallPage({ status }: { status: SystemStatus | null }) {
           Install <code>nftables</code> and restart Orbis.
         </Banner>
       )}
-      {status?.mode === 'observe' && (
+      {status?.mode === 'observe' && tab === 'rules' && (
         <Banner tone="info">
           The node is in observe mode. Rules can be written and previewed, but nothing is loaded
           into the kernel until you switch to inline mode in Settings.
@@ -82,11 +95,23 @@ export function FirewallPage({ status }: { status: SystemStatus | null }) {
       )}
 
       <div className="toolbar" style={{ marginBottom: 0 }}>
-        <Segmented value={chain} onChange={setChain}
-          options={CHAINS.map((c) => ({
-            value: c,
-            label: `${c} (${(data?.rules ?? []).filter((r) => r.chain === c).length})`,
-          }))} />
+        <Segmented value={tab} onChange={(v) => { setTab(v); if (v === 'matrix') setZonePair(null) }}
+          options={[
+            { value: 'matrix', label: 'Zone matrix' },
+            { value: 'rules', label: `Rules (${(data?.rules ?? []).length})` },
+          ]} />
+        {tab === 'rules' && (
+          <Segmented value={chain} onChange={(c) => { setChain(c); setZonePair(null) }}
+            options={CHAINS.map((c) => ({
+              value: c,
+              label: `${c} (${(data?.rules ?? []).filter((r) => r.chain === c).length})`,
+            }))} />
+        )}
+        {tab === 'rules' && zonePair && (
+          <button type="button" className="btn sm" onClick={() => setZonePair(null)} title="Clear zone filter">
+            {zonePair.src} → {zonePair.dst} <Icons.close size={12} />
+          </button>
+        )}
         <div style={{ flex: 1 }} />
         <span className="tag" title={String(fw?.last_error || '')}>
           <span className={`dot ${applied ? 'on' : 'off'}`} /> {applied ? 'ruleset live' : 'not applied'}
@@ -98,9 +123,21 @@ export function FirewallPage({ status }: { status: SystemStatus | null }) {
         <button className="btn primary sm" onClick={apply} disabled={!nftAvailable}>Apply</button>
       </div>
 
+      {tab === 'matrix' ? (
+        <ZoneMatrixPanel onOpenRules={(src, dst) => {
+          const nextChain: Chain = src === 'This node' && dst !== 'This node'
+            ? 'output'
+            : dst === 'This node'
+              ? 'input'
+              : 'forward'
+          setChain(nextChain)
+          setZonePair({ src, dst })
+          setTab('rules')
+        }} />
+      ) : (
       <Card flush>
         {!data ? <Loading what="rules" /> : rules.length === 0 ? (
-          <Empty title={`No rules in the ${chain} chain`}>
+          <Empty title={zonePair ? `No rules matching ${zonePair.src} to ${zonePair.dst}` : `No rules in the ${chain} chain`}>
             {chain === 'forward'
               ? 'Zone defaults still apply: LAN reaches the internet, guest and IoT zones are isolated.'
               : 'Add a rule to get started.'}
@@ -159,6 +196,7 @@ export function FirewallPage({ status }: { status: SystemStatus | null }) {
           </div>
         )}
       </Card>
+      )}
 
       {editing && <RuleEditor rule={editing} onSave={save} onClose={() => setEditing(null)} />}
       {preview && <RulesetPreview onClose={() => setPreview(false)} />}

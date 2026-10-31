@@ -152,6 +152,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountSafety(r)
 	s.mountSimple(r)
 	s.mountNetwatch(r)
+	s.mountZoneMatrix(r)
 
 	r.Route("/chat", func(r chi.Router) {
 		r.Get("/conversations", s.handleConversations)

@@ -100,6 +100,43 @@ export interface Rule {
   updated_at: string
 }
 
+export type MatrixVerdict = 'allow' | 'block' | 'mixed'
+
+export interface MatrixZone {
+  name: string
+  trust: string
+  interfaces: string[]
+  subnets: string[]
+  implicit: boolean
+}
+
+export interface MatrixCell {
+  src: string
+  dst: string
+  chain: string
+  default_action: 'allow' | 'block'
+  default_reason: string
+  verdict: MatrixVerdict
+  rule_count: number
+  counter_pkts: number
+  counter_bytes: number
+  has_block: boolean
+  rule_ids: string[]
+  rules: Rule[]
+  flows: number
+  flow_bytes: number
+  flows_blocked: number
+}
+
+export interface ZoneMatrixResponse {
+  mode: Mode
+  enforced: boolean
+  default_forward: string
+  window_seconds: number
+  zones: MatrixZone[]
+  cells: MatrixCell[]
+}
+
 export interface EventItem {
   id: string
   ts: string

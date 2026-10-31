@@ -230,7 +230,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       const box = canvas.parentElement!.getBoundingClientRect()
       dpr = Math.min(devicePixelRatio || 1, 2)
       // A kept page sits hidden with no size; it is drawn again when it returns.
-      if (!box.width || !box.height) return
+      if (Math.min(box.width, box.height) < 100) return
       w = box.width; h = box.height
       canvas.width = w * dpr; canvas.height = h * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)

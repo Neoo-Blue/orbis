@@ -100,7 +100,7 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
       <Section title="At a glance">
         <ul className="glance">
           <Glance what="Ads and trackers blocked today" value={num(health.blocked_today)} onClick={() => onNavigate('s-protection')} />
-          <Glance what="Devices online" sub={health.devices_paused ? `${health.devices_paused} paused` : 'None paused'} value={health.devices_online} onClick={() => onNavigate('s-devices')} />
+          <Glance what="Devices online" sub={health.devices_paused ? `${health.devices_paused} paused` : 'None paused'} value={clients ? devices.length : health.devices_online} onClick={() => onNavigate('s-devices')} />
           <Glance what="Protection" sub={health.youtube_tv ? 'YouTube TV ads skipped' : 'YouTube TV skipping off'} value={health.protection_on ? 'On' : 'Off'} onClick={() => onNavigate('s-protection')} />
           <Glance what="What is using the internet" sub="By app and by device" onClick={() => onNavigate('s-usage')} />
           {health.resources && (

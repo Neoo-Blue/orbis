@@ -36,6 +36,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/lounge"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
+	"github.com/Neoo-Blue/orbis/internal/netwatch"
 	"github.com/Neoo-Blue/orbis/internal/notify"
 	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"github.com/Neoo-Blue/orbis/internal/safety"
@@ -107,6 +108,8 @@ type App struct {
 	Country *country.Manager
 	// IDS is the built-in intrusion detection: logs and flows into bans.
 	IDS *ids.Manager
+	// Netwatch probes the gateway and public targets to separate LAN from ISP faults.
+	Netwatch *netwatch.Manager
 	// res samples what the node is spending.
 	res *resourceSampler
 	// Update notices new releases and installs them where it can.
@@ -597,6 +600,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	// Per-service usage accounting.
 	a.Usage = usage.NewMeter()
 
+	// Continuous internet and gateway health probing.
+	a.Netwatch = netwatch.NewManager(cfg, st, logf)
+
 	if err := a.reloadPolicies(); err != nil {
 		logf("policies: load failed: %v", err)
 	}
@@ -694,6 +700,8 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.Country.Run(a.ctx) }()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.IDS.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Netwatch.Run(a.ctx) }()
 	a.res = newResourceSampler()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.sampleResources(a.ctx) }()

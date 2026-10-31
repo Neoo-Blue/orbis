@@ -230,7 +230,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       const box = canvas.parentElement!.getBoundingClientRect()
       dpr = Math.min(devicePixelRatio || 1, 2)
       // A kept page sits hidden with no size; it is drawn again when it returns.
-      if (Math.min(box.width, box.height) < (compact ? 60 : 160)) return
+      if (Math.min(box.width, box.height) < 100) return
       w = box.width; h = box.height
       canvas.width = w * dpr; canvas.height = h * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -277,7 +277,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       layout()
       // The focal moment: the plate opens from the centre, the devices rise to
       // their orbits and the lines run out to the rim.
-      const intro = 1 - (1 - Math.min(1, (t - born) / 1200)) ** 3
+      // A frame's timestamp can be a moment before the chart was mounted.
+      const intro = 1 - (1 - Math.min(1, Math.max(0, (t - born) / 1200))) ** 3
       ctx.clearRect(0, 0, w, h)
       if (intro < 1) {
         ctx.save()

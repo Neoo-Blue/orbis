@@ -273,7 +273,7 @@ function TargetRow({
     <div className="nw-target-row">
       <div className="nw-target-ident">
         <div className="nw-target-name-line">
-          <Dot state={dotForState(target.state)} label={`${target.name}: ${stateLabel(target.state)}`} />
+          <Dot state={target.last_ok ? dotForState(target.state) : 'warn'} label={`${target.name}: ${stateLabel(target.state)}`} />
           <span className="nw-target-name">{target.name}</span>
           <span className="nw-role-tag">{target.role === 'gateway' ? 'LAN hop' : 'Public'}</span>
         </div>
@@ -421,7 +421,7 @@ function TargetTimelineCanvas({
     const colAccent = cs.getPropertyValue('--accent').trim()
     const colGreen = cs.getPropertyValue('--green').trim() || colAccent
     const colAmber = cs.getPropertyValue('--amber').trim()
-    const colRed = cs.getPropertyValue('--red').trim()
+    const colRed = cs.getPropertyValue('--amber').trim()
 
     const W = size.w
     const H = size.h

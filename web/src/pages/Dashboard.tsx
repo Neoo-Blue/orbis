@@ -1,10 +1,10 @@
-import { useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import { useLiveBatch } from '../live'
 import { OrbitChart, type OrbitDevice, type OrbitFlow, type OrbitHandle } from '../orbit/OrbitChart'
 import { Card, Dot, Empty, Icons, Loading, Sparkline } from '../ui'
-import { ago, bits, bytes, clientName, compact, duration, num, pct, countryFlag } from '../format'
+import { ago, bits, bytes, clientName, compact, duration, num, pct } from '../format'
 import type { Client, DNSQuery, EventItem, Flow, Health, Summary, SystemStatus, NodeResources } from '../types'
 
 type Nav = 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings' | 'dnstools' | 'problems' | 'health'
@@ -12,7 +12,6 @@ type Nav = 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | '
 interface Props {
   status: SystemStatus | null
   summary: Summary | null
-  setupRequired: boolean
   onNavigate: (r: Nav, sub?: string) => void
 }
 
@@ -41,7 +40,10 @@ const THREAT_EVENTS = new Set(['threat', 'ids'])
 
 interface Tick { rate_in: number; rate_out: number; flows_active: number }
 
-export function Dashboard({ status, summary, setupRequired, onNavigate }: Props) {
+const ClientDrawer = lazy(() => import('./Clients').then((m) => ({ default: m.ClientDrawer })))
+
+export function Dashboard({ status, summary, onNavigate }: Props) {
+  const [openDevice, setOpenDevice] = useState<string | null>(null)
   const { data: health } = usePoll<Health>(() => api.simple.health(), 15000)
   const { data: clients } = usePoll(() => api.clients.list(), 12000)
   const { data: active } = usePoll(() => api.flows.active(160), 8000)
@@ -83,7 +85,6 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
   if (!summary) return <Loading what="overview" />
 
   const capture = status?.capture as Record<string, number | boolean> | undefined
-  const sysctlIssues = (status?.sysctl ?? []).filter((s) => s.critical && !s.ok)
   const level = health?.level ?? 'ok'
   const netFault = internet && internet.story !== 'ok' ? internet : null
   const verdict = !health ? 'Checking your network'
@@ -103,12 +104,10 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
   // Everything that needs the owner, in one place, most serious first.
   const attention: Attention[] = []
   for (const p of health?.points ?? []) {
-    if (p.level !== 'ok') attention.push({ key: p.text, level: p.level, title: p.text, go: () => onNavigate('events') })
+    if (p.level !== 'ok') attention.push({ key: p.text, level: p.level, title: p.text, go: () => onNavigate(p.page === 'settings' || p.page === 'firewall' ? p.page : 'events') })
   }
-  if (setupRequired) attention.push({ key: 'password', level: 'problem', title: 'No admin password is set. Anyone on this network can open Orbis.', go: () => onNavigate('settings') })
   if (netFault) attention.push({ key: 'internet', level: netFault.state === 'down' ? 'problem' : 'attention', title: netFault.headline, go: () => onNavigate('health') })
   if (capture && capture.interfaces === 0) attention.push({ key: 'capture', level: 'attention', title: 'Packet capture opened no interfaces, so names and sites will be missing from connections.', go: () => onNavigate('settings') })
-  if (sysctlIssues.length > 0 && status?.mode === 'inline') attention.push({ key: 'sysctl', level: 'problem', title: `${sysctlIssues.map((s) => s.key).join(', ')} not set correctly. Routing will not work as configured.`, go: () => onNavigate('firewall') })
   for (const e of (recentEvents?.events ?? []).filter((e) => !e.acknowledged && (e.severity === 'warning' || e.severity === 'critical')).slice(0, 3)) {
     attention.push({ key: e.id, level: e.severity === 'critical' ? 'problem' : 'attention', title: e.title, threat: THREAT_EVENTS.has(e.category), go: () => onNavigate('events') })
   }
@@ -136,7 +135,12 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
           )}
           <div className="plate-stopped">
             <div className="plate-caption"><b className="plate-figure">{compact(summary.dns_blocked)}</b> stopped today, {pct(summary.block_rate, 0)} of lookups</div>
-            {blockedPoints.length > 1 && <Sparkline points={blockedPoints} tone="red" height={36} />}
+            {blockedPoints.length > 1 && (
+              <>
+                <Sparkline points={blockedPoints} tone="red" height={96} />
+                <div className="plate-axis"><span>24h ago</span><span>now</span></div>
+              </>
+            )}
           </div>
           <dl className="plate-facts">
             <div><dt>Devices online</dt><dd>{clients ? online.length : summary.clients_online} of {clients?.clients.length ?? summary.clients}</dd></div>
@@ -148,8 +152,8 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
 
         <div className="plate-chart">
           <OrbitChart ref={orbit} devices={devices} flows={flows} title={status?.node} tone={tone}
-            onSelect={(id) => onNavigate('clients', id)} onStrike={(name) => onNavigate('dnstools', name)}
-            label={`${devices.length} devices online with ${flows.length} connections. The same devices are listed under Busiest devices.`} />
+            onSelect={setOpenDevice} onStrike={(name) => onNavigate('dnstools', name)}
+            label={`${devices.length} devices online with ${flows.length} connections. Every device is listed under Devices.`} />
         </div>
 
         <div className="plate-side">
@@ -188,6 +192,12 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
           )}
         </div>
       </section>
+
+      {openDevice && (
+        <Suspense fallback={null}>
+          <ClientDrawer id={openDevice} onClose={() => setOpenDevice(null)} onChanged={() => undefined} />
+        </Suspense>
+      )}
 
       <div className="grid c3">
         <Card title="Busiest devices"
@@ -253,7 +263,7 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
     {
       name: 'Packet capture',
       on: Number(status.capture?.interfaces ?? 0) > 0,
-      detail: `${status.capture?.interfaces ?? 0} interface(s) · ${compact(Number(status.capture?.packets ?? 0))} packets`,
+      detail: `${status.capture?.interfaces ?? 0} ${status.capture?.interfaces === 1 ? 'interface' : 'interfaces'} · ${compact(Number(status.capture?.packets ?? 0))} packets`,
       warn: Number(status.capture?.kernel_drops ?? 0) > 1000,
     },
     {
@@ -296,7 +306,7 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
         : status.tailscale.exit_node_in_use ? `via exit node ${status.tailscale.exit_node_in_use}`
         : status.tailscale.advertising_exit_node
           ? (status.tailscale.exit_node_approved ? 'exit node (approved)' : 'exit node awaiting approval')
-          : status.tailscale.backend_state,
+          : status.tailscale.backend_state || 'off',
       warn: Boolean(status.tailscale?.advertising_exit_node && !status.tailscale?.exit_node_approved),
     },
     {
@@ -358,7 +368,7 @@ function TopFlows({ flows, onOpen }: { flows: Flow[]; onOpen: () => void }) {
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() }
               }}>
               <td className="truncate" title={f.hostname || f.sni || f.dst_ip}>
-                {f.country && <span style={{ marginRight: 6 }}>{countryFlag(f.country)}</span>}
+                {f.country && <span className="mono" style={{ marginRight: 6, color: 'var(--text-faint)' }}>{f.country}</span>}
                 {f.hostname || f.sni || f.dst_ip}
               </td>
               <td style={{ color: 'var(--text-dim)' }}>{f.app || f.as_org || '-'}</td>

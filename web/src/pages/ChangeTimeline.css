@@ -216,6 +216,11 @@
   flex-wrap: wrap;
 }
 
+/* It changes the live network, so it does not sit in line with looking. */
+.ct-buttons .btn.danger {
+  margin-left: 20px;
+}
+
 .ct-confirm-toggle {
   display: inline-flex;
   align-items: center;
@@ -230,7 +235,8 @@
 .ct-confirm-toggle input[type='checkbox'] {
   width: 16px;
   height: 16px;
-  accent-color: var(--accent);
+  accent-color: var(--brass);
+  color-scheme: dark;
   cursor: pointer;
   flex-shrink: 0;
 }

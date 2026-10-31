@@ -841,6 +841,24 @@ func (a *App) Health() map[string]any {
 		worse(l)
 	}
 
+	if cfg.API.AdminHash == "" {
+		points = append(points, map[string]any{"level": "problem", "page": "settings",
+			"text": "No admin password is set. Anyone on this network can open Orbis."})
+		worse("problem")
+	}
+	if cfg.Mode == config.ModeInline {
+		var unset []string
+		for _, s := range firewall.CheckSysctls() {
+			if s.Critical && !s.OK {
+				unset = append(unset, s.Key)
+			}
+		}
+		if len(unset) > 0 {
+			points = append(points, map[string]any{"level": "problem", "page": "firewall",
+				"text": strings.Join(unset, ", ") + " not set correctly. Routing will not work as configured."})
+			worse("problem")
+		}
+	}
 	if cfg.DNS.Enabled && a.DNS != nil && !a.DNS.Running() {
 		add("problem", "The DNS filter is not running, so devices may have no internet or no protection.")
 	}

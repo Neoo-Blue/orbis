@@ -210,7 +210,7 @@ export function ClientsPage() {
   )
 }
 
-function ClientDrawer({ id, until, onClose, onChanged }: { id: string; until?: string; onClose: () => void; onChanged: () => void }) {
+export function ClientDrawer({ id, until, onClose, onChanged }: { id: string; until?: string; onClose: () => void; onChanged: () => void }) {
   const [tab, setTab] = useState<'activity' | 'dns' | 'settings'>('activity')
   const { data: client } = usePoll(() => api.clients.get(id), 8000, [id])
   const { data: flows } = usePoll(

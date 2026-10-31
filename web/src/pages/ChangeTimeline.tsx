@@ -403,12 +403,12 @@ export function ChangeTimelinePage() {
                           aria-expanded={isOpen}
                           onClick={() => toggleCompare(entry)}
                         >
-                          <Icons.activity size={14} />
+                          <Icons.split size={14} />
                           {isOpen ? 'Hide diff' : 'Compare'}
                         </button>
                         <button
                           type="button"
-                          className="btn"
+                          className="btn danger"
                           disabled={pending.pending || busyAction !== null}
                           title={
                             pending.pending
@@ -417,7 +417,7 @@ export function ChangeTimelinePage() {
                           }
                           onClick={() => void handleRestore(entry)}
                         >
-                          <Icons.refresh size={14} />
+                          <Icons.history size={14} />
                           {busyAction === `restore:${entry.id}` ? 'Restoring...' : 'Restore'}
                         </button>
                       </div>

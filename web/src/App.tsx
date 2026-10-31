@@ -360,7 +360,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
 
           <ErrorBoundary name={title} key={shown}>
             <Suspense fallback={<Spinner />}>
-              {shown === 'dashboard' && <Dashboard status={status} summary={summary} setupRequired={setupRequired} onNavigate={navigate} />}
+              {shown === 'dashboard' && <Dashboard status={status} summary={summary} onNavigate={navigate} />}
               {route === 'globe' && <GlobePage />}
               {route === 'flows' && <FlowsPage />}
               {route === 'analytics' && <AnalyticsPage />}

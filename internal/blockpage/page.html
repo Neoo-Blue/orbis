@@ -93,13 +93,14 @@ dd.code, .stop .code { font-family: var(--mono); font-size: 13px; font-variant-n
 .btn.primary:hover { background: #e6cc92; }
 .btn:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
 footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
+.copy-buffer { position: fixed; opacity: 0; }
 
 @keyframes flare { 0% { transform: scale(1); opacity: .9; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
-@media (min-width: 760px) {
+@media (min-width: 1000px) {
   main { padding-right: 0; }
   dl { max-width: 540px; }
 }
-@media (max-width: 759px) {
+@media (max-width: 999px) {
   /* A plate of its own above the text, so no ring runs through the words. */
   canvas { position: absolute; height: 128px; }
   main { padding-top: 136px; gap: 20px; justify-content: flex-start; }
@@ -153,7 +154,13 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
   if (reload) reload.onclick = function () { location.reload() };
   if (copy) copy.onclick = function () {
     var done = function () { copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = 'Copy details' }, 1800) };
-    if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copy).then(done);
+    if (navigator.clipboard) { navigator.clipboard.writeText(copy.dataset.copy).then(done); return }
+    // Plain http has no clipboard API, and most of these pages are plain http.
+    var buffer = document.createElement('textarea');
+    buffer.className = 'copy-buffer'; buffer.value = copy.dataset.copy;
+    document.body.appendChild(buffer); buffer.select();
+    if (document.execCommand('copy')) done();
+    buffer.remove();
   };
 
   // The plate: this one request, leaving the device along the traced line and
@@ -174,7 +181,7 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
     if (lit > decided) for (var i = decided + 1; i < stops.length; i++) stops[i].classList.add('lit');
   }
   function size() {
-    wide = innerWidth >= 760; w = innerWidth; h = wide ? innerHeight : 128;
+    wide = innerWidth >= 1000; w = innerWidth; h = wide ? innerHeight : 128;
     c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
     // Wide, the ring runs off the plate on purpose and clears the text column,
     // while the device on it stays on screen.
@@ -213,15 +220,15 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
     var device = point(0);
     x.beginPath(); x.fillStyle = '#efe9da'; x.arc(device[0], device[1], 3.2, 0, 6.2832); x.fill();
 
+    // With nothing blocked there is no request to draw dying at the shield.
+    if (decided < 1) return;
     var age = t % CYCLE, p = Math.min(1, age / TRAVEL), e = 1 - Math.pow(1 - p, 2.2);
     var fade = age > CYCLE - 900 ? (CYCLE - age) / 900 : 1;
-    if (decided > 0) {
-      reached(e);
-      for (var n = 1; n < decided; n++) {
-        var st = point(n / decided), on = e >= n / decided;
-        x.beginPath(); x.lineWidth = 1.6; x.strokeStyle = on ? '#b79cff' : 'rgba(183,156,255,.4)'; x.fillStyle = '#041c2f';
-        x.arc(st[0], st[1], wide ? 4.5 : 2.6, 0, 6.2832); x.fill(); x.stroke();
-      }
+    reached(e);
+    for (var n = 1; n < decided; n++) {
+      var st = point(n / decided), on = e >= n / decided;
+      x.beginPath(); x.lineWidth = 1.6; x.strokeStyle = on ? '#b79cff' : 'rgba(183,156,255,.4)'; x.fillStyle = '#041c2f';
+      x.arc(st[0], st[1], wide ? 4.5 : 2.6, 0, 6.2832); x.fill(); x.stroke();
     }
     x.globalAlpha = fade; x.beginPath(); x.lineWidth = 1.6; x.strokeStyle = '#b79cff';
     for (var k = 0; k <= 40; k++) { var q = point(e * k / 40); k ? x.lineTo(q[0], q[1]) : x.moveTo(q[0], q[1]); }
@@ -253,9 +260,9 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
     if (!document.hidden) raf = requestAnimationFrame(loop);
   }
   addEventListener('resize', size);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden && !still && !raf) raf = requestAnimationFrame(loop) });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && !still && decided > 0 && !raf) raf = requestAnimationFrame(loop) });
   size();
-  if (!still) raf = requestAnimationFrame(loop);
+  if (!still && decided > 0) raf = requestAnimationFrame(loop);
 })();
 </script>
 </body>

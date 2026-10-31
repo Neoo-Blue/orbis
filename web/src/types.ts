@@ -276,7 +276,7 @@ export interface Health {
   resources?: NodeResources
   level: 'ok' | 'attention' | 'problem'
   headline: string
-  points: Array<{ level: 'ok' | 'attention' | 'problem'; text: string }>
+  points: Array<{ level: 'ok' | 'attention' | 'problem'; text: string; page?: string }>
   devices_online: number
   devices_total: number
   devices_paused: number

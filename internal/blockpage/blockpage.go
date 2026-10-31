@@ -117,10 +117,10 @@ func hostname(s string) bool {
 	return true
 }
 
-// certificate answers a TLS hello: only for a name the resolver sent here, and
-// only as fast as the node can spare. Each refusal here leaves offered unset,
-// because a handshake we ended says nothing about whether the client trusts the
-// CA.
+// certificate answers a TLS hello: only for a name the resolver sent here, only
+// to a device that has not been refusing them, and only as fast as the node can
+// spare. Each refusal here leaves offered unset, because a handshake we ended
+// says nothing about whether the client trusts the CA.
 func (s *Server) certificate(hello *tls.ClientHelloInfo, offered *sync.Map, minting chan struct{}) (*tls.Certificate, error) {
 	client := netip.Addr{}
 	remote := ""
@@ -132,6 +132,9 @@ func (s *Server) certificate(hello *tls.ClientHelloInfo, offered *sync.Map, mint
 	}
 	if s.Allow != nil && !s.Allow(client) {
 		return nil, errors.New("too many handshakes from this client")
+	}
+	if s.Guard != nil && s.Guard.Refusing(client, time.Now()) {
+		return nil, errors.New("this client does not trust the certificate")
 	}
 	name := hello.ServerName
 	if !hostname(name) || (s.Claims != nil && !s.Claims(name)) {
@@ -295,11 +298,11 @@ func (s *Server) Close() {
 
 const (
 	// rejectionsToFallBack is how many refused certificates with no success
-	// send a device back to the plain sinkhole.
+	// stop this node offering a device HTTPS.
 	rejectionsToFallBack = 3
 	// fallBackFor is how long, so a device that installs the CA later gets
-	// the page again without anyone touching anything.
-	fallBackFor = 24 * time.Hour
+	// the page over HTTPS again without anyone touching anything.
+	fallBackFor = time.Hour
 	// trustedFor stops one pinned app from undoing what a browser proved.
 	trustedFor = 7 * 24 * time.Hour
 	// guardMaxClients bounds the table; a home network never reaches it.
@@ -399,14 +402,29 @@ func (g *Guard) Note(client netip.Addr, ok bool, now time.Time) {
 	}
 }
 
+// Refusing reports a device that has been turning down the certificate. It
+// fails TLS at once rather than being sent the sinkhole, because the same answer
+// serves plain http: a browser falling back from https then shows the page, with
+// no CA installed at all.
+func (g *Guard) Refusing(client netip.Addr, now time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	t := g.clients[client]
+	return t != nil && now.Before(t.until)
+}
+
+// Forgive starts a device over, for when it has just fetched the CA.
+func (g *Guard) Forgive(client netip.Addr) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.clients, client)
+}
+
 // AddrFor returns the address a client should be sent to for a blocked name, or
 // false when it should get the plain sinkhole instead.
 func (g *Guard) AddrFor(client netip.Addr, name string, now time.Time) (netip.Addr, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if t := g.clients[client]; t != nil && now.Before(t.until) {
-		return netip.Addr{}, false
-	}
 	if now.Sub(g.netsRead) > interfacesEvery {
 		if nets, err := g.interfaces(); err == nil {
 			g.nets, g.netsRead = nets, now

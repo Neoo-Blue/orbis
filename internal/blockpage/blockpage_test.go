@@ -109,22 +109,32 @@ func TestGuardSendsClientsToTheAddressOnTheirNetwork(t *testing.T) {
 	}
 }
 
-func TestGuardFallsBackAfterRejectionsThenTriesAgain(t *testing.T) {
+func TestARefusingDeviceKeepsThePageOverHTTP(t *testing.T) {
 	g := guardOn("192.168.50.75/24")
 	c := netip.MustParseAddr("192.168.50.9")
 	now := time.Now()
 	for i := 0; i < rejectionsToFallBack-1; i++ {
 		g.Note(c, false, now)
 	}
-	if _, ok := g.AddrFor(c, "ads.example.com", now); !ok {
+	if g.Refusing(c, now) {
 		t.Fatal("too few rejections to give up")
 	}
 	g.Note(c, false, now)
-	if _, ok := g.AddrFor(c, "ads.example.com", now); ok {
-		t.Fatal("a device that refuses the certificate must get the sinkhole")
+	if !g.Refusing(c, now) {
+		t.Fatal("a device that refuses the certificate should stop being offered it")
 	}
-	if _, ok := g.AddrFor(c, "ads.example.com", now.Add(fallBackFor+time.Minute)); !ok {
+	if _, ok := g.AddrFor(c, "ads.example.com", now); !ok {
+		t.Fatal("it must still reach the page: plain http needs no certificate")
+	}
+	if g.Refusing(c, now.Add(fallBackFor+time.Minute)) {
 		t.Fatal("a device that installs the CA later must be picked up again")
+	}
+	g.Note(c, false, now)
+	g.Note(c, false, now)
+	g.Note(c, false, now)
+	g.Forgive(c)
+	if g.Refusing(c, now) {
+		t.Fatal("fetching the CA should start the device over")
 	}
 }
 
@@ -136,8 +146,8 @@ func TestOnePinnedAppDoesNotUndoWhatABrowserProved(t *testing.T) {
 	for i := 0; i < rejectionsToFallBack*3; i++ {
 		g.Note(c, false, now)
 	}
-	if _, ok := g.AddrFor(c, "ads.example.com", now); !ok {
-		t.Fatal("a pinned app on a device that trusts the CA must not switch the page off")
+	if g.Refusing(c, now) {
+		t.Fatal("a pinned app on a device that trusts the CA must not switch HTTPS off")
 	}
 }
 
@@ -249,21 +259,18 @@ func listenBlockPage(t *testing.T, g *Guard) string {
 	return addr
 }
 
-func offered(t *testing.T, g *Guard, c netip.Addr, want bool) {
+func refusing(t *testing.T, g *Guard, c netip.Addr, want bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if _, got := g.AddrFor(c, "ads.example.com", time.Now()); got == want {
-			if time.Now().After(deadline) || want == false {
-				return
-			}
-			// Connections close asynchronously: a "still offered" needs time
-			// for a wrong verdict to appear.
-			time.Sleep(20 * time.Millisecond)
-			continue
+		got := g.Refusing(c, time.Now())
+		// Connections close asynchronously: "not refusing" needs time for a
+		// wrong verdict to appear.
+		if got == want && (want || time.Now().After(deadline)) {
+			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("page offered = %v, want %v", !want, want)
+		if got != want && time.Now().After(deadline) {
+			t.Fatalf("refusing = %v, want %v", got, want)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -289,11 +296,11 @@ func TestProbesDoNotSwitchThePageOff(t *testing.T) {
 		_, _ = conn.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n"))
 		conn.Close()
 	}
-	offered(t, g, c, true)
+	refusing(t, g, c, false)
 	for range rejectionsToFallBack {
 		dialAndRefuse(t, addr)
 	}
-	offered(t, g, c, false)
+	refusing(t, g, c, true)
 }
 
 func TestAToolSkippingVerificationProvesNothing(t *testing.T) {
@@ -309,7 +316,7 @@ func TestAToolSkippingVerificationProvesNothing(t *testing.T) {
 	for range rejectionsToFallBack {
 		dialAndRefuse(t, addr)
 	}
-	offered(t, g, netip.MustParseAddr("127.0.0.1"), false)
+	refusing(t, g, netip.MustParseAddr("127.0.0.1"), true)
 }
 
 func TestABrowserOverTLSIsProof(t *testing.T) {
@@ -325,7 +332,7 @@ func TestABrowserOverTLSIsProof(t *testing.T) {
 	for range rejectionsToFallBack {
 		g.Note(c, false, now)
 	}
-	if _, ok := g.AddrFor(c, "ads.example.com", now); !ok {
+	if g.Refusing(c, now) {
 		t.Fatal("this device already showed it trusts the CA")
 	}
 }

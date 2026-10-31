@@ -140,7 +140,8 @@ type hostnameHint struct {
 var hostnameHints = []hostnameHint{
 	{[]string{"iphone"}, "phone", "iOS"},
 	{[]string{"ipad"}, "tablet", "iPadOS"},
-	{[]string{"macbook", "imac", "mac-mini", "macmini", "mbp", "mba"}, "laptop", "macOS"},
+	{[]string{"macbook", "mbp", "mba"}, "laptop", "macOS"},
+	{[]string{"imac", "mac-mini", "macmini"}, "desktop", "macOS"},
 	{[]string{"apple-tv", "appletv"}, "tv", "tvOS"},
 	{[]string{"homepod"}, "speaker", "audioOS"},
 	{[]string{"android", "galaxy", "pixel", "oneplus"}, "phone", "Android"},

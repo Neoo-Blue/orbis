@@ -1024,7 +1024,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           </div>
 
           <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
-            <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-faint)', }}>
               Node IP address{addresses.length > 1 ? 'es' : ''} (port {port})
             </div>
             {addresses.map((addr) => (

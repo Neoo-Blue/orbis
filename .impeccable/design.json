@@ -1,0 +1,638 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-31T08:54:49+00:00",
+  "title": "Design System: Orbis",
+  "extensions": {
+    "colorMeta": {
+      "rail": {
+        "role": "primary",
+        "displayName": "True Prussian Rail",
+        "canonical": "#003153",
+        "tonalRamp": [
+          "#000c1a",
+          "#022742",
+          "#184569",
+          "#39658b",
+          "#5a87ae",
+          "#7faad0",
+          "#b3cde4",
+          "#e8f0f7"
+        ]
+      },
+      "ground": {
+        "role": "primary",
+        "displayName": "Atlas Ground",
+        "canonical": "#041c2f",
+        "tonalRamp": [
+          "#040c15",
+          "#122738",
+          "#2c455a",
+          "#4a647b",
+          "#6b869e",
+          "#8ea9c0",
+          "#bccbda",
+          "#eaeff4"
+        ]
+      },
+      "plate": {
+        "role": "primary",
+        "displayName": "Plate Blue",
+        "canonical": "#06263e",
+        "tonalRamp": [
+          "#020c17",
+          "#0d273c",
+          "#26455f",
+          "#456580",
+          "#6586a3",
+          "#8aa9c5",
+          "#b9ccdd",
+          "#e9eff5"
+        ]
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "canonical": "#0a3150",
+        "tonalRamp": [
+          "#010c19",
+          "#062741",
+          "#204565",
+          "#3f6587",
+          "#6086ab",
+          "#84a9cc",
+          "#b6cce1",
+          "#e8eff6"
+        ]
+      },
+      "raised-high": {
+        "role": "neutral",
+        "displayName": "Raised High",
+        "canonical": "#114169",
+        "tonalRamp": [
+          "#000c1b",
+          "#002646",
+          "#15456d",
+          "#37658f",
+          "#5887b3",
+          "#7daad5",
+          "#b2cde7",
+          "#e7f0f8"
+        ]
+      },
+      "hairline": {
+        "role": "secondary",
+        "displayName": "Brass Hairline",
+        "canonical": "rgba(214, 190, 138, 0.25)",
+        "tonalRamp": [
+          "#110a00",
+          "#302301",
+          "#533f07",
+          "#745e2c",
+          "#967f4d",
+          "#b8a273",
+          "#d5c8ac",
+          "#f2eee5"
+        ]
+      },
+      "hairline-soft": {
+        "role": "secondary",
+        "displayName": "Soft Brass Hairline",
+        "canonical": "rgba(214, 190, 138, 0.13)",
+        "tonalRamp": [
+          "#110a00",
+          "#302301",
+          "#533f07",
+          "#745e2c",
+          "#967f4d",
+          "#b8a273",
+          "#d5c8ac",
+          "#f2eee5"
+        ]
+      },
+      "hairline-strong": {
+        "role": "secondary",
+        "displayName": "Strong Brass Hairline",
+        "canonical": "rgba(214, 190, 138, 0.46)",
+        "tonalRamp": [
+          "#110a00",
+          "#302301",
+          "#533f07",
+          "#745e2c",
+          "#967f4d",
+          "#b8a273",
+          "#d5c8ac",
+          "#f2eee5"
+        ]
+      },
+      "ivory": {
+        "role": "neutral",
+        "displayName": "Ivory",
+        "canonical": "#efe9da",
+        "tonalRamp": [
+          "#0d0b07",
+          "#29251b",
+          "#464235",
+          "#666154",
+          "#878274",
+          "#aaa598",
+          "#ccc9c1",
+          "#efeeec"
+        ]
+      },
+      "text-dim": {
+        "role": "neutral",
+        "displayName": "Text Dim",
+        "canonical": "#aab6c6",
+        "tonalRamp": [
+          "#080b11",
+          "#1e2630",
+          "#394350",
+          "#576270",
+          "#788392",
+          "#9ba6b5",
+          "#c3cad3",
+          "#eceff1"
+        ]
+      },
+      "text-faint": {
+        "role": "neutral",
+        "displayName": "Text Faint",
+        "canonical": "#93a4b8",
+        "tonalRamp": [
+          "#060c12",
+          "#1a2634",
+          "#354354",
+          "#536375",
+          "#748497",
+          "#97a7b9",
+          "#c1cad6",
+          "#eceff2"
+        ]
+      },
+      "jade": {
+        "role": "tertiary",
+        "displayName": "Observatory Jade",
+        "canonical": "#62d8b2",
+        "tonalRamp": [
+          "#000f09",
+          "#012d21",
+          "#074e3c",
+          "#117258",
+          "#019976",
+          "#4fbc99",
+          "#9ed8c2",
+          "#e2f3ec"
+        ]
+      },
+      "brass": {
+        "role": "secondary",
+        "displayName": "Engraver's Brass",
+        "canonical": "#d9bc7c",
+        "tonalRamp": [
+          "#110a00",
+          "#302302",
+          "#543e02",
+          "#785d1b",
+          "#9a7e3f",
+          "#bca268",
+          "#d7c8a6",
+          "#f3eee4"
+        ]
+      },
+      "brass-light": {
+        "role": "secondary",
+        "displayName": "Pale Brass",
+        "canonical": "#e7cf97",
+        "tonalRamp": [
+          "#110a00",
+          "#302301",
+          "#533f00",
+          "#745e28",
+          "#96804a",
+          "#b8a371",
+          "#d5c8aa",
+          "#f2eee5"
+        ]
+      },
+      "brass-ink": {
+        "role": "secondary",
+        "displayName": "Brass Ink",
+        "canonical": "#1b1608",
+        "tonalRamp": [
+          "#0d0b06",
+          "#292518",
+          "#474232",
+          "#676151",
+          "#888271",
+          "#aba594",
+          "#cdc9bf",
+          "#efeeeb"
+        ]
+      },
+      "vermilion": {
+        "role": "tertiary",
+        "displayName": "Vermilion",
+        "canonical": "#f2643c",
+        "tonalRamp": [
+          "#1c0200",
+          "#460f01",
+          "#771e00",
+          "#aa3002",
+          "#d94d23",
+          "#fc7853",
+          "#feb5a0",
+          "#ffe9e3"
+        ]
+      },
+      "vermilion-ink": {
+        "role": "tertiary",
+        "displayName": "Vermilion Ink",
+        "canonical": "#1d0a04",
+        "tonalRamp": [
+          "#120906",
+          "#322019",
+          "#533c33",
+          "#745b51",
+          "#967c72",
+          "#b89f95",
+          "#d5c5bf",
+          "#f2edeb"
+        ]
+      },
+      "violet": {
+        "role": "tertiary",
+        "displayName": "Decision Violet",
+        "canonical": "#b79cff",
+        "tonalRamp": [
+          "#0f0225",
+          "#2d0c59",
+          "#4a2a83",
+          "#694ca7",
+          "#8a6ecd",
+          "#ac93ee",
+          "#cdc0f7",
+          "#efecfd"
+        ]
+      },
+      "rose": {
+        "role": "tertiary",
+        "displayName": "Rose",
+        "canonical": "#e8a7c0",
+        "tonalRamp": [
+          "#18040c",
+          "#3f1327",
+          "#632d45",
+          "#864d64",
+          "#aa6d85",
+          "#cc91a8",
+          "#e2becb",
+          "#f7ebef"
+        ]
+      },
+      "amber": {
+        "role": "tertiary",
+        "displayName": "Signal Amber",
+        "canonical": "#f2b544",
+        "tonalRamp": [
+          "#120900",
+          "#332102",
+          "#583c02",
+          "#7f5906",
+          "#a9780c",
+          "#d19a31",
+          "#e5c48f",
+          "#f7eddd"
+        ]
+      },
+      "sky": {
+        "role": "tertiary",
+        "displayName": "Sky",
+        "canonical": "#8fb7ff",
+        "tonalRamp": [
+          "#010922",
+          "#062154",
+          "#1e3f7d",
+          "#3c5fa1",
+          "#5c81c6",
+          "#81a5e7",
+          "#b3caf2",
+          "#e8effc"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "verdict": {
+        "displayName": "Verdict",
+        "purpose": "The one sentence that says whether the network is safe. 24px on phones."
+      },
+      "figure": {
+        "displayName": "Figure",
+        "purpose": "The count stopped today on the plate."
+      },
+      "stat": {
+        "displayName": "Stat",
+        "purpose": "Secondary figures in stat cards. 24px on phones."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Page titles in the top bar."
+      },
+      "card-title": {
+        "displayName": "Card title",
+        "purpose": "Headings on cards and the plate."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default text, with tabular figures on across the app."
+      },
+      "control": {
+        "displayName": "Control",
+        "purpose": "Buttons, inputs and table cells."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Field labels, in sentence case."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Addresses, ports, hostnames and config keys."
+      },
+      "block-headline": {
+        "displayName": "Block headline",
+        "purpose": "The hostname on the block page, clamp from 27px to 46px, because it is a security read."
+      }
+    },
+    "shadows": [
+      {
+        "name": "float",
+        "value": "0 16px 40px -20px rgba(2, 8, 18, 0.9)",
+        "purpose": "Tooltips, toasts, the confirm dialog, the globe detail panel and the command palette."
+      },
+      {
+        "name": "drawer",
+        "value": "-24px 0 60px -30px #000",
+        "purpose": "The side drawer."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "cubic-bezier(.16, 1, .3, 1)",
+        "purpose": "The exponential ease out used for state changes."
+      },
+      {
+        "name": "state",
+        "value": "160ms",
+        "purpose": "Hover, press and focus on controls."
+      },
+      {
+        "name": "drawer",
+        "value": "200ms cubic-bezier(.22, .8, .3, 1)",
+        "purpose": "The drawer sliding in."
+      },
+      {
+        "name": "meter",
+        "value": "300ms",
+        "purpose": "Meter fills moving to a new value."
+      },
+      {
+        "name": "chart-frame",
+        "value": "33ms",
+        "purpose": "The orbit chart draws at about 30 frames a second to stay light on the node."
+      },
+      {
+        "name": "chart-arrival",
+        "value": "1100ms",
+        "purpose": "A light running once along a new connection."
+      },
+      {
+        "name": "chart-strike",
+        "value": "480ms",
+        "purpose": "A stopped lookup travelling out to the shield."
+      },
+      {
+        "name": "chart-mark",
+        "value": "15000ms",
+        "purpose": "How long a mark stays on the shield to be opened."
+      },
+      {
+        "name": "station-arrive",
+        "value": "460ms, 130ms apart",
+        "purpose": "Stations arriving in order on the block page."
+      },
+      {
+        "name": "station-flare",
+        "value": "2600ms",
+        "purpose": "The repeating ring on the deciding station on the block page."
+      },
+      {
+        "name": "block-plate",
+        "value": "7000ms cycle, 1500ms travel",
+        "purpose": "One request leaving the device and dying at the shield on the block page."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "plate-folds",
+        "value": "1240px"
+      },
+      {
+        "name": "grid-two-column",
+        "value": "1180px"
+      },
+      {
+        "name": "rail-collapses",
+        "value": "880px"
+      },
+      {
+        "name": "plate-stacks",
+        "value": "760px"
+      },
+      {
+        "name": "grid-one-column",
+        "value": "600px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "The default action: outlined in a hairline, brass on hover.",
+      "html": "<button class=\"ds-btn\">Review rule</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 13px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--text); font: 500 13px var(--sans); cursor: pointer; transition: border-color .16s var(--ease), background .16s var(--ease), transform .16s var(--ease); } .ds-btn:hover { border-color: var(--brass); background: rgba(214, 190, 138, 0.09); } .ds-btn:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; } .ds-btn:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one thing to do next. Solid brass.",
+      "html": "<button class=\"ds-btn-primary\">Review in Orbis</button>",
+      "css": ".ds-btn-primary { padding: 7px 13px; border-radius: 6px; border: 1px solid var(--brass); background: var(--brass); color: var(--brass-ink); font: 500 13px var(--sans); cursor: pointer; transition: background .16s var(--ease), border-color .16s var(--ease), transform .16s var(--ease); } .ds-btn-primary:hover { background: #e7cf97; border-color: #e7cf97; } .ds-btn-primary:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Destructive Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Outlined until hovered or focused, then solid vermilion.",
+      "html": "<button class=\"ds-btn-danger\">Remove device</button>",
+      "css": ".ds-btn-danger { padding: 7px 13px; border-radius: 6px; border: 1px solid rgba(242,100,60,.45); background: transparent; color: var(--red); font: 500 13px var(--sans); cursor: pointer; transition: background .16s var(--ease), border-color .16s var(--ease), transform .16s var(--ease); } .ds-btn-danger:hover, .ds-btn-danger:focus-visible { background: var(--red); border-color: var(--red); color: #1d0a04; } .ds-btn-danger:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; } .ds-btn-danger:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Raised fill and a hairline. The border turns brass on focus.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search hosts\" aria-label=\"Search hosts\">",
+      "css": ".ds-input { width: 100%; padding: 7px 11px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg-2); color: var(--text); font: 400 13px var(--sans); transition: border-color .14s; } .ds-input::placeholder { color: var(--text-faint); } .ds-input:focus { border-color: var(--brass); outline: none; }"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Rail items with a stroke icon. The current item takes a brass tint.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item\" aria-current=\"page\" href=\"#\"><svg viewBox=\"0 0 24 24\" width=\"15\" height=\"15\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><ellipse cx=\"12\" cy=\"12\" rx=\"9\" ry=\"3.4\"/><circle cx=\"12\" cy=\"12\" r=\"1.6\"/></svg>Overview</a><a class=\"ds-nav-item\" href=\"#\"><svg viewBox=\"0 0 24 24\" width=\"15\" height=\"15\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" aria-hidden=\"true\"><circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18\"/></svg>Globe</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; width: 204px; padding: 10px; background: var(--rail); } .ds-nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 6px; color: var(--text-dim); font: 400 13.5px var(--sans); text-decoration: none; transition: background .16s var(--ease), color .16s var(--ease); } .ds-nav-item:hover { background: rgba(214, 190, 138, 0.08); color: var(--text); } .ds-nav-item[aria-current='page'] { background: rgba(214, 190, 138, 0.15); color: var(--brass); font-weight: 520; } .ds-nav-item:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "custom",
+      "description": "A hairline strip whose pressed option takes the brass tint.",
+      "html": "<div class=\"ds-seg\" role=\"group\"><button aria-pressed=\"false\">Simple</button><button aria-pressed=\"true\">Advanced</button></div>",
+      "css": ".ds-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; } .ds-seg button { border: 0; background: transparent; padding: 5px 12px; color: var(--text-dim); font: 400 13px var(--sans); cursor: pointer; transition: background .16s var(--ease), color .16s var(--ease); } .ds-seg button[aria-pressed='true'] { background: rgba(214, 190, 138, 0.16); color: var(--brass); } .ds-seg button:hover:not([aria-pressed='true']) { color: var(--text); }"
+    },
+    {
+      "name": "State Tags",
+      "kind": "chip",
+      "refersTo": "tag",
+      "description": "A state ink as text, with the same ink as a faint fill and border.",
+      "html": "<span class=\"ds-tag ds-allow\">allowed</span> <span class=\"ds-tag ds-block\">blocked</span> <span class=\"ds-tag ds-filtered\">filtered</span> <span class=\"ds-tag\">neutral</span>",
+      "css": ".ds-tag { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 5px; font: 500 11.5px var(--sans); background: var(--bg-3); color: var(--text-dim); border: 1px solid var(--line-soft); white-space: nowrap; } .ds-allow { color: var(--green); border-color: rgba(98,216,178,.24); background: rgba(98,216,178,.08); } .ds-block { color: var(--red); border-color: rgba(242,100,60,.26); background: rgba(242,100,60,.08); } .ds-filtered { color: var(--rose); border-color: rgba(232,167,192,.26); background: rgba(232,167,192,.08); }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A plate-blue surface with a soft hairline and no shadow.",
+      "html": "<section class=\"ds-card\"><header class=\"ds-card-head\"><h2>Most blocked</h2></header><div class=\"ds-card-body\"><span class=\"ds-host\">app-measurement.com</span><span class=\"ds-num\">1,204</span></div></section>",
+      "css": ".ds-card { background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: 8px; overflow: hidden; max-width: 320px; } .ds-card-head { padding: 11px 14px; border-bottom: 1px solid var(--line-soft); } .ds-card-head h2 { font: 560 13.5px/1.25 var(--sans); letter-spacing: -0.012em; color: var(--text); margin: 0; } .ds-card-body { display: flex; justify-content: space-between; gap: 10px; padding: 14px; font: 400 12.5px var(--sans); color: var(--text); } .ds-host { font-family: var(--mono); } .ds-num { color: var(--red); font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Verdict",
+      "kind": "custom",
+      "description": "The state sentence and the rule that closes it, in the state ink.",
+      "html": "<h2 class=\"ds-verdict\">Your network is protected</h2>",
+      "css": ".ds-verdict { font: 540 27px/1.16 var(--sans); letter-spacing: -.024em; color: var(--text); margin: 0; text-wrap: balance; } .ds-verdict::after { content: ''; display: block; width: 44px; height: 2px; margin-top: 12px; background: var(--accent); }"
+    },
+    {
+      "name": "Decision Trace",
+      "kind": "custom",
+      "description": "One line through ordered stations in the ink kept for it, with the deciding station marked.",
+      "html": "<ol class=\"ds-trace\"><li class=\"ds-stop\"><div class=\"ds-title\">Client rules</div><div class=\"ds-detail\">No rule for this device</div></li><li class=\"ds-stop\"><div class=\"ds-title\">Allow list</div><div class=\"ds-detail\">Not listed</div></li><li class=\"ds-stop ds-decided\"><div class=\"ds-title\">Block list</div><div class=\"ds-detail\">Matched on a tracker list</div></li></ol>",
+      "css": ".ds-trace { list-style: none; padding: 0; margin: 0; display: grid; } .ds-stop { position: relative; padding: 0 0 14px 24px; } .ds-stop::before { content: ''; position: absolute; left: 0; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg-1); border: 2px solid var(--violet); z-index: 1; } .ds-stop::after { content: ''; position: absolute; left: 5px; top: 14px; bottom: -6px; width: 2px; background: var(--violet); opacity: .55; } .ds-stop:last-child { padding-bottom: 0; } .ds-stop:last-child::after { display: none; } .ds-decided::before { background: var(--red); border-color: var(--red); } .ds-title { font: 520 13.5px var(--sans); color: var(--text); } .ds-decided .ds-title { color: var(--red); } .ds-detail { font: 400 13px/1.5 var(--sans); color: var(--text-dim); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "A Star-Atlas Plate at Night",
+    "overview": "Orbis draws the network as a body with things in orbit around it, the way an observatory draws the sky. The ground is true Prussian blue, structure is engraved in pale brass, and text is ivory. Ink colour carries meaning and is rationed: jade for safe and live, vermilion for a stop, violet for a traced decision.\n\nDensity is that of a working instrument. Body type is 14px, cards are compact, and figures use tabular numerals so a column of live values holds still. The first screen of the Overview is one engraved plate rather than a grid of cards. Depth comes from a step of tone and a hairline. Motion is slow and continuous on the chart, quick and settled on controls, and it stops the moment nobody is looking.\n\nThe world refuses the category default of near-black panels with a neon accent. It has no glass, no glow and no additive blending.",
+    "keyCharacteristics": [
+      "Prussian ground in four tonal steps, with brass hairlines instead of shadows for structure.",
+      "Colour as a rationed ink, each hue holding one job.",
+      "One workhorse sans, Geist, with a mono only for strings a machine reads.",
+      "A decision is always one line through ordered stations.",
+      "Live values change in place and columns never move.",
+      "Everything drawn is real data from this network."
+    ],
+    "rules": [
+      {
+        "name": "The Reserved Ink Rule",
+        "body": "Violet is the traced decision and nothing else. If a surface is not showing how one decision was reached, it contains no violet.",
+        "section": "colors"
+      },
+      {
+        "name": "The Vermilion Rule",
+        "body": "Vermilion means something was stopped or something is wrong. It is never decoration, never a brand accent, and never a chart series for ordinary traffic.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tinted State Rule",
+        "body": "A state chip is its ink as text, the same ink at about 8% as fill, and at about 25% as border. Solid fills are kept for the primary action and an armed destructive button.",
+        "section": "colors"
+      },
+      {
+        "name": "The Machine String Rule",
+        "body": "Geist Mono is for addresses, ports, hostnames and config keys, which include rule text, file names and model ids. Counts, rates and byte sizes stay in Geist with tabular figures.",
+        "section": "typography"
+      },
+      {
+        "name": "The Security Read Rule",
+        "body": "The block page headline is set in mono because that hostname is a security read: rn and m, l and 1 must stay distinct. This is the one headline in the system that is not Geist.",
+        "section": "typography"
+      },
+      {
+        "name": "The In-Place Rule",
+        "body": "Live values change in place. Tabular figures are on globally and columns never move, so a number updating is the only thing that happens.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Plate Rule",
+        "body": "The first screen of the Overview is one engraved surface divided by hairlines, not a grid of cards.",
+        "section": "layout"
+      },
+      {
+        "name": "The Thumb Rule",
+        "body": "Controls are at least 44px tall on phones. Buttons, navigation items and segmented controls get this at 880px and below, and block page buttons have it everywhere.",
+        "section": "layout"
+      },
+      {
+        "name": "The Step and Hairline Rule",
+        "body": "A surface separates from its parent by one tonal step and a hairline. Cards never carry a shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The No Light Rule",
+        "body": "Nothing emits light. No glass, no backdrop blur, no coloured shadow, no additive blending. All three.js materials use normal blending, and light on the chart is drawn as ink.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Held Fire Rule",
+        "body": "Destructive buttons stay outlined until hovered or focused. The confirm dialog uses this same button for its confirm action.",
+        "section": "components"
+      },
+      {
+        "name": "The One Line Rule",
+        "body": "A decision is one line through ordered stations, in order, with the deciding station marked. It is never a table of checks or a stack of cards.",
+        "section": "components"
+      },
+      {
+        "name": "The Still Sky Rule",
+        "body": "Motion is transform and opacity on drift, a single pass along a path, and quick settling on state changes. The chart, the globe and the block page all stop their loops when the tab is hidden, and under reduced motion they stop moving and draw still. The orbit chart also pauses when it is scrolled off screen.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do use the true Prussian ramp, rail #003153, ground #041c2f and plate #06263e, for every surface.",
+      "Do rule structure with brass hairlines and separate surfaces with one tonal step.",
+      "Do keep jade for safe and live, and vermilion for a stop or a fault.",
+      "Do use rose where a category needs a fourth hue. Violet is never the spare.",
+      "Do set hostnames, addresses, ports and config keys in Geist Mono, and everything else in Geist.",
+      "Do draw any decision as one line through ordered stations with the deciding station marked.",
+      "Do update live values in place with tabular figures.",
+      "Do treat the shield flare and the plate-coloured halo behind chart lettering as ink. They are strokes, not glow.",
+      "Do stop every animation loop when the tab is hidden and draw a still frame under reduced motion.",
+      "Do give controls a 44px minimum height on phones."
+    ],
+    "donts": [
+      "Don't use violet for anything but a traced decision: not selection, not a chart series, not a badge.",
+      "Don't use vermilion for ordinary traffic, decoration or emphasis.",
+      "Don't use backdrop blur, glass panels, coloured shadows or additive blending.",
+      "Don't put a shadow on a card. Shadows are for things that float.",
+      "Don't fill a destructive button at rest.",
+      "Don't set counts, rates or byte sizes in mono.",
+      "Don't show traffic that is not real, on the chart or the block page.",
+      "Don't use a loop that keeps running on a hidden tab. The node is a Raspberry Pi.",
+      "Don't let a live update move a column or reflow a row."
+    ]
+  }
+}

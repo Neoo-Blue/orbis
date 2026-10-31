@@ -86,7 +86,7 @@ export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
     <div ref={wrapRef} style={{
       position: 'relative', height: 560, borderRadius: 'var(--radius)',
       border: '1px solid var(--line)', overflow: 'hidden',
-      background: 'radial-gradient(1200px 600px at 50% 20%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 60%), var(--bg)',
+      background: 'var(--bg)',
       cursor: drag.current ? 'grabbing' : 'grab',
     }}>
       <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
@@ -180,7 +180,7 @@ export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
       <div style={{
         position: 'absolute', left: 12, bottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap',
         fontSize: 10.5, color: 'var(--text-faint)', background: 'color-mix(in srgb, var(--bg) 80%, transparent)',
-        padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line-soft)', backdropFilter: 'blur(6px)',
+        padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line-soft)',
       }}>
         {[['gateway', 'gateway'], ['hypervisor', 'hypervisor'], ['nas', 'storage'],
           ['server', 'server'], ['workstation', 'endpoint'], ['iot', 'iot']].map(([role, label]) => (

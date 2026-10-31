@@ -74,7 +74,8 @@ interface View {
   offsetY: number
 }
 
-export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true, colorBy = 'kind' }: Props) {
+export function FlatMap({ data, liveArcs, onSelect, autoAnimate: wantsMotion = true, colorBy = 'kind' }: Props) {
+  const autoAnimate = wantsMotion && !matchMedia('(prefers-reduced-motion: reduce)').matches
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Read from the draw loop without re-creating it when the choice changes.
   const colorByRef = useRef<ColorBy>(colorBy)

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Banner, Field, Loading, Spinner, useConfirm, useToast } from '../ui'
+import { Banner, Field, Icons, Loading, Spinner, useConfirm, useToast } from '../ui'
 import type { AppConfig } from '../types'
 import { BigSwitch, Section } from './common'
 import { ShortcutsCard } from '../Shortcuts'
@@ -60,30 +60,30 @@ export function SimpleProtection({ config, save, onNavigate }: {
     <div style={{ display: 'grid', gap: 4, maxWidth: 900 }}>
       <Section title="Blocking">
         <div style={{ display: 'grid', gap: 10 }}>
-          <BigSwitch icon="🛡️" title="Block ads and trackers" checked={config.adblock.enabled}
+          <BigSwitch icon={<Icons.shield size={18} />} title="Block ads and trackers" checked={config.adblock.enabled}
             desc="Stops ads and tracking on every device that uses this network. The main switch."
             onChange={(v) => save({ 'adblock.enabled': v })} />
-          <BigSwitch icon="☣️" title="Block dangerous sites" checked={malwareOn} disabled={busy === 'malware' || malwareLists.length === 0}
+          <BigSwitch icon={<Icons.alert size={18} />} title="Block dangerous sites" checked={malwareOn} disabled={busy === 'malware' || malwareLists.length === 0}
             desc={`Scams, phishing and malware sites from ${malwareLists.length} security lists.`}
             onChange={(v) => setCategory('malware', v)} />
-          <BigSwitch icon="👁️" title="Block trackers that follow you between apps" checked={trackingOn} disabled={busy === 'tracking' || trackingLists.length === 0}
+          <BigSwitch icon={<Icons.target size={18} />} title="Block trackers that follow you between apps" checked={trackingOn} disabled={busy === 'tracking' || trackingLists.length === 0}
             desc="Analytics and fingerprinting hosts that apps and sites report to."
             onChange={(v) => setCategory('tracking', v)} />
-          <BigSwitch icon="📺" title="Block ads in TV apps" checked={config.adblock.streaming_ads}
+          <BigSwitch icon={<Icons.tv size={18} />} title="Block ads in TV apps" checked={config.adblock.streaming_ads}
             desc="Ad and telemetry hosts used by smart TVs and streaming boxes. Safe list: it never blocks the servers that would freeze a stream."
             onChange={(v) => save({ 'adblock.streaming_ads': v })} />
-          <BigSwitch icon="🚪" title="Stop apps sneaking around the filter" checked={config.adblock.block_dns_bypass}
+          <BigSwitch icon={<Icons.door size={18} />} title="Stop apps sneaking around the filter" checked={config.adblock.block_dns_bypass}
             desc="Some apps and browsers use their own private DNS to avoid filters. This closes that door."
             onChange={(v) => save({ 'adblock.block_dns_bypass': v })} />
-          <BigSwitch icon="🧠" title="Learn new ad hosts automatically" checked={config.adblock.smart_capture.enabled}
+          <BigSwitch icon={<Icons.spark size={18} />} title="Learn new ad hosts automatically" checked={config.adblock.smart_capture.enabled}
             desc="Watches for hosts that behave like ad servers before any list knows them, and asks the assistant to judge."
             onChange={(v) => save({ 'adblock.smart_capture.enabled': v })} />
-          <BigSwitch icon="🌍" title="Block countries" checked={config.country?.enabled ?? false} disabled={(config.country?.countries ?? []).length === 0}
+          <BigSwitch icon={<Icons.globe size={18} />} title="Block countries" checked={config.country?.enabled ?? false} disabled={(config.country?.countries ?? []).length === 0}
             desc={(config.country?.countries ?? []).length > 0
               ? `${config.country.mode === 'allow' ? 'Only allowing' : 'Blocking'} ${config.country.countries.join(', ')}. Pick countries on the Threats page.`
               : 'No countries chosen yet. Pick them on the Threats page under Countries.'}
             onChange={(v) => save({ 'country.enabled': v })} />
-          <BigSwitch icon="🚫" title="Block known-bad internet addresses" checked={config.threat?.enabled ?? false}
+          <BigSwitch icon={<Icons.block size={18} />} title="Block known-bad internet addresses" checked={config.threat?.enabled ?? false}
             desc="Hijacked networks, botnet control servers and known attackers, from published security feeds. Catches a device that never asks the DNS filter."
             onChange={(v) => save({ 'threat.enabled': v })} />
         </div>
@@ -92,7 +92,7 @@ export function SimpleProtection({ config, save, onNavigate }: {
       {config.ai.enabled && (
         <Section title="AI threat check" hint="The assistant reads attacks, hits and anomalies and says what they mean.">
           <div style={{ display: 'grid', gap: 10 }}>
-            <BigSwitch icon="🤖" title="Let the assistant block threats on its own" checked={config.ai.intel.active_blocking}
+            <BigSwitch icon={<Icons.chat size={18} />} title="Let the assistant block threats on its own" checked={config.ai.intel.active_blocking}
               desc="When it is confident, it bans an attacking address or blocks a malicious host at once. Limited, logged, and undoable below."
               onChange={async (v) => {
                 if (v && !(await confirm('The assistant will ban addresses and block hosts on its own when it is confident. Continue?'))) return

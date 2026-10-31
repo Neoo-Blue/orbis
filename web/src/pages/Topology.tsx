@@ -134,7 +134,7 @@ export function TopologyPage() {
                         textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.label}</span>
                       <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--line-soft)', overflow: 'hidden' }}>
                         <div style={{ width: `${(total / max) * 100}%`, height: '100%',
-                          background: 'linear-gradient(90deg, var(--accent), var(--blue))' }} />
+                          background: 'var(--accent)' }} />
                       </div>
                       <span className="mono" style={{ fontSize: 11, color: 'var(--text-faint)', width: 80, textAlign: 'right' }}>
                         {bytes(total)}

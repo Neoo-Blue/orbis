@@ -70,7 +70,7 @@ export function LinksPage() {
 function LinkCard({ link, mode }: { link: NetLink; mode: string }) {
   return (
     <div className="device-card" style={{ alignItems: 'start', gridTemplateColumns: '44px 1fr' }}>
-      <div className="glyph" aria-hidden="true">{link.wireless ? '📶' : link.carrier ? '🔌' : '⭘'}</div>
+      <div className="glyph" aria-hidden="true">{link.wireless ? <Icons.pulse size={20} /> : link.carrier ? <Icons.cable size={20} /> : <Icons.block size={20} />}</div>
       <div style={{ minWidth: 0 }}>
         <div className="name">
           <span className="mono">{link.name}</span>

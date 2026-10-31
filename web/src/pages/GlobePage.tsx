@@ -302,8 +302,7 @@ function CountryPanel({ countries, onFocus }: {
   return (
     <div className="globe-country-panel">
       <div style={{
-        fontSize: 10, letterSpacing: '.11em', textTransform: 'uppercase',
-        color: 'var(--text-faint)', fontWeight: 600, marginBottom: 8,
+        fontSize: 10, color: 'var(--text-faint)', fontWeight: 600, marginBottom: 8,
       }}>
         Where traffic goes
       </div>

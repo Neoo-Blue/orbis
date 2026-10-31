@@ -2,7 +2,7 @@
    Prussian-blue ground, engraved brass hairlines, ivory text. Jade means safe
    and live, vermilion means blocked, and violet is held back for a traced
    decision. No glass, no glow: depth comes from a step of tone and a hairline.
-   Geist for everything, its mono for addresses, ports and byte counts. */
+   Geist for everything, its mono for addresses, ports and hostnames. */
 
 @layer reset, base, components;
 
@@ -189,7 +189,7 @@
   .btn.danger { border-color: rgba(242,100,60,.45); color: var(--red); background: transparent; }
   .btn.danger:hover:not(:disabled), .btn.danger:focus-visible { background: var(--red); border-color: var(--red); color: #1d0a04; }
   .btn.sm { padding: 4px 10px; font-size: 12.5px; }
-  .btn.icon { padding: 5px; border-radius: 8px; }
+  .btn.icon { padding: 5px; border-radius: var(--radius-sm); }
   .btn svg { width: 14px; height: 14px; }
 
   .input, .select, .textarea {
@@ -691,7 +691,8 @@
 .topbar .segmented, .topbar .btn { flex: none; }
 
 @media (max-width: 880px) {
-  .btn, .btn.sm, .nav-item, .segmented button { min-height: 44px; }
+  .btn, .btn.sm, .nav-item, .segmented button, .input, .select, .row-btn, .wizard-actions .btn { min-height: 44px; }
+  .switch { min-height: 44px; }
   .shell { height: 100dvh; }
   .topbar { gap: 8px; padding: 0 12px; }
   .topbar h1 { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

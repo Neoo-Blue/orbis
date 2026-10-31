@@ -17,7 +17,6 @@
   gap: 8px;
   padding: 9px 13px;
   border: 1px solid var(--line);
-  border-left: 2px solid var(--amber);
   border-radius: var(--radius-sm);
   background: var(--bg-1);
   color: var(--text-dim);
@@ -64,11 +63,7 @@
   height: 9px;
   border-radius: 3px;
   border: 1px solid var(--line);
-  background: linear-gradient(
-    90deg,
-    var(--bg-1),
-    color-mix(in srgb, var(--accent) 28%, var(--bg-1))
-  );
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-1));
 }
 
 .zm-scroll {
@@ -166,7 +161,6 @@
 }
 
 .zm-zone-sub {
-  font-family: var(--mono);
   font-size: 10.5px;
   font-weight: 400;
   color: var(--text-dim);
@@ -227,7 +221,6 @@
   padding: 2px 7px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
-  font-family: var(--mono);
   font-size: 11px;
   font-weight: 560;
   line-height: 1.35;
@@ -252,7 +245,6 @@
 }
 
 .zm-cell-rules {
-  font-family: var(--mono);
   font-size: 11px;
   color: var(--text-dim);
   white-space: nowrap;
@@ -263,7 +255,6 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 6px;
-  font-family: var(--mono);
   font-size: 11px;
 }
 
@@ -350,3 +341,6 @@
     margin-left: 0;
   }
 }
+
+.zm-corner-labels span { display: inline-flex; align-items: center; gap: 3px; }
+.zm-down { transform: rotate(90deg); }

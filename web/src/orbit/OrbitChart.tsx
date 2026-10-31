@@ -7,10 +7,11 @@ export interface OrbitDevice {
   rate: number
   flows: number
   paused: boolean
+  /** Ring 0 holds things that stay put, ring 1 things people carry. */
+  ring: 0 | 1
 }
 
 export interface OrbitFlow {
-  id: string
   client: string
   lon: number | null
   blocked: boolean
@@ -18,28 +19,41 @@ export interface OrbitFlow {
 }
 
 export interface OrbitHandle {
-  /** A device just had a lookup stopped: draw it hitting the shield. */
-  spark(clientId: string): void
-  /** A connection just opened: run a light along its arc. */
-  arrive(flowId: string): void
+  /** A lookup from this device was stopped at the shield. */
+  strike(clientId: string, name: string): void
+  /** A connection just opened: run a light along its route. */
+  arrive(clientId: string, lon: number | null): void
 }
 
 interface Props {
   devices: OrbitDevice[]
   flows: OrbitFlow[]
   onSelect?: (id: string) => void
+  /** Called with the name behind a mark on the shield. */
+  onStrike?: (name: string) => void
+  title?: string
   label: string
+  /** A small chart keeps the drawing and leaves out the lettering. */
+  compact?: boolean
 }
 
-interface Body { a: number; target: number; ring: number; drift: number; x: number; y: number; size: number }
+interface Body { a: number; target: number; x: number; y: number; size: number; drift: number }
+interface Strike { client: string; name: string; born: number; angle: number }
 
 const TAU = Math.PI * 2
 const FRAME_MS = 33
 const SPARK_MS = 480
-const FLARE_MS = 900
-const ARRIVE_MS = 850
-const MAX_ARCS = 80
-const REGIONS: Array<[string, number]> = [['Americas', -100], ['Europe', 12], ['Asia', 105], ['Oceania', 150]]
+/** How long a mark stays on the shield, long enough to go and open it. */
+const STRIKE_MS = 15000
+const ARRIVE_MS = 1100
+const MAX_STRIKES = 24
+/** Traffic is grouped into one trunk line per 30 degrees of longitude. */
+const BIN = 30
+/** Where the gateway sits on the shield, and the rim the trunks leave from. */
+const GATEWAY_ANGLE = -Math.PI / 3
+const REGIONS: Array<[string, number, number]> = [
+  ['Americas', -170, -35], ['Europe and Africa', -25, 55], ['Asia', 65, 145], ['Oceania', 152, 178],
+]
 
 function hash(s: string): number {
   let h = 2166136261
@@ -52,32 +66,38 @@ function cssVar(name: string): string {
 }
 
 const lonAngle = (lon: number) => ((lon + 180) / 360) * TAU - Math.PI / 2
+const binOf = (lon: number) => Math.floor((Math.max(-180, Math.min(179.9, lon)) + 180) / BIN)
+const binLon = (bin: number) => bin * BIN - 180 + BIN / 2
 
-/** The network drawn as a star chart: Orbis at the centre, every device a body
- *  on its orbit, connections arcing out to a world scale read by longitude, and
- *  blocked lookups stopping dead at the shield ring. It draws straight to a
- *  canvas from refs, so a busy network costs a frame, never a React render. */
-export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart({ devices, flows, onSelect, label }, ref) {
+/** The network drawn as a star chart. Orbis sits at the centre and every device
+ *  on the ring for what it is, sized by what it is doing now. Each one reaches
+ *  the world through the gateway on the shield, and traffic runs round the rim
+ *  in one line per region, as thick as the bytes on it. Lookups stopped at the
+ *  shield leave a mark that can be opened. It draws straight to a canvas from
+ *  refs, so a busy network costs a frame, never a React render. */
+export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
+  { devices, flows, onSelect, onStrike, title, label, compact }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const tipRef = useRef<HTMLDivElement>(null)
   const data = useRef({ devices, flows })
   data.current = { devices, flows }
-  const select = useRef(onSelect)
-  select.current = onSelect
-  const sparks = useRef<Array<{ client: string; born: number }>>([])
-  const arrivals = useRef(new Map<string, number>())
+  const handlers = useRef({ onSelect, onStrike })
+  handlers.current = { onSelect, onStrike }
+  const strikes = useRef<Strike[]>([])
+  const arrivals = useRef<Array<{ client: string; lon: number; born: number }>>([])
   const repaint = useRef<() => void>(() => {})
 
   useImperativeHandle(ref, () => ({
-    spark(client) {
-      if (sparks.current.length < 24) sparks.current.push({ client, born: performance.now() })
+    strike(client, name) {
+      strikes.current.push({ client, name, born: performance.now(), angle: NaN })
+      if (strikes.current.length > MAX_STRIKES) strikes.current.shift()
+      repaint.current()
     },
-    arrive(id) {
-      if (arrivals.current.size < 40) arrivals.current.set(id, performance.now())
+    arrive(client, lon) {
+      if (lon != null && arrivals.current.length < 24) arrivals.current.push({ client, lon, born: performance.now() })
     },
   }), [])
 
-  // Reduced motion draws on change, so new data still has to reach the canvas.
   useEffect(() => { repaint.current() }, [devices, flows])
 
   useEffect(() => {
@@ -87,182 +107,288 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart({ d
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches
     const color = {
       ivory: cssVar('--text'), dim: cssVar('--text-dim'), faint: cssVar('--text-faint'), brass: cssVar('--brass'),
-      jade: cssVar('--accent'), red: cssVar('--red'), amber: cssVar('--amber'), ground: cssVar('--bg-1'),
+      jade: cssVar('--accent'), red: cssVar('--red'), amber: cssVar('--amber'),
     }
+    const sans = cssVar('--sans')
     const line = (a: number) => `rgba(214,190,138,${a})`
     const bodies = new Map<string, Body>()
-    let w = 0, h = 0, cx = 0, cy = 0, R = 0
+    // The engraving never changes, so it is drawn once and stamped each frame.
+    const plate = document.createElement('canvas')
+    let w = 0, h = 0, cx = 0, cy = 0, R = 0, dpr = 1
     let raf = 0, last = 0, onScreen = true
     let pointer: { x: number; y: number } | null = null
     let hovered: string | null = null
+    let hoveredStrike: Strike | null = null
+
+    const shieldR = () => R * 0.82
+    const orbitR = (ring: number) => R * (ring ? 0.6 : 0.38)
+    const gateway = () => ({ x: cx + Math.cos(GATEWAY_ANGLE) * shieldR(), y: cy + Math.sin(GATEWAY_ANGLE) * shieldR() })
+    const trunkR = (bin: number) => shieldR() + (R - shieldR()) * (0.2 + (0.6 * bin) / (360 / BIN))
+
+    const curved = (c: CanvasRenderingContext2D, text: string, r: number, mid: number) => {
+      c.save()
+      c.textAlign = 'center'
+      c.textBaseline = 'middle'
+      const bottom = Math.sin(mid) > 0.2
+      let total = 0
+      const widths = [...text].map((ch) => { const m = c.measureText(ch).width + 1.2; total += m; return m })
+      let a = mid + ((bottom ? 1 : -1) * total) / r / 2
+      ;[...text].forEach((ch, i) => {
+        const step = widths[i] / r
+        a += ((bottom ? -1 : 1) * step) / 2
+        c.save()
+        c.translate(cx + Math.cos(a) * r, cy + Math.sin(a) * r)
+        c.rotate(a + (bottom ? -Math.PI / 2 : Math.PI / 2))
+        c.fillText(ch, 0, 0)
+        c.restore()
+        a += ((bottom ? -1 : 1) * step) / 2
+      })
+      c.restore()
+    }
+
+    const engrave = () => {
+      plate.width = w * dpr
+      plate.height = h * dpr
+      const c = plate.getContext('2d')!
+      c.setTransform(dpr, 0, 0, dpr, 0, 0)
+      const ring = (r: number, a: number, dash?: number[]) => {
+        c.beginPath()
+        c.setLineDash(dash ?? [])
+        c.strokeStyle = line(a)
+        c.arc(cx, cy, r, 0, TAU)
+        c.stroke()
+        c.setLineDash([])
+      }
+      const ticks = (r: number, n: number, rot: number, len: number, a: number) => {
+        c.beginPath()
+        c.strokeStyle = line(a)
+        for (let i = 0; i < n; i++) {
+          const t = rot + (i * TAU) / n, cs = Math.cos(t), sn = Math.sin(t), l = i % 6 ? len : len * 2.2
+          c.moveTo(cx + cs * r, cy + sn * r)
+          c.lineTo(cx + cs * (r - l), cy + sn * (r - l))
+        }
+        c.stroke()
+      }
+      // A faint field of stars, the same every time for the same id.
+      let seed = 7
+      const next = () => (seed = (seed * 16807) % 2147483647) / 2147483647
+      for (let i = 0; i < Math.round((w * h) / 5200); i++) {
+        c.fillStyle = `rgba(239,233,218,${0.1 + next() * 0.28})`
+        const s = 0.4 + next() * 0.9
+        c.fillRect(next() * w, next() * h, s, s)
+      }
+      c.lineWidth = 1
+      ring(R, 0.55)
+      ticks(R, 72, -Math.PI / 2, 4, 0.36)
+      ring(shieldR(), 0.5)
+      ticks(shieldR() + 6, 120, 0, 3, 0.16)
+      ring(orbitR(1), 0.2, [2, 6])
+      ring(orbitR(0), 0.2, [2, 6])
+      ring(R * 0.11, 0.55)
+
+      if (!compact) {
+        c.font = `500 11px ${sans}`
+        c.fillStyle = color.faint
+        curved(c, "People's devices", orbitR(1) + 11, Math.PI / 2 + 0.5)
+        curved(c, 'Fixed devices', orbitR(0) + 11, Math.PI / 2 + 0.5)
+        c.fillStyle = color.dim
+        curved(c, 'Shield', shieldR() - 11, -Math.PI / 2 - 0.2)
+        for (const [name, from, to] of REGIONS) {
+          const a0 = lonAngle(from), a1 = lonAngle(to), mid = (a0 + a1) / 2
+          c.beginPath()
+          c.strokeStyle = line(0.5)
+          c.arc(cx, cy, R + 8, a0, a1)
+          c.stroke()
+          c.fillStyle = color.faint
+          curved(c, name, R + 18, mid)
+        }
+      }
+    }
 
     const size = () => {
       const box = canvas.parentElement!.getBoundingClientRect()
-      const dpr = Math.min(devicePixelRatio || 1, 2)
+      dpr = Math.min(devicePixelRatio || 1, 2)
       w = box.width; h = box.height
       canvas.width = w * dpr; canvas.height = h * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      cx = w / 2; cy = h / 2; R = Math.min(w, h) / 2 - 22
+      cx = w / 2; cy = h / 2; R = Math.min(w, h) / 2 - (compact ? 10 : 34)
+      engrave()
     }
 
     // Devices spread evenly round their orbit and glide when one joins, so the
-    // chart never jumps. The ring and the order come from the id, so a device
-    // keeps its place from one visit to the next.
+    // chart never jumps. The order comes from the id, so a device keeps its
+    // place from one visit to the next.
     const layout = () => {
       const rings: OrbitDevice[][] = [[], []]
-      for (const d of data.current.devices) rings[hash(d.id) % 2].push(d)
+      for (const d of data.current.devices) rings[d.ring].push(d)
       rings.forEach((list, ring) => {
         list.sort((p, q) => hash(p.id) - hash(q.id))
         list.forEach((d, i) => {
           const target = (i / list.length) * TAU + ring * 0.7
           const b = bodies.get(d.id)
-          if (b) { b.target = target; b.ring = ring } else {
-            bodies.set(d.id, { a: target, target, ring, drift: 0.012 + (hash(d.id) % 8) / 900, x: 0, y: 0, size: 3 })
-          }
+          if (b) b.target = target
+          else bodies.set(d.id, { a: target, target, x: 0, y: 0, size: 3, drift: (0.012 + (hash(d.id) % 8) / 900) * (ring ? 1 : -1) })
         })
       })
       const live = new Set(data.current.devices.map((d) => d.id))
       for (const id of bodies.keys()) if (!live.has(id)) bodies.delete(id)
     }
 
-    const ring = (r: number, a: number, dash?: number[]) => {
-      ctx.beginPath()
-      ctx.setLineDash(dash ?? [])
-      ctx.strokeStyle = line(a)
-      ctx.arc(cx, cy, r, 0, TAU)
-      ctx.stroke()
-      ctx.setLineDash([])
+    const spokeControl = (b: Body) => {
+      const g = gateway(), mid = Math.atan2((b.y + g.y) / 2 - cy, (b.x + g.x) / 2 - cx)
+      const r = Math.hypot((b.x + g.x) / 2 - cx, (b.y + g.y) / 2 - cy) * 0.82 + R * 0.08
+      return { x: cx + Math.cos(mid) * r, y: cy + Math.sin(mid) * r, g }
     }
-    const ticks = (r: number, n: number, rot: number, len: number, a: number) => {
-      ctx.beginPath()
-      ctx.strokeStyle = line(a)
-      for (let i = 0; i < n; i++) {
-        const t = rot + (i * TAU) / n, c = Math.cos(t), s = Math.sin(t), l = i % 6 ? len : len * 2.2
-        ctx.moveTo(cx + c * r, cy + s * r)
-        ctx.lineTo(cx + c * (r - l), cy + s * (r - l))
-      }
-      ctx.stroke()
-    }
-    const curve = (b: Body, angle: number) => {
-      const mid = b.a + Math.atan2(Math.sin(angle - b.a), Math.cos(angle - b.a)) / 2
-      const r = (Math.hypot(b.x - cx, b.y - cy) + R) * 0.56
-      return {
-        cpx: cx + Math.cos(mid) * r, cpy: cy + Math.sin(mid) * r,
-        ex: cx + Math.cos(angle) * R, ey: cy + Math.sin(angle) * R,
-      }
+    /** The way round the rim from the gateway to a region, the short way. */
+    const trunk = (bin: number) => {
+      const end = lonAngle(binLon(bin))
+      const delta = Math.atan2(Math.sin(end - GATEWAY_ANGLE), Math.cos(end - GATEWAY_ANGLE))
+      return { r: trunkR(bin), from: GATEWAY_ANGLE, to: end, ccw: delta < 0 }
     }
 
     const frame = (t: number) => {
       const { devices, flows } = data.current
-      const shield = R * 0.8
+      const shield = shieldR()
       layout()
       ctx.clearRect(0, 0, w, h)
-      ctx.lineWidth = 1
+      ctx.drawImage(plate, 0, 0, w, h)
 
-      // The engraving.
-      ring(R, 0.5)
-      ticks(R, 72, -Math.PI / 2, 4, 0.34)
-      ring(shield, 0.42)
-      ticks(shield + 5, 120, still ? 0 : t / 180000, 3, 0.16)
-      const orbit = (i: number) => R * (i ? 0.58 : 0.4)
-      ring(orbit(0), 0.16, [2, 6])
-      ring(orbit(1), 0.16, [2, 6])
-      ring(R * 0.13, 0.5)
-
-      ctx.font = `500 10.5px ${cssVar('--sans')}`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillStyle = color.faint
-      if (R > 150) {
-        for (const [name, lon] of REGIONS) {
-          const a = lonAngle(lon)
-          ctx.fillText(name, cx + Math.cos(a) * R * 0.9, cy + Math.sin(a) * R * 0.9)
-        }
-        ctx.fillText('Shield', cx, cy - shield + 12)
-      }
-
-      // Bodies.
       const peak = devices.reduce((m, d) => Math.max(m, d.rate), 1)
+      const ringOf = new Map(devices.map((d) => [d.id, d.ring]))
       for (const d of devices) {
         const b = bodies.get(d.id)
         if (!b) continue
         b.a += Math.atan2(Math.sin(b.target - b.a), Math.cos(b.target - b.a)) * 0.05
-        if (!still) { b.target += (b.drift / 1000) * FRAME_MS; }
-        const r = orbit(b.ring)
+        if (!still) b.target += (b.drift / 1000) * FRAME_MS
+        const r = orbitR(ringOf.get(d.id) ?? 0)
         b.x = cx + Math.cos(b.a) * r
         b.y = cy + Math.sin(b.a) * r
         b.size = 2.4 + Math.sqrt(d.rate / peak) * 4.6
       }
 
       // Hit test once a frame, not once a pointer event.
+      hoveredStrike = null
       if (pointer) {
         let best: string | null = null, bestD = 18
         for (const [id, b] of bodies) {
           const dist = Math.hypot(b.x - pointer.x, b.y - pointer.y)
           if (dist < bestD) { bestD = dist; best = id }
         }
-        if (best !== hovered) {
-          hovered = best
-          canvas.style.cursor = best ? 'pointer' : 'default'
+        hovered = best
+        if (!best) {
+          let near = 14
+          for (const s of strikes.current) {
+            if (Number.isNaN(s.angle)) continue
+            const dist = Math.hypot(cx + Math.cos(s.angle) * shield - pointer.x, cy + Math.sin(s.angle) * shield - pointer.y)
+            if (dist < near) { near = dist; hoveredStrike = s }
+          }
+        }
+        canvas.style.cursor = best || hoveredStrike ? 'pointer' : 'default'
+      }
+
+      // Group what is flowing by region once, then draw one line per group.
+      const bins = new Map<number, { bytes: number; lit: boolean }>()
+      const talking = new Set<string>()
+      for (const f of flows) {
+        if (f.lon == null || f.blocked) continue
+        talking.add(f.client)
+        const k = binOf(f.lon), e = bins.get(k) ?? { bytes: 0, lit: false }
+        e.bytes += f.bytes
+        e.lit ||= f.client === hovered
+        bins.set(k, e)
+      }
+      const heaviest = Math.max(1, ...[...bins.values()].map((b) => b.bytes))
+
+      // Spokes: each device to the gateway, as heavy as its traffic.
+      for (const lit of [false, true]) {
+        for (const d of devices) {
+          if ((d.id === hovered) !== lit || !talking.has(d.id)) continue
+          const b = bodies.get(d.id)
+          if (!b) continue
+          const c = spokeControl(b)
+          ctx.beginPath()
+          ctx.moveTo(b.x, b.y)
+          ctx.quadraticCurveTo(c.x, c.y, c.g.x, c.g.y)
+          ctx.lineWidth = lit ? 1.6 : 0.7 + Math.sqrt(d.rate / peak) * 1.3
+          ctx.strokeStyle = lit ? color.jade : color.ivory
+          ctx.globalAlpha = lit ? 0.9 : hovered ? 0.08 : 0.26
+          ctx.stroke()
         }
       }
 
-      // Connections.
-      const drawn = flows.slice(0, MAX_ARCS)
-      const stroke = (blocked: boolean, lit: boolean, a: number) => {
+      // Trunks: round the rim to each region, then out to the scale.
+      for (const [bin, e] of bins) {
+        const tr = trunk(bin)
         ctx.beginPath()
-        for (const f of drawn) {
-          if (f.lon == null || f.blocked !== blocked || (f.client === hovered) !== lit) continue
-          const b = bodies.get(f.client)
-          if (!b) continue
-          const c = curve(b, lonAngle(f.lon))
-          ctx.moveTo(b.x, b.y)
-          ctx.quadraticCurveTo(c.cpx, c.cpy, c.ex, c.ey)
-        }
-        ctx.strokeStyle = blocked ? color.red : lit ? color.jade : color.ivory
-        ctx.globalAlpha = a
+        ctx.arc(cx, cy, tr.r, tr.from, tr.to, tr.ccw)
+        ctx.lineTo(cx + Math.cos(tr.to) * R, cy + Math.sin(tr.to) * R)
+        ctx.lineWidth = 0.8 + Math.sqrt(e.bytes / heaviest) * 2.6
+        ctx.strokeStyle = e.lit ? color.jade : color.ivory
+        ctx.globalAlpha = e.lit ? 0.95 : hovered ? 0.1 : 0.42
+        ctx.stroke()
+        ctx.globalAlpha = 1
+        ctx.beginPath()
+        ctx.arc(cx + Math.cos(tr.to) * R, cy + Math.sin(tr.to) * R, 2.2, 0, TAU)
+        ctx.fillStyle = e.lit ? color.jade : color.dim
+        ctx.fill()
+      }
+      ctx.globalAlpha = 1
+      ctx.lineWidth = 1
+
+      // The orbit of whatever is under the pointer.
+      if (hovered) {
+        ctx.beginPath()
+        ctx.arc(cx, cy, orbitR(ringOf.get(hovered) ?? 0), 0, TAU)
+        ctx.strokeStyle = color.jade
+        ctx.globalAlpha = 0.5
         ctx.stroke()
         ctx.globalAlpha = 1
       }
-      ctx.lineWidth = 0.8
-      stroke(false, false, hovered ? 0.05 : 0.14)
-      stroke(true, false, hovered ? 0.1 : 0.4)
-      ctx.lineWidth = 1.2
-      stroke(false, true, 0.75)
-      stroke(true, true, 0.85)
 
-      // A light runs out along a new connection.
+      // A light runs out along a new connection: to the gateway, then the rim.
+      arrivals.current = arrivals.current.filter((a) => t - a.born < ARRIVE_MS)
       ctx.fillStyle = color.jade
-      for (const [id, born] of arrivals.current) {
-        const p = (t - born) / ARRIVE_MS
-        const f = drawn.find((x) => x.id === id)
-        const b = f && bodies.get(f.client)
-        if (p >= 1 || !f || !b || f.lon == null) { if (p >= 1 || !f) arrivals.current.delete(id); continue }
-        const e = 1 - (1 - p) ** 3, c = curve(b, lonAngle(f.lon)), u = 1 - e
-        ctx.beginPath()
-        ctx.arc(u * u * b.x + 2 * u * e * c.cpx + e * e * c.ex, u * u * b.y + 2 * u * e * c.cpy + e * e * c.ey, 1.8, 0, TAU)
-        ctx.fill()
-      }
-
-      // The endpoints on the world scale.
-      ctx.fillStyle = color.dim
-      const ends = new Set<number>()
-      for (const f of drawn) if (f.lon != null) ends.add(Math.round(f.lon / 3) * 3)
-      for (const lon of ends) {
-        const a = lonAngle(lon)
-        ctx.beginPath()
-        ctx.arc(cx + Math.cos(a) * R, cy + Math.sin(a) * R, 1.6, 0, TAU)
-        ctx.fill()
-      }
-
-      // Stopped lookups: out from the device, dead at the shield.
-      ctx.lineWidth = 1.4
-      sparks.current = sparks.current.filter((s) => t - s.born < SPARK_MS + FLARE_MS)
-      for (const s of sparks.current) {
-        const b = bodies.get(s.client)
+      for (const a of arrivals.current) {
+        const b = bodies.get(a.client)
         if (!b) continue
+        const p = (t - a.born) / ARRIVE_MS
+        let x: number, y: number
+        if (p < 0.5) {
+          const c = spokeControl(b), e = p * 2, u = 1 - e
+          x = u * u * b.x + 2 * u * e * c.x + e * e * c.g.x
+          y = u * u * b.y + 2 * u * e * c.y + e * e * c.g.y
+        } else {
+          const tr = trunk(binOf(a.lon)), e = (p - 0.5) * 2
+          const sweep = Math.atan2(Math.sin(tr.to - tr.from), Math.cos(tr.to - tr.from))
+          const ang = tr.from + sweep * e
+          x = cx + Math.cos(ang) * tr.r
+          y = cy + Math.sin(ang) * tr.r
+        }
+        ctx.beginPath()
+        ctx.arc(x, y, 1.9, 0, TAU)
+        ctx.fill()
+      }
+
+      // The gateway: everything leaves through here.
+      const g = gateway()
+      ctx.fillStyle = color.brass
+      ctx.fillRect(g.x - 3.5, g.y - 3.5, 7, 7)
+      if (!compact) {
+        ctx.font = `500 11px ${sans}`
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'middle'
+        ctx.fillStyle = color.dim
+        ctx.fillText('Gateway', g.x + 9, g.y + 9)
+      }
+
+      // Stopped lookups: out from the device, dead at the shield, and a mark
+      // left there that can be opened.
+      strikes.current = strikes.current.filter((s) => t - s.born < STRIKE_MS)
+      ctx.lineWidth = 1.4
+      for (const s of strikes.current) {
+        const b = bodies.get(s.client)
         const age = t - s.born
-        if (age < SPARK_MS) {
+        if (age < SPARK_MS && b && !still) {
           const e = 1 - (1 - age / SPARK_MS) ** 3
           const r0 = Math.hypot(b.x - cx, b.y - cy), r1 = r0 + (shield - r0) * e, r2 = Math.max(r0, r1 - 26)
           ctx.beginPath()
@@ -270,29 +396,31 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart({ d
           ctx.lineTo(cx + Math.cos(b.a) * r1, cy + Math.sin(b.a) * r1)
           ctx.strokeStyle = color.red
           ctx.stroke()
-        } else {
-          const f = (age - SPARK_MS) / FLARE_MS
+          continue
+        }
+        if (Number.isNaN(s.angle)) s.angle = b ? b.a : hash(s.name) / 683565275
+        const f = Math.min(1, (age - SPARK_MS) / 900), fade = 1 - (age / STRIKE_MS) ** 2
+        if (f < 1) {
           ctx.globalAlpha = 1 - f
           ctx.beginPath()
-          ctx.arc(cx, cy, shield, b.a - 0.04 - f * 0.14, b.a + 0.04 + f * 0.14)
+          ctx.arc(cx, cy, shield, s.angle - 0.04 - f * 0.14, s.angle + 0.04 + f * 0.14)
           ctx.strokeStyle = color.red
           ctx.stroke()
-          ctx.beginPath()
-          ctx.arc(cx + Math.cos(b.a) * shield, cy + Math.sin(b.a) * shield, 2 + f * 5, 0, TAU)
-          ctx.fillStyle = color.red
-          ctx.fill()
-          ctx.globalAlpha = 1
         }
+        ctx.globalAlpha = fade
+        ctx.beginPath()
+        ctx.arc(cx + Math.cos(s.angle) * shield, cy + Math.sin(s.angle) * shield, s === hoveredStrike ? 4.5 : 2.6, 0, TAU)
+        ctx.fillStyle = color.red
+        ctx.fill()
+        ctx.globalAlpha = 1
       }
       ctx.lineWidth = 1
 
-      // Orbis itself, then the bodies on top of everything that passes them.
+      // Orbis, then the bodies on top of everything that passes them.
       ctx.beginPath()
       ctx.arc(cx, cy, 4, 0, TAU)
       ctx.fillStyle = color.brass
       ctx.fill()
-
-      const busiest = [...devices].sort((p, q) => q.rate - p.rate).slice(0, R > 150 ? 4 : 0)
       for (const d of devices) {
         const b = bodies.get(d.id)
         if (!b) continue
@@ -308,15 +436,16 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart({ d
           ctx.stroke()
         }
       }
-      ctx.textAlign = 'left'
-      ctx.font = `500 11.5px ${cssVar('--sans')}`
+      const busiest = compact ? [] : [...devices].sort((p, q) => q.rate - p.rate).slice(0, 4)
+      ctx.font = `500 11.5px ${sans}`
+      ctx.textBaseline = 'middle'
       for (const d of busiest) {
         const b = bodies.get(d.id)
         if (!b || d.id === hovered || d.rate <= 0) continue
         const name = d.name.length > 18 ? d.name.slice(0, 17) + '…' : d.name
         const right = b.x < cx
         ctx.textAlign = right ? 'right' : 'left'
-        ctx.fillStyle = color.dim
+        ctx.fillStyle = color.ivory
         ctx.fillText(name, b.x + (right ? -(b.size + 7) : b.size + 7), b.y)
       }
 
@@ -324,12 +453,18 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart({ d
       if (tip) {
         const d = hovered ? devices.find((x) => x.id === hovered) : null
         const b = hovered ? bodies.get(hovered) : null
+        const nameEl = tip.firstElementChild as HTMLElement, meta = tip.lastElementChild as HTMLElement
         if (d && b) {
-          const nameEl = tip.firstElementChild as HTMLElement, meta = tip.lastElementChild as HTMLElement
           nameEl.textContent = d.name
-          meta.textContent = `${bits(d.rate)} · ${d.flows} connection${d.flows === 1 ? '' : 's'}${d.paused ? ' · paused' : ''}`
+          meta.textContent = `${bits(d.rate)}, ${d.flows} connection${d.flows === 1 ? '' : 's'}${d.paused ? ', paused' : ''}`
           tip.style.opacity = '1'
           tip.style.transform = `translate3d(${Math.min(b.x + 14, w - 190)}px, ${Math.max(b.y - 44, 4)}px, 0)`
+        } else if (hoveredStrike) {
+          const s = hoveredStrike
+          nameEl.textContent = s.name
+          meta.textContent = 'Stopped at the shield. Open to see why.'
+          tip.style.opacity = '1'
+          tip.style.transform = `translate3d(${Math.min(cx + Math.cos(s.angle) * shield + 12, w - 200)}px, ${Math.max(cy + Math.sin(s.angle) * shield - 44, 4)}px, 0)`
         } else tip.style.opacity = '0'
       }
     }
@@ -342,20 +477,26 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart({ d
     const wake = () => { if (!raf && !document.hidden && onScreen && !still) raf = requestAnimationFrame(loop) }
     repaint.current = () => { if (still) frame(performance.now()) }
 
-    const move = (e: PointerEvent) => {
+    const at = (e: { clientX: number; clientY: number }) => {
       const box = canvas.getBoundingClientRect()
-      pointer = { x: e.clientX - box.left, y: e.clientY - box.top }
+      return { x: e.clientX - box.left, y: e.clientY - box.top }
+    }
+    const move = (e: PointerEvent) => { pointer = at(e); if (still) frame(performance.now()) }
+    const leave = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return
+      pointer = null; hovered = null
       if (still) frame(performance.now())
     }
-    const leave = () => { pointer = null; hovered = null; if (still) frame(performance.now()) }
+    // On a touch screen the first tap lights a body and the second opens it.
+    let touched: string | null = null
     const click = (e: MouseEvent) => {
-      const box = canvas.getBoundingClientRect(), x = e.clientX - box.left, y = e.clientY - box.top
-      let best: string | null = null, bestD = 26
-      for (const [id, b] of bodies) {
-        const dist = Math.hypot(b.x - x, b.y - y)
-        if (dist < bestD) { bestD = dist; best = id }
-      }
-      if (best) select.current?.(best)
+      const p = at(e)
+      pointer = p
+      frame(performance.now())
+      if (hoveredStrike) { handlers.current.onStrike?.(hoveredStrike.name); return }
+      if (!hovered) { touched = null; return }
+      if ((e as PointerEvent).pointerType === 'touch' && touched !== hovered) { touched = hovered; return }
+      handlers.current.onSelect?.(hovered)
     }
 
     const resize = new ResizeObserver(() => { size(); if (still) frame(performance.now()) })
@@ -366,6 +507,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart({ d
     canvas.addEventListener('pointerleave', leave)
     canvas.addEventListener('click', click)
     document.addEventListener('visibilitychange', wake)
+    // Lettering drawn before the web font lands would stay in the fallback.
+    document.fonts?.ready.then(() => { if (w) engrave() })
     size()
     if (still) frame(performance.now()); else wake()
 
@@ -383,6 +526,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart({ d
   return (
     <div className="orbit">
       <canvas ref={canvasRef} role="img" aria-label={label} />
+      {title && <div className="orbit-title">{title}</div>}
+      {!compact && <div className="orbit-key">Size shows traffic now. Lines thicken with bytes.</div>}
       <div className="orbit-tip" ref={tipRef} aria-hidden="true"><b /><span /></div>
     </div>
   )

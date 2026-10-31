@@ -61,7 +61,6 @@
   gap: 6px;
   padding: 2px 9px;
   border-radius: var(--radius-sm);
-  font-family: var(--mono);
   font-size: 11px;
   border: 1px solid var(--line);
   color: var(--text-dim);
@@ -112,7 +111,6 @@
   border-right: 1px solid var(--line);
   background: transparent;
   color: var(--text-dim);
-  font-family: var(--mono);
   font-size: 12px;
   padding: 7px 13px;
   cursor: pointer;
@@ -144,7 +142,6 @@
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  font-family: var(--mono);
   font-size: 11px;
   color: var(--text-dim);
 }
@@ -219,7 +216,6 @@
 }
 
 .nw-role-tag {
-  font-family: var(--mono);
   font-size: 10px;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
@@ -229,7 +225,6 @@
 }
 
 .nw-target-addr {
-  font-family: var(--mono);
   font-size: 11.5px;
   color: var(--text-dim);
   padding-left: 14px;
@@ -258,7 +253,6 @@
 }
 
 .nw-metric-val {
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-size: 14px;
   font-weight: 560;
@@ -279,7 +273,6 @@
 }
 
 .nw-metric-sub {
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   color: var(--text-dim);
@@ -328,7 +321,6 @@
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   color: var(--text-dim);
@@ -361,7 +353,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   color: var(--text);
@@ -378,7 +369,6 @@
 }
 
 .nw-inc-duration {
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-size: 12.5px;
   color: var(--text);
@@ -389,7 +379,6 @@
 }
 
 .nw-inc-live {
-  font-family: var(--mono);
   font-size: 10px;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
@@ -418,7 +407,6 @@
 }
 
 .nw-failed-chip {
-  font-family: var(--mono);
   font-size: 11px;
   padding: 1px 7px;
   border-radius: var(--radius-sm);

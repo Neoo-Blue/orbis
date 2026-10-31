@@ -18,17 +18,17 @@
 
 @layer base {
   :root {
-    --bg: #0a1729;
-    --bg-1: #0f2138;
-    --bg-2: #142a46;
-    --bg-3: #1c3557;
-    --rail: #0c2340;
+    --bg: #041c2f;
+    --bg-1: #06263e;
+    --bg-2: #0a3150;
+    --bg-3: #114169;
+    --rail: #003153;
     --line: rgba(214, 190, 138, 0.25);
     --line-soft: rgba(214, 190, 138, 0.13);
     --line-strong: rgba(214, 190, 138, 0.46);
     --text: #efe9da;
     --text-dim: #aab6c6;
-    --text-faint: #8a99ae; /* 5:1 on --bg-1, the surface most text sits on */
+    --text-faint: #93a4b8; /* 4.6:1 on --rail, the most saturated surface text sits on */
 
     --accent: #62d8b2;
     --accent-dim: #3f9f82;
@@ -36,7 +36,8 @@
     --brass: #d9bc7c;
     --brass-ink: #1b1608;
     --blue: #8fb7ff;
-    --violet: #b79cff;
+    --violet: #b79cff; /* one ink, kept for a traced decision and nothing else */
+    --rose: #e8a7c0;
     --amber: #f2b544;
     --red: #f2643c;
     --green: #62d8b2;
@@ -71,12 +72,13 @@
   h3 { font-size: 13px; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; text-underline-offset: 3px; }
-  code, .mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .num { font-variant-numeric: tabular-nums; }
 
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 6px; border: 2px solid var(--bg); }
-  ::-webkit-scrollbar-thumb:hover { background: #29466e; }
+  ::-webkit-scrollbar-thumb:hover { background: #1a5580; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -115,7 +117,7 @@
   .nav-item[aria-current='page'] { background: rgba(214, 190, 138, 0.15); color: var(--brass); font-weight: 520; }
   .nav-item svg { width: 15px; height: 15px; flex: none; opacity: .85; }
   .nav-badge {
-    margin-left: auto; font-family: var(--mono); font-size: 10px; padding: 0 5px;
+    margin-left: auto; font-size: 11px; padding: 0 5px;
     border-radius: 20px; background: var(--bg-3); color: var(--text-dim); min-width: 18px; text-align: center;
   }
   .nav-badge.alert { background: rgba(242,100,60,.15); color: var(--red); }
@@ -223,14 +225,14 @@
   }
   .tag.allow { color: var(--green); border-color: rgba(98,216,178,.24); background: rgba(98,216,178,.08); }
   .tag.block { color: var(--red); border-color: rgba(242,100,60,.26); background: rgba(242,100,60,.08); }
-  .tag.filtered { color: var(--violet); border-color: rgba(183,156,255,.26); background: rgba(183,156,255,.08); }
+  .tag.filtered { color: var(--rose); border-color: rgba(232,167,192,.26); background: rgba(232,167,192,.08); }
   .tag.warn { color: var(--amber); border-color: rgba(242,181,68,.26); background: rgba(242,181,68,.08); }
   .tag.live { color: var(--accent); border-color: rgba(98,216,178,.28); background: var(--accent-glow); }
   .tag.info { color: var(--blue); border-color: rgba(143,183,255,.24); background: rgba(143,183,255,.08); }
 
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); flex: none; }
   .dot.on { background: var(--accent); }
-  .dot.off { background: #3b5574; }
+  .dot.off { background: #3f6585; }
   .dot.warn { background: var(--amber); }
   .dot.err { background: var(--red); }
 
@@ -255,7 +257,7 @@
   }
   .row-btn:hover { background: rgba(214, 190, 138, 0.06); }
   table.t tbody tr.selected { background: var(--accent-glow); }
-  table.t td.num, table.t th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  table.t td.num, table.t th.num { text-align: right; font-variant-numeric: tabular-nums; }
   /* Ellipsis for overflowing labels. Flex and grid children need min-width: 0 to
      be allowed to shrink; table cells need a max-width so the table layout does
      not widen the column to fit the content instead of truncating it. */
@@ -270,7 +272,7 @@
     position: relative; height: 100%; width: 100%; overflow: hidden;
     background: var(--bg);
   }
-  .globe-canvas { position: absolute; inset: 0; overflow: hidden; }
+  .globe-canvas { position: absolute; inset: 42px 0 0 0; overflow: hidden; }
   /* Absolutely positioned overlay children still contribute to the scrollable
      overflow of their nearest scrolling ancestor, which is how the HUD used to
      put a scrollbar on the whole page. Clipping here stops that at the source. */
@@ -281,8 +283,8 @@
   .globe-overlay > * { pointer-events: auto; }
   .globe-legend {
     display: flex; gap: 14px; align-items: center; font-family: var(--mono); font-size: 10.5px;
-    color: var(--text-faint); background: rgba(9,20,37,.62);
-    padding: 6px 11px; border-radius: 20px; border: 1px solid var(--line-soft); align-self: flex-start;
+    color: var(--text-faint); background: rgba(4,28,47,.62);
+    padding: 0; align-self: flex-start;
   }
   .globe-legend i { width: 16px; height: 2px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: middle; }
   .globe-country-panel {
@@ -331,7 +333,7 @@
   }
   .ticker-row {
     display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10.5px;
-    padding: 2px 8px; border-radius: 5px; background: rgba(12,28,48,.55); color: var(--text-dim);
+    padding: 2px 8px; border-radius: 5px; background: rgba(6,38,62,.55); color: var(--text-dim);
     animation: tickerIn .3s ease-out;
   }
   @keyframes tickerIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
@@ -411,7 +413,7 @@
   .issue-sev.critical { background: var(--red); } .issue-sev.warning { background: var(--amber, var(--amber)); }
   .issue-sev.notice { background: var(--blue); } .issue-sev.info { background: var(--text-faint); }
   .cat { display: inline-block; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; font-weight: 600; padding: 2px 6px; border-radius: 4px; background: var(--bg-3); color: var(--text-dim); }
-  .cat.video { color: #ff9d7f; background: rgba(255,143,163,.12); } .cat.music { color: var(--violet); background: rgba(195,155,255,.12); }
+  .cat.video { color: #ff9d7f; background: rgba(255,143,163,.12); } .cat.music { color: var(--rose); background: rgba(232,167,192,.12); }
   .cat.social { color: var(--blue); background: rgba(143,183,255,.12); } .cat.messaging { color: var(--green); background: rgba(98,216,178,.12); }
   .cat.gaming { color: var(--amber); background: rgba(242,181,68,.12); } .cat.work, .cat.dev, .cat.storage { color: var(--blue); background: rgba(143,211,255,.12); }
   .cat.ads { color: var(--red); background: rgba(242,100,60,.12); } .cat.telemetry { color: var(--amber); background: rgba(242,181,68,.12); }
@@ -448,7 +450,7 @@
   @keyframes slideIn { from { transform: translateX(20px); opacity: .4 } to { transform: none; opacity: 1 } }
   .drawer-head { display: flex; align-items: center; gap: 11px; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); }
   .drawer-body { flex: 1; overflow-y: auto; padding: 16px; }
-  .scrim { position: fixed; inset: 0; background: rgba(4,10,20,.62); z-index: 39; }
+  .scrim { position: fixed; inset: 0; background: rgba(2,14,24,.66); z-index: 39; }
   .scrim.confirm-scrim { z-index: 79; }
   .confirm-dialog {
     position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
@@ -471,7 +473,7 @@
 
   .kv { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 6px 14px; font-size: 12.5px; }
   .kv dt { color: var(--text-faint); }
-  .kv dd { font-family: var(--mono); word-break: break-word; }
+  .kv dd { word-break: break-word; }
 
   .banner {
     display: flex; gap: 10px; align-items: flex-start; padding: 10px 13px; border-radius: var(--radius-sm);
@@ -548,8 +550,13 @@
 .issue-sev { margin: 6px 0 0; grid-column: 1; }
 .plate-list .issue-sev + .plate-row-title + .plate-row-meta { grid-column: 2; }
 
+.needs { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; padding: 6px 7px; margin: 0 -7px; width: calc(100% + 14px); }
+.needs-title { font-size: 13px; line-height: 1.4; }
+.struck { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--red); margin-right: 7px; vertical-align: 2px; }
 .orbit { position: absolute; inset: 0; }
 .orbit canvas { width: 100%; height: 100%; display: block; }
+.plate-chart .orbit-title { position: absolute; left: 16px; top: 13px; font-size: 13px; font-weight: 520; color: var(--text); }
+.plate-chart .orbit-key { position: absolute; left: 16px; bottom: 11px; font-size: 12px; color: var(--text-faint); pointer-events: none; }
 .orbit-tip {
   position: absolute; left: 0; top: 0; pointer-events: none; opacity: 0; z-index: 3; max-width: 200px;
   background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 10px;
@@ -595,6 +602,18 @@
 .trace-stop.block .trace-title { color: var(--red); }
 .trace-detail { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
 
+.simple-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 400px); gap: 14px; align-items: stretch; }
+.simple-chart { position: relative; min-height: 340px; background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.glance { list-style: none; padding: 0; margin: 0; background: var(--bg-1); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.glance li + li { border-top: 1px solid var(--line-soft); }
+.glance button { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 52px; padding: 10px 16px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.glance button:hover { background: rgba(214, 190, 138, 0.06); }
+.glance .what { flex: 1; min-width: 0; font-size: 14.5px; }
+.glance .what small { display: block; font-size: 12.5px; color: var(--text-faint); }
+.glance .value { font-size: 16px; font-weight: 540; font-variant-numeric: tabular-nums; }
+.glance svg { color: var(--text-faint); flex: none; }
+@media (max-width: 880px) { .simple-top { grid-template-columns: minmax(0, 1fr); } .simple-chart { min-height: 0; aspect-ratio: 1; } }
+
 /* Tables and rows carry a hover cue and nothing else. */
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .card { position: relative; }
@@ -618,7 +637,7 @@
 .simple .btn.sm { padding: 6px 11px; font-size: 12.5px; }
 .simple .hint { font-size: 12.5px; line-height: 1.6; }
 
-.hero { border-radius: var(--radius); padding: 22px 24px; border: 1px solid var(--line-soft); background: var(--bg-1); display: grid; gap: 10px; position: relative; overflow: hidden; }
+.hero { align-content: start; border-radius: var(--radius); padding: 22px 24px; border: 1px solid var(--line-soft); background: var(--bg-1); display: grid; gap: 10px; position: relative; overflow: hidden; }
 .hero.ok { --hero-tint: var(--accent); } .hero.attention { --hero-tint: var(--amber); } .hero.problem { --hero-tint: var(--red); }
 .hero-title { display: flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 620; letter-spacing: -.01em; }
 .hero-title .orb { width: 14px; height: 14px; border-radius: 50%;  }
@@ -712,6 +731,7 @@
      view controls; the country panel moves up to make room and the ticker is
      hidden, since the phone has no spare corner for it. */
   .globe-overlay { padding: 10px; }
+  .globe-canvas { inset: 0 0 60px 0; }
   .globe-legend-row { margin-top: auto; width: 100%; }
   .globe-legend-row .globe-legend { width: 100%; flex-wrap: wrap; gap: 4px 10px; font-size: 10px; padding: 5px 9px; justify-content: center; }
   .globe-hud { right: 10px; top: 10px; max-height: 52%; }

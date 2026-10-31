@@ -7,7 +7,7 @@ import countryShapes from '../data/countries.json'
  * The globe renderer.
  *
  * Design intent: this should read as an instrument, not a marketing graphic.
- * The sphere is the plate's blue with a thin atmospheric rim; landmasses are drawn
+ * The sphere is the plate's blue; landmasses are drawn
  * as hairlines rather than a texture, so the arcs stay the brightest thing on
  * screen. Every arc is one live connection, and its colour encodes the verdict
  * — that mapping is the whole point of the view.
@@ -98,13 +98,12 @@ const PULSE_GEOMETRY = new THREE.RingGeometry(1, 1.18, 28)
 const COLORS = {
   allow: new THREE.Color('#62d8b2'),
   block: new THREE.Color('#f2643c'),
-  filtered: new THREE.Color('#b79cff'),
+  filtered: new THREE.Color('#e8a7c0'),
   pending: new THREE.Color('#f2b544'),
   home: new THREE.Color('#d9bc7c'),
   inbound: new THREE.Color('#f2b544'),
   land: new THREE.Color('#9a8a66'),
   border: new THREE.Color('#34506f'),
-  atmosphere: new THREE.Color('#3a5f8f'),
   // The bright crest of the travelling gradient. Outbound runs cool (the
   // network reaching out), inbound runs warm (something reaching in) — so
   // direction is readable from a still frame, not only from the motion.
@@ -357,36 +356,9 @@ export class GlobeScene {
     // globe reads as a wireframe ball and depth is impossible to judge.
     const body = new THREE.Mesh(
       new THREE.SphereGeometry(GLOBE_RADIUS * 0.995, 64, 48),
-      new THREE.MeshBasicMaterial({ color: 0x0f2138 }),
+      new THREE.MeshBasicMaterial({ color: 0x06263e }),
     )
     this.globeGroup.add(body)
-
-    // Atmosphere: back-side sphere with a fresnel-ish falloff, which is what
-    // gives the silhouette its glow without any post-processing.
-    const atmosphere = new THREE.Mesh(
-      new THREE.SphereGeometry(GLOBE_RADIUS * 1.14, 64, 48),
-      new THREE.ShaderMaterial({
-        transparent: true,
-        side: THREE.BackSide,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        uniforms: { uColor: { value: COLORS.atmosphere } },
-        vertexShader: `
-          varying vec3 vNormal;
-          void main() {
-            vNormal = normalize(normalMatrix * normal);
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }`,
-        fragmentShader: `
-          uniform vec3 uColor;
-          varying vec3 vNormal;
-          void main() {
-            float intensity = pow(0.62 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 3.0);
-            gl_FragColor = vec4(uColor, 1.0) * intensity * 0.9;
-          }`,
-      }),
-    )
-    this.globeGroup.add(atmosphere)
 
     // Graticule: sparse lat/lon rings for orientation.
     this.globeGroup.add(this.buildGraticule())
@@ -751,7 +723,7 @@ export class GlobeScene {
     const mat = new THREE.MeshBasicMaterial({
       color: inbound ? COLORS.flowIn : COLORS.flowOut,
       transparent: true, opacity: 0,
-      side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+      side: THREE.DoubleSide, depthWrite: false,
     })
     const mesh = new THREE.Mesh(PULSE_GEOMETRY, mat)
     mesh.position.copy(pos)
@@ -972,13 +944,9 @@ function clamp(v: number, lo: number, hi: number) {
 }
 
 /** hashPhase derives a stable 0..1 offset from a string. */
-const CORE_MATERIAL = new THREE.MeshBasicMaterial({
-  color: COLORS.allow, transparent: true, opacity: 0.95,
-  blending: THREE.AdditiveBlending, depthWrite: false,
-})
+const CORE_MATERIAL = new THREE.MeshBasicMaterial({ color: COLORS.allow, transparent: true, opacity: 0.95, depthWrite: false })
 const RING_MATERIAL = new THREE.MeshBasicMaterial({
-  color: COLORS.allow, transparent: true, opacity: 0.4,
-  side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+  color: COLORS.allow, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
 })
 
 function hashPhase(s: string): number {

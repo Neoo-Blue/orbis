@@ -7,7 +7,7 @@ export type ColorBy = 'kind' | 'verdict'
 
 export const KINDS: Array<{ id: ArcKind; label: string; color: string }> = [
   { id: 'streaming', label: 'streaming', color: '#ff9d7f' },
-  { id: 'social', label: 'social & messaging', color: '#b79cff' },
+  { id: 'social', label: 'social & messaging', color: '#e8a7c0' },
   { id: 'gaming', label: 'gaming', color: '#f2b544' },
   { id: 'web', label: 'web', color: '#62d8b2' },
   { id: 'dns', label: 'DNS', color: '#8fb7ff' },

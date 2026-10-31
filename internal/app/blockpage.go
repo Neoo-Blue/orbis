@@ -92,8 +92,10 @@ func (a *App) whyBlocked(host string, s DiagnoseStep) string {
 		return "This is a public encrypted DNS service, which this device's profile does not allow because it would get around this network's filtering."
 	case strings.HasPrefix(s.Source, "local:"), s.Source == "config":
 		return "It was blocked by a rule on this network."
-	case strings.HasPrefix(s.Source, "builtin:"):
-		return "It is on a list built into Orbis."
+	case s.Source == "builtin:doh-bypass":
+		return "This is a public encrypted DNS service. Using one would get around this network's filtering, so Orbis blocks it."
+	case s.Source == "builtin:streaming-ads":
+		return "This host serves ads to smart TVs and streaming boxes."
 	}
 	if what := blockpage.Sentence(a.Matcher.Lookup(host).Category); what != "" {
 		return fmt.Sprintf("It is on %s, a list this network uses to block %s.", plainSource(s.Source), what)

@@ -4,16 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
-<meta name="theme-color" content="#0a1729">
+<meta name="theme-color" content="#041c2f">
 <title>{{.Host}} stopped by Orbis</title>
 <style nonce="{{.Nonce}}">
 @font-face { font-family: Geist; src: url(/__orbis/geist.woff2) format('woff2'); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: 'Geist Mono'; src: url(/__orbis/geist-mono.woff2) format('woff2'); font-weight: 100 900; font-display: swap; }
 :root {
-  --ground: #0a1729; --plate: #0f2138; --line: rgba(214, 190, 138, .2); --line-strong: rgba(214, 190, 138, .46);
-  --ivory: #efe9da; --dim: #aab6c6; --faint: #8796ab; --brass: #d9bc7c; --brass-ink: #1b1608;
-  --vermilion: #f2643c; --jade: #62d8b2;
+  --ground: #041c2f; --line: rgba(214, 190, 138, .2); --line-strong: rgba(214, 190, 138, .46);
+  --ivory: #efe9da; --dim: #aab6c6; --faint: #93a4b8; --brass: #d9bc7c; --brass-ink: #1b1608;
+  --vermilion: #f2643c; --violet: #b79cff;
   --sans: Geist, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --ease: cubic-bezier(.16, 1, .3, 1);
 }
 *, *::before, *::after { box-sizing: border-box; }
@@ -34,10 +35,11 @@ main {
 .mark { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: .02em; color: var(--brass); }
 .mark svg { width: 24px; height: 24px; display: block; }
 h1 {
-  font-size: clamp(30px, 5.4vw, 54px); line-height: 1.08; font-weight: 560; letter-spacing: -.03em;
+  /* The name is a security read: rn and m, l and 1 must stay distinct. */
+  font-family: var(--mono); font-size: clamp(27px, 4.6vw, 46px); line-height: 1.12; font-weight: 500; letter-spacing: -.04em;
   overflow-wrap: anywhere; text-wrap: balance;
 }
-h1.long { font-size: clamp(26px, 4.2vw, 42px); }
+h1.long { font-size: clamp(23px, 3.5vw, 34px); }
 .lede { font-size: clamp(17px, 2vw, 19px); line-height: 1.5; color: var(--ivory); max-width: 56ch; text-wrap: pretty; }
 .lede b { font-weight: 560; color: var(--vermilion); }
 
@@ -50,14 +52,14 @@ h1.long { font-size: clamp(26px, 4.2vw, 42px); }
 }
 .stop::before {
   content: ''; position: absolute; left: 10px; top: 16px; bottom: -4px; width: 2px;
-  background: var(--line-strong); transform-origin: top; transform: scaleY(0);
+  background: var(--violet); transform-origin: top; transform: scaleY(0);
   animation: draw .3s linear forwards; animation-delay: calc(var(--i) * 130ms + 300ms);
 }
 .stop:nth-child(1) { --i: 0; } .stop:nth-child(2) { --i: 1; } .stop:nth-child(3) { --i: 2; } .stop:nth-child(4) { --i: 3; }
 .stop:nth-child(5) { --i: 4; } .stop:nth-child(6) { --i: 5; } .stop:nth-child(7) { --i: 6; } .stop:nth-child(n+8) { --i: 7; }
 .stop:last-child { padding-bottom: 0; }
 .stop:last-child::before { display: none; }
-.dot { width: 12px; height: 12px; margin: 5px 0 0 5px; border-radius: 50%; background: var(--ground); border: 2px solid var(--brass); position: relative; }
+.dot { width: 12px; height: 12px; margin: 5px 0 0 5px; border-radius: 50%; background: var(--ground); border: 2px solid var(--violet); position: relative; }
 .stop b { display: block; font-size: 15px; font-weight: 520; }
 .stop span { display: block; font-size: 14px; line-height: 1.45; color: var(--dim); overflow-wrap: anywhere; }
 .stop.decided .dot { background: var(--vermilion); border-color: var(--vermilion); }
@@ -70,12 +72,11 @@ h1.long { font-size: clamp(26px, 4.2vw, 42px); }
 .stop.unreached .dot { border-color: var(--faint); }
 .stop.unreached b { color: var(--faint); }
 .stop.unreached span { color: var(--faint); }
-.stop.clear .dot { border-color: var(--jade); }
 
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 20px; font-size: 14px; padding-top: 16px; border-top: 1px solid var(--line); }
 dt { color: var(--faint); }
 dd { color: var(--ivory); overflow-wrap: anywhere; }
-dd.code { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+dd.code, .stop .code { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .btn {
@@ -99,7 +100,10 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
   dl { max-width: 540px; }
 }
 @media (max-width: 759px) {
-  canvas { opacity: .42; }
+  /* A plate of its own above the text, so no ring runs through the words. */
+  canvas { position: absolute; height: 200px; }
+  main { padding-top: 212px; }
+  .mark { position: absolute; left: 20px; top: 22px; }
   .actions .btn { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -109,7 +113,7 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
 </style>
 </head>
 <body>
-<canvas id="sky" aria-hidden="true"></canvas>
+<canvas id="sky" data-host="{{.Host}}" aria-hidden="true"></canvas>
 <main>
   <div class="mark">
     <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="16" cy="16" r="11.5" stroke="currentColor" stroke-width="1.6"/><ellipse cx="16" cy="16" rx="11.5" ry="4.4" stroke="currentColor" stroke-width="1.1" opacity=".6"/><circle cx="16" cy="16" r="2.6" fill="currentColor"/></svg>
@@ -152,19 +156,22 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
     if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copy).then(done);
   };
 
-  // The plate: engraved rings around the network, and requests arriving from
-  // outside. Blocked ones stop dead at the shield ring.
+  // The plate: this one request, leaving the device along the traced line and
+  // dying at the shield. Nothing here is invented traffic.
   var c = document.getElementById('sky'), x = c.getContext('2d');
   if (!x) return;
-  var still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var w, h, cx, cy, unit, dpr = Math.min(devicePixelRatio || 1, 2), stars = [], shots = [], last = 0;
+  var still = matchMedia('(prefers-reduced-motion: reduce)').matches, host = c.dataset.host;
+  var w, h, cx, cy, R, dpr = Math.min(devicePixelRatio || 1, 2), wide, stars = [], raf = 0, last = 0;
+  var CYCLE = 7000, TRAVEL = 1500, FROM = 1.9, TO = 3.95;
   function size() {
-    w = innerWidth; h = innerHeight; c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
-    var wide = w >= 760;
-    cx = wide ? Math.max(w * .76, 640 + h * .44) : w * .96; cy = wide ? h * .5 : 28; unit = Math.min(wide ? h * .44 : w * .72, 440);
+    wide = innerWidth >= 760; w = innerWidth; h = wide ? innerHeight : 200;
+    c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx = wide ? Math.max(w * .76, 640 + h * .44) : w * .66; cy = wide ? h * .5 : 104; R = wide ? Math.min(h * .44, 440) : 90;
     stars = [];
-    for (var i = 0; i < Math.round(w * h / 9000); i++) stars.push([Math.random() * w, Math.random() * h, Math.random() * 1.1 + .25, Math.random()]);
-    if (still) frame(0);
+    var seed = 11;
+    function next() { return (seed = seed * 16807 % 2147483647) / 2147483647 }
+    for (var i = 0; i < Math.round(w * h / 8000); i++) stars.push([next() * w, next() * h, next() * .9 + .35, next()]);
+    frame(still ? TRAVEL + 2000 : 0);
   }
   function ring(r, a, dash) {
     x.beginPath(); x.setLineDash(dash || []); x.strokeStyle = 'rgba(214,190,138,' + a + ')'; x.arc(cx, cy, r, 0, 6.2832); x.stroke(); x.setLineDash([]);
@@ -172,62 +179,55 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
   function ticks(r, n, rot, len, a) {
     x.beginPath(); x.strokeStyle = 'rgba(214,190,138,' + a + ')';
     for (var i = 0; i < n; i++) {
-      var t = rot + i * 6.2832 / n, cs = Math.cos(t), sn = Math.sin(t), l = i % 5 ? len : len * 2.4;
+      var t = rot + i * 6.2832 / n, cs = Math.cos(t), sn = Math.sin(t), l = i % 6 ? len : len * 2.2;
       x.moveTo(cx + cs * r, cy + sn * r); x.lineTo(cx + cs * (r + l), cy + sn * (r + l));
     }
     x.stroke();
   }
-  function spawn(t) {
-    var a = Math.random() * 6.2832, side = Math.random() < .5 ? 1 : -1;
-    shots.push({ a: a, born: t, life: 1500, side: side });
-    if (shots.length > 4) shots.shift();
+  function point(e) {
+    // Out from the device on its orbit, curving to the shield.
+    var r = R * (.46 + .54 * e), a = FROM + (TO - FROM) * e;
+    return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
   }
-  var shield = 1;
   function frame(t) {
     x.clearRect(0, 0, w, h);
     for (var i = 0; i < stars.length; i++) {
-      var s = stars[i]; x.fillStyle = 'rgba(239,233,218,' + (.18 + .3 * Math.abs(Math.sin(t / 2600 + s[3] * 6))) + ')';
-      x.fillRect(s[0], s[1], s[2], s[2]);
+      var s = stars[i]; x.fillStyle = 'rgba(239,233,218,' + (.16 + .3 * s[3]) + ')'; x.fillRect(s[0], s[1], s[2], s[2]);
     }
     x.lineWidth = 1;
-    ring(unit * .16, .5); ring(unit * .38, .24, [2, 6]); ring(unit * .62, .22);
-    ticks(unit * .62, 120, t / 90000, 4, .22);
-    ring(unit * shield, .62); ticks(unit, 72, -t / 60000, 6, .4);
-    // The centre: Orbis.
+    ring(R * .12, .5); ring(R * .46, .22, [2, 6]); ring(R, .6); ticks(R, 72, -1.5708, wide ? 5 : 3, .36);
     x.beginPath(); x.fillStyle = '#d9bc7c'; x.arc(cx, cy, 3.4, 0, 6.2832); x.fill();
-    for (var b = 0; b < 7; b++) {
-      var ang = b * 2.4 + t / (34000 + b * 9000), rad = unit * (b % 2 ? .38 : .62), bx = cx + Math.cos(ang) * rad, by = cy + Math.sin(ang) * rad;
-      x.beginPath(); x.fillStyle = b === 2 ? '#62d8b2' : 'rgba(239,233,218,.82)'; x.arc(bx, by, b === 2 ? 2.6 : 1.9, 0, 6.2832); x.fill();
-    }
-    for (var k = 0; k < shots.length; k++) {
-      var o = shots[k], p = Math.min(1, (t - o.born) / o.life), e = 1 - Math.pow(1 - p, 3);
-      var from = unit * 1.9, r = from + (unit - from) * e, a = o.a + (1 - e) * .5 * o.side;
-      var hx = cx + Math.cos(a) * r, hy = cy + Math.sin(a) * r;
-      if (p < 1) {
-        var ta = o.a + (1 - Math.max(0, e - .16)) * .5 * o.side, tr = from + (unit - from) * Math.max(0, e - .16);
-        x.beginPath(); x.moveTo(cx + Math.cos(ta) * tr, cy + Math.sin(ta) * tr); x.lineTo(hx, hy);
-        x.strokeStyle = 'rgba(242,100,60,.7)'; x.lineWidth = 1.4; x.stroke(); x.lineWidth = 1;
-      } else {
-        var f = (t - o.born - o.life) / 900;
-        if (f < 1) {
-          x.beginPath(); x.strokeStyle = 'rgba(242,100,60,' + (1 - f) + ')'; x.lineWidth = 2;
-          x.arc(cx, cy, unit, o.a - .03 - f * .16, o.a + .03 + f * .16); x.stroke(); x.lineWidth = 1;
-          x.beginPath(); x.fillStyle = 'rgba(242,100,60,' + (1 - f) + ')';
-          x.arc(cx + Math.cos(o.a) * unit, cy + Math.sin(o.a) * unit, 2.5 + f * 6, 0, 6.2832); x.fill();
-        }
+    var device = point(0);
+    x.beginPath(); x.fillStyle = '#efe9da'; x.arc(device[0], device[1], 3.2, 0, 6.2832); x.fill();
+
+    var age = t % CYCLE, p = Math.min(1, age / TRAVEL), e = 1 - Math.pow(1 - p, 3);
+    var fade = age > CYCLE - 900 ? (CYCLE - age) / 900 : 1;
+    x.globalAlpha = fade; x.beginPath(); x.lineWidth = 1.6; x.strokeStyle = '#b79cff';
+    for (var k = 0; k <= 40; k++) { var q = point(e * k / 40); k ? x.lineTo(q[0], q[1]) : x.moveTo(q[0], q[1]); }
+    x.stroke();
+    var head = point(e);
+    x.fillStyle = '#b79cff'; x.beginPath(); x.arc(head[0], head[1], 2.4, 0, 6.2832); x.fill();
+    if (p >= 1) {
+      var f = Math.min(1, (age - TRAVEL) / 900);
+      x.globalAlpha = fade * (1 - f); x.strokeStyle = '#f2643c'; x.lineWidth = 2;
+      x.beginPath(); x.arc(cx, cy, R, TO - .04 - f * .2, TO + .04 + f * .2); x.stroke();
+      x.globalAlpha = fade; x.fillStyle = '#f2643c'; x.beginPath(); x.arc(head[0], head[1], 4, 0, 6.2832); x.fill();
+      if (wide) {
+        x.font = "500 12.5px 'Geist Mono', ui-monospace, monospace"; x.textAlign = 'left'; x.textBaseline = 'middle';
+        x.fillStyle = '#efe9da'; x.fillText(host.length > 30 ? host.slice(0, 29) + '…' : host, Math.min(head[0] + 12, w - 250), head[1] - 14);
       }
     }
+    x.globalAlpha = 1;
   }
-  var next = 500, raf = 0;
   function loop(t) {
     raf = 0;
-    if (t - last >= 30) { last = t; if (t > next) { spawn(t); next = t + 1400 + Math.random() * 2600 } frame(t); }
+    if (t - last >= 30) { last = t; frame(t) }
     if (!document.hidden) raf = requestAnimationFrame(loop);
   }
   addEventListener('resize', size);
   document.addEventListener('visibilitychange', function () { if (!document.hidden && !still && !raf) raf = requestAnimationFrame(loop) });
   size();
-  if (still) { shots.push({ a: 2.4, born: -1500, life: 1500, side: 1 }); frame(100); } else raf = requestAnimationFrame(loop);
+  if (!still) raf = requestAnimationFrame(loop);
 })();
 </script>
 </body>

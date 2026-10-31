@@ -53,43 +53,43 @@ type Route =
 
 type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; group?: string; short?: string }
 const ROUTES: NavRoute[] = [
-  { id: 'dashboard', label: 'Overview', icon: 'grid', group: 'Observe' },
+  { id: 'dashboard', label: 'Overview', icon: 'orbit', group: 'Observe' },
   { id: 'globe', label: 'Globe', icon: 'globe' },
   { id: 'flows', label: 'Connections', icon: 'activity' },
-  { id: 'services', label: 'Services', icon: 'tv' },
-  { id: 'analytics', label: 'Analytics', icon: 'spark' },
+  { id: 'services', label: 'Services', icon: 'stack' },
+  { id: 'analytics', label: 'Analytics', icon: 'chart' },
   { id: 'clients', label: 'Devices', icon: 'devices' },
-  { id: 'topology', label: 'Topology', icon: 'grid' },
-  { id: 'health', label: 'Internet health', icon: 'activity' },
+  { id: 'topology', label: 'Topology', icon: 'nodes' },
+  { id: 'health', label: 'Internet health', icon: 'pulse' },
   { id: 'dns', label: 'DNS', icon: 'dns', group: 'Filtering' },
   { id: 'adblock', label: 'Ad blocking', icon: 'block' },
-  { id: 'profiles', label: 'Profiles', icon: 'shield' },
+  { id: 'profiles', label: 'Profiles', icon: 'user' },
   { id: 'dnstools', label: 'Domain tester', icon: 'search' },
   { id: 'youtube', label: 'YouTube', icon: 'tv' },
-  { id: 'consent', label: 'Ask first', icon: 'shield' },
+  { id: 'consent', label: 'Ask first', icon: 'question' },
   { id: 'firewall', label: 'Firewall', icon: 'shield', group: 'Network' },
-  { id: 'threats', label: 'Threats', icon: 'alert' },
-  { id: 'hosted', label: 'Hosted apps', icon: 'spark' },
-  { id: 'links', label: 'Cables & Wi-Fi', icon: 'route' },
+  { id: 'threats', label: 'Threats', icon: 'target' },
+  { id: 'hosted', label: 'Hosted apps', icon: 'server' },
+  { id: 'links', label: 'Cables & Wi-Fi', icon: 'cable' },
   { id: 'network', label: 'DHCP & LAN', icon: 'route' },
-  { id: 'gateway', label: 'Gateway', icon: 'activity' },
-  { id: 'intercept', label: 'Interception', icon: 'route' },
+  { id: 'gateway', label: 'Gateway', icon: 'door' },
+  { id: 'intercept', label: 'Interception', icon: 'split' },
   { id: 'vpn', label: 'VPN', icon: 'key' },
   { id: 'assistant', label: 'Assistant', icon: 'chat', group: 'Operate' },
   { id: 'problems', label: 'Problems', icon: 'alert', group: 'Operate' },
   { id: 'events', label: 'Events', icon: 'bell' },
-  { id: 'alerts', label: 'Alerts', icon: 'alert' },
-  { id: 'reports', label: 'Reports', icon: 'grid' },
-  { id: 'changes', label: 'Change timeline', icon: 'route' },
+  { id: 'alerts', label: 'Alerts', icon: 'flag' },
+  { id: 'reports', label: 'Reports', icon: 'doc' },
+  { id: 'changes', label: 'Change timeline', icon: 'history' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]
 
 /** The simple interface: seven plain words, one screen each. */
 const SIMPLE_ROUTES: NavRoute[] = [
-  { id: 's-home', label: 'Home', icon: 'grid' },
+  { id: 's-home', label: 'Home', icon: 'orbit' },
   { id: 's-devices', label: 'Devices', icon: 'devices' },
   { id: 's-protection', label: 'Protection', icon: 'shield', short: 'Protect' },
-  { id: 's-usage', label: 'Usage', icon: 'tv' },
+  { id: 's-usage', label: 'Usage', icon: 'chart' },
   { id: 'assistant', label: 'Ask', icon: 'chat' },
   { id: 's-alerts', label: 'Alerts', icon: 'bell' },
   { id: 's-settings', label: 'Settings', icon: 'gear' },
@@ -347,7 +347,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
               <UpdateBanner onSettings={() => navigate('settings')} />
             </div>
           )}
-          {setupRequired && route !== 'settings' && (
+          {setupRequired && route !== 'settings' && shown !== 'dashboard' && (
             <div className={route === 'globe' || route === 'assistant' ? 'flush-banner' : undefined}>
               <Banner tone="warn" action={
                 <button className="btn sm" onClick={() => navigate('settings')}>Set a password</button>
@@ -360,7 +360,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
 
           <ErrorBoundary name={title} key={shown}>
             <Suspense fallback={<Spinner />}>
-              {shown === 'dashboard' && <Dashboard status={status} summary={summary} onNavigate={navigate} />}
+              {shown === 'dashboard' && <Dashboard status={status} summary={summary} setupRequired={setupRequired} onNavigate={navigate} />}
               {route === 'globe' && <GlobePage />}
               {route === 'flows' && <FlowsPage />}
               {route === 'analytics' && <AnalyticsPage />}

@@ -39,6 +39,9 @@ var pageHTML string
 //go:embed geist.woff2
 var font []byte
 
+//go:embed geist-mono.woff2
+var monoFont []byte
+
 var pageTemplate = template.Must(template.New("page").Parse(pageHTML))
 
 // Station is one stop on the line drawn from the device to the decision.
@@ -87,10 +90,10 @@ type Server struct {
 // nothing at all for everything else. A blocked ad is a script or an image
 // inside someone else's page, and it should fail quietly and fast.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/__orbis/geist.woff2" {
+	if face, ok := map[string][]byte{"/__orbis/geist.woff2": font, "/__orbis/geist-mono.woff2": monoFont}[r.URL.Path]; ok {
 		w.Header().Set("Content-Type", "font/woff2")
 		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
-		_, _ = w.Write(font)
+		_, _ = w.Write(face)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

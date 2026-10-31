@@ -35,7 +35,7 @@ export function AnalyticsPage() {
     { points: bl.data?.points ?? [], color: 'var(--red)', label: 'Blocked/min', rate: true },
   ]
   const flowSeries: Series[] = [
-    { points: flows.data?.points ?? [], color: 'var(--violet)', label: 'Active flows' },
+    { points: flows.data?.points ?? [], color: 'var(--brass)', label: 'Active flows' },
   ]
 
   const lastQ = rateLast(q.data?.points)

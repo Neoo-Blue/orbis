@@ -168,8 +168,8 @@ export function ZoneMatrixPanel({ onOpenRules }: ZoneMatrixPanelProps) {
               <tr>
                 <th scope="col" className="zm-corner">
                   <div className="zm-corner-labels">
-                    <span>To →</span>
-                    <span>From ↓</span>
+                    <span>To <Icons.chevron size={11} /></span>
+                    <span>From <span className="zm-down"><Icons.chevron size={11} /></span></span>
                   </div>
                 </th>
                 {zones.map((dst) => (

@@ -3,24 +3,45 @@ import { api } from '../api'
 import { usePoll } from '../hooks'
 import { useLiveBatch } from '../live'
 import { OrbitChart, type OrbitDevice, type OrbitFlow, type OrbitHandle } from '../orbit/OrbitChart'
-import { Banner, Card, Dot, Empty, Icons, Loading, Sparkline, Stat } from '../ui'
+import { Card, Dot, Empty, Icons, Loading, Sparkline, Stat } from '../ui'
 import { ago, bits, bytes, clientName, compact, duration, num, pct, countryFlag } from '../format'
 import type { Client, DNSQuery, EventItem, Flow, Health, Summary, SystemStatus, NodeResources } from '../types'
 
-type Nav = 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings' | 'dnstools' | 'problems'
+type Nav = 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings' | 'dnstools' | 'problems' | 'health'
 
 interface Props {
   status: SystemStatus | null
   summary: Summary | null
+  setupRequired: boolean
   onNavigate: (r: Nav, sub?: string) => void
 }
 
+/** Things that stay put go on the inner orbit, things people carry on the outer. */
+export const FIXED_TYPES = /server|storage|nas|tv|speaker|camera|iot|printer|console|appliance|router|switch|access/i
+
+export function orbitDevices(clients: Client[]): OrbitDevice[] {
+  return clients.map((c) => ({
+    id: c.id, name: clientName(c), rate: c.rate_in + c.rate_out, flows: c.active_flows, paused: c.blocked,
+    ring: FIXED_TYPES.test(c.device_type ?? '') ? 0 : 1,
+  }))
+}
+
+export function orbitFlows(flows: Flow[]): OrbitFlow[] {
+  return flows.filter((f) => f.client_id).map((f) => ({
+    client: f.client_id as string, lon: f.lat || f.lon ? f.lon : null,
+    blocked: f.verdict === 'block', bytes: f.bytes_in + f.bytes_out,
+  }))
+}
+
+interface Attention { key: string; level: 'problem' | 'attention' | 'notice'; title: string; go: () => void }
+
 interface Tick { rate_in: number; rate_out: number; flows_active: number }
 
-export function Dashboard({ status, summary, onNavigate }: Props) {
+export function Dashboard({ status, summary, setupRequired, onNavigate }: Props) {
   const { data: health } = usePoll<Health>(() => api.simple.health(), 15000)
   const { data: clients } = usePoll(() => api.clients.list(), 12000)
   const { data: active } = usePoll(() => api.flows.active(160), 8000)
+  const { data: internet } = usePoll(() => api.netwatch.status(), 15000)
   const { data: recentEvents } = usePoll(() => api.events.list({ hours: 24, limit: 8 }), 20000)
   const { data: topBlocked } = usePoll(() => api.adblock.topBlocked(24, 8), 30000)
   const { data: topDest } = usePoll(() => api.flows.list({ hours: 24, order: 'bytes', limit: 8 }), 30000)
@@ -38,66 +59,63 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
     const fresh: DNSQuery[] = []
     for (const ev of batch) {
       const q = ev.data as DNSQuery
-      if (q?.blocked) { fresh.push(q); if (q.client_id) orbit.current?.spark(q.client_id) }
+      if (q?.blocked) { fresh.push(q); if (q.client_id) orbit.current?.strike(q.client_id, q.name) }
     }
     if (fresh.length) setStopped((prev) => [...fresh.reverse(), ...(prev ?? blockedLog?.queries ?? [])].slice(0, 6))
   })
   useLiveBatch(['flow.new'], (batch) => {
-    for (const ev of batch) { const f = ev.data as Flow; if (f?.id) orbit.current?.arrive(f.id) }
+    for (const ev of batch) { const f = ev.data as Flow; if (f?.client_id) orbit.current?.arrive(f.client_id, f.lat || f.lon ? f.lon : null) }
   })
 
   const online = useMemo(
     () => (clients?.clients ?? []).filter((c) => c.online).sort((a, b) => (b.rate_in + b.rate_out) - (a.rate_in + a.rate_out)),
     [clients],
   )
-  const devices = useMemo<OrbitDevice[]>(() => online.map((c) => ({
-    id: c.id, name: clientName(c), rate: c.rate_in + c.rate_out, flows: c.active_flows, paused: c.blocked,
-  })), [online])
-  const flows = useMemo<OrbitFlow[]>(() => (active?.flows ?? []).filter((f) => f.client_id && (f.lat || f.lon)).map((f) => ({
-    id: f.id, client: f.client_id as string, lon: f.lon, blocked: f.verdict === 'block', bytes: f.bytes_in + f.bytes_out,
-  })), [active])
+  const devices = useMemo(() => orbitDevices(online), [online])
+  const flows = useMemo(() => orbitFlows(active?.flows ?? []), [active])
   const blockedPoints = useMemo(() => (blockedSeries?.points ?? []).map((p) => p.v), [blockedSeries])
   const names = useMemo(() => new Map((clients?.clients ?? []).map((c) => [c.id, clientName(c)])), [clients])
 
   if (!summary) return <Loading what="overview" />
 
   const capture = status?.capture as Record<string, number | boolean> | undefined
-  const captureOff = capture && capture.interfaces === 0
   const sysctlIssues = (status?.sysctl ?? []).filter((s) => s.critical && !s.ok)
   const level = health?.level ?? 'ok'
+  const netFault = internet && internet.story !== 'ok' ? internet : null
   const verdict = !health ? 'Checking your network'
     : level !== 'ok' ? health.headline.replace(/\.$/, '')
-    : health.protection_on ? 'Your network is protected' : 'Filtering is switched off'
-  const issues = (health?.points ?? []).filter((p) => p.level !== 'ok')
+    : !health.protection_on ? 'Filtering is switched off'
+    : netFault ? 'Protected, but the internet is unwell'
+    : status?.mode === 'inline' ? 'Your network is protected' : 'Protected by DNS filtering'
   const quiet = (health?.points ?? []).filter((p) => p.level === 'ok').slice(0, 3)
-  const review = (recentEvents?.events ?? []).filter((e) => !e.acknowledged && (e.severity === 'warning' || e.severity === 'critical')).slice(0, 3)
   const stoppedList = stopped ?? blockedLog?.queries ?? []
+
+  // Everything that needs the owner, in one place, most serious first.
+  const attention: Attention[] = []
+  for (const p of health?.points ?? []) {
+    if (p.level !== 'ok') attention.push({ key: p.text, level: p.level, title: p.text, go: () => onNavigate('events') })
+  }
+  if (setupRequired) attention.push({ key: 'password', level: 'problem', title: 'No admin password is set. Anyone on this network can open Orbis.', go: () => onNavigate('settings') })
+  if (netFault) attention.push({ key: 'internet', level: netFault.state === 'down' ? 'problem' : 'attention', title: netFault.headline, go: () => onNavigate('health') })
+  if (capture && capture.interfaces === 0) attention.push({ key: 'capture', level: 'attention', title: 'Packet capture opened no interfaces, so names and sites will be missing from connections.', go: () => onNavigate('settings') })
+  if (sysctlIssues.length > 0 && status?.mode === 'inline') attention.push({ key: 'sysctl', level: 'problem', title: `${sysctlIssues.map((s) => s.key).join(', ')} not set correctly. Routing will not work as configured.`, go: () => onNavigate('firewall') })
+  for (const e of (recentEvents?.events ?? []).filter((e) => !e.acknowledged && (e.severity === 'warning' || e.severity === 'critical')).slice(0, 3)) {
+    attention.push({ key: e.id, level: e.severity === 'critical' ? 'problem' : 'attention', title: e.title, go: () => onNavigate('events') })
+  }
+  if (summary.ad_candidates > 0) attention.push({ key: 'ads', level: 'notice', title: `${summary.ad_candidates} new ${summary.ad_candidates === 1 ? 'host looks' : 'hosts look'} like ads`, go: () => onNavigate('adblock') })
+  const order = { problem: 0, attention: 1, notice: 2 }
+  attention.sort((x, y) => order[x.level] - order[y.level])
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      {captureOff && (
-        <Banner tone="warn">
-          Packet capture opened no interfaces. Without <code>CAP_NET_RAW</code> the flow table
-          only sees what conntrack reports, so hostnames and SNI will be missing.
-        </Banner>
-      )}
-      {sysctlIssues.length > 0 && status?.mode === 'inline' && (
-        <Banner tone="err" action={<button className="btn sm" onClick={() => onNavigate('firewall')}>Fix</button>}>
-          {sysctlIssues.map((s) => s.key).join(', ')} {sysctlIssues.length === 1 ? 'is' : 'are'} not set
-          correctly, routing will not work as configured.
-        </Banner>
-      )}
-
       <section className="plate">
         <div className="plate-state">
           <h2 className={`verdict-line ${level}`}>{verdict}</h2>
           <ul className="plate-points">
-            {(issues.length ? issues : quiet).map((p) => (
-              <li key={p.text} className={p.level}>{p.text}</li>
-            ))}
             {status?.mode === 'observe' && (
-              <li className="ok">Filtering every device that uses this resolver. Firewall rules are not enforced in observe mode.</li>
+              <li>Filtering every device that uses this resolver. Firewall rules are not enforced in observe mode.</li>
             )}
+            {quiet.map((p) => <li key={p.text}>{p.text}</li>)}
           </ul>
           <div className="plate-stopped">
             <div className="plate-figure">{compact(summary.dns_blocked)}</div>
@@ -105,7 +123,7 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
             {blockedPoints.length > 1 && <Sparkline points={blockedPoints} tone="red" height={40} />}
           </div>
           <dl className="plate-facts">
-            <div><dt>Devices online</dt><dd>{summary.clients_online} of {summary.clients}</dd></div>
+            <div><dt>Devices online</dt><dd>{clients ? online.length : summary.clients_online} of {clients?.clients.length ?? summary.clients}</dd></div>
             <div><dt>Connections</dt><dd>{num(tick?.flows_active ?? summary.active_flows)}</dd></div>
             <div><dt>Down</dt><dd>{bits(tick?.rate_in ?? 0)}</dd></div>
             <div><dt>Up</dt><dd>{bits(tick?.rate_out ?? 0)}</dd></div>
@@ -113,32 +131,25 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
         </div>
 
         <div className="plate-chart">
-          <OrbitChart ref={orbit} devices={devices} flows={flows} onSelect={(id) => onNavigate('clients', id)}
-            label={`${devices.length} devices online with ${flows.length} connections drawn. The same devices are listed under Busiest devices.`} />
+          <OrbitChart ref={orbit} devices={devices} flows={flows} title={status?.node}
+            onSelect={(id) => onNavigate('clients', id)} onStrike={(name) => onNavigate('dnstools', name)}
+            label={`${devices.length} devices online with ${flows.length} connections. The same devices are listed under Busiest devices.`} />
         </div>
 
         <div className="plate-side">
           <h3>Needs you</h3>
-          {review.length === 0 && !summary.ad_candidates ? (
+          {attention.length === 0 ? (
             <p className="plate-clear">Nothing right now.</p>
           ) : (
             <ul className="plate-list">
-              {review.map((e) => (
-                <li key={e.id}>
-                  <button type="button" className="row-btn" onClick={() => onNavigate('events')}>
-                    <span className={`issue-sev ${e.severity}`} /><span className="plate-row-title">{e.title}</span>
-                    <span className="plate-row-meta">{ago(e.ts)}</span>
+              {attention.slice(0, 5).map((a) => (
+                <li key={a.key}>
+                  <button type="button" className="row-btn needs" onClick={a.go}>
+                    <span className={`issue-sev ${a.level === 'problem' ? 'critical' : a.level === 'attention' ? 'warning' : 'notice'}`} />
+                    <span className="needs-title">{a.title}</span>
                   </button>
                 </li>
               ))}
-              {summary.ad_candidates > 0 && (
-                <li>
-                  <button type="button" className="row-btn" onClick={() => onNavigate('adblock')}>
-                    <span className="issue-sev notice" /><span className="plate-row-title">{summary.ad_candidates} new {summary.ad_candidates === 1 ? 'host looks' : 'hosts look'} like ads</span>
-                    <span className="plate-row-meta">Review</span>
-                  </button>
-                </li>
-              )}
             </ul>
           )}
 
@@ -150,8 +161,10 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
               {stoppedList.map((q, i) => (
                 <li key={`${q.ts}|${q.name}|${i}`}>
                   <button type="button" className="row-btn" title="See why" onClick={() => onNavigate('dnstools', q.name)}>
-                    <span className="plate-row-title mono">{q.name}</span>
-                    <span className="plate-row-meta">{(q.client_id && names.get(q.client_id)) || q.client_ip}</span>
+                    <span className="plate-row-title mono"><i className="struck" />{q.name}</span>
+                    {q.client_id && names.get(q.client_id)
+                      ? <span className="plate-row-meta">{names.get(q.client_id)}</span>
+                      : <span className="plate-row-meta mono">{q.client_ip}</span>}
                   </button>
                 </li>
               ))}

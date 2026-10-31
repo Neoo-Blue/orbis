@@ -405,7 +405,7 @@ export function ChangeTimelinePage() {
                         </button>
                         <button
                           type="button"
-                          className="btn primary"
+                          className="btn"
                           disabled={pending.pending || busyAction !== null}
                           title={
                             pending.pending

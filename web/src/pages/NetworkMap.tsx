@@ -18,11 +18,11 @@ import { bytes } from '../format'
 const ROLE_COLOR: Record<string, string> = {
   gateway: 'var(--accent)',
   access_point: 'var(--blue)',
-  hypervisor: 'var(--violet)',
+  hypervisor: 'var(--rose)',
   nas: 'var(--blue)',
   server: 'var(--accent)',
-  vm: 'var(--violet)',
-  container: 'var(--violet)',
+  vm: 'var(--rose)',
+  container: 'var(--rose)',
   workstation: 'var(--green)',
   mobile: 'var(--green)',
   printer: 'var(--text-dim)',
@@ -109,7 +109,7 @@ export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
             if (!a || !b) return null
             return (
               <line key={`h${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                stroke="var(--violet)" strokeOpacity={0.28} strokeWidth={1.1} strokeDasharray="1 3" />
+                stroke="var(--rose)" strokeOpacity={0.28} strokeWidth={1.1} strokeDasharray="1 3" />
             )
           })}
 
@@ -168,7 +168,7 @@ export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
                     {truncate(n.label, 18)}
                   </text>
                 )}
-                {n.virtual && <circle r={n.r + 2.5} fill="none" stroke="var(--violet)"
+                {n.virtual && <circle r={n.r + 2.5} fill="none" stroke="var(--rose)"
                   strokeWidth={0.7} strokeDasharray="2 2" opacity={0.6} />}
               </g>
             )

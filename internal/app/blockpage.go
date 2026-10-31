@@ -67,7 +67,7 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 
 	page.Stations = []blockpage.Station{
 		{Title: "Your device", Detail: page.Device, Class: "clear", Address: page.DeviceAddress},
-		{Title: "Orbis", Detail: "Asked for the address of " + host, Class: "clear"},
+		{Title: "Orbis", Detail: "Received the lookup for " + host, Class: "clear"},
 	}
 	for _, s := range steps {
 		st := blockpage.Station{Title: s.Stage, Detail: s.Detail}

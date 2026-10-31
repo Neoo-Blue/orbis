@@ -84,7 +84,7 @@ export function InterceptPage() {
         <div className="grid c3" style={{ marginBottom: 12 }}>
           <Stat label="Enrolled devices" value={String(stats.targets)}
             tone={stats.targets ? 'accent' : undefined} />
-          <Stat label="Real gateway" value={data.gateway || '—'}
+          <Stat label="Real gateway" value={data.gateway || '-'}
             sub={stats.gateway_mac ? `at ${stats.gateway_mac}` : 'not resolved'} />
           <Stat label="Re-asserts" value={String(stats.reasserts)}
             sub={stats.last_reassert ? new Date(stats.last_reassert).toLocaleTimeString() : 'idle'} />

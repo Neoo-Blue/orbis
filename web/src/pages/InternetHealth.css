@@ -28,7 +28,7 @@
 }
 
 .nw-verdict.down {
-  border-color: color-mix(in srgb, var(--red) 46%, var(--line));
+  border-color: color-mix(in srgb, var(--amber) 46%, var(--line));
 }
 
 .nw-verdict-main {
@@ -79,9 +79,9 @@
 }
 
 .nw-blame-pill.down {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 42%, var(--line));
-  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 42%, var(--line));
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
 }
 
 .nw-verdict-detail {
@@ -163,15 +163,15 @@
 .nw-legend-swatch.loss {
   width: 2px;
   height: 10px;
-  background: var(--red);
+  background: var(--amber);
 }
 
 .nw-legend-swatch.incident {
   width: 10px;
   height: 10px;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--red) 28%, transparent);
-  border: 1px solid color-mix(in srgb, var(--red) 55%, transparent);
+  background: color-mix(in srgb, var(--amber) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
 }
 
 /* Target rows */
@@ -269,7 +269,7 @@
 }
 
 .nw-metric-val.bad {
-  color: var(--red);
+  color: var(--amber);
 }
 
 .nw-metric-sub {
@@ -346,7 +346,7 @@
 }
 
 .nw-incident-row.ongoing {
-  background: color-mix(in srgb, var(--red) 7%, transparent);
+  background: color-mix(in srgb, var(--amber) 7%, transparent);
 }
 
 .nw-inc-start {
@@ -382,9 +382,9 @@
   font-size: 10px;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  color: var(--red);
-  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--line));
-  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
 }
 
 .nw-inc-what {

@@ -79,7 +79,7 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
       </div>
       <Section title="Ask Orbis" hint="Plain questions work. It reads the network and answers with real numbers.">
         <div className="ask">
-          <input className="input" value={question} placeholder="Why is the TV slow? What did the kids' tablet do today?"
+          <input className="input" value={question} placeholder="Why is the TV slow?"
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && question.trim()) { onAsk(question.trim()); setQuestion('') } }} />
           <button className="btn primary" disabled={!question.trim()} onClick={() => { onAsk(question.trim()); setQuestion('') }}>Ask</button>

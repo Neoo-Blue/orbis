@@ -187,6 +187,7 @@ func (a *App) SystemStatus() map[string]any {
 	if a.CA != nil {
 		status["ca"] = a.CA.Info()
 	}
+	status["threat"] = map[string]any{"enabled": cfg.Threat.Enabled}
 	aiStatus := map[string]any{
 		"enabled":       cfg.AI.Enabled,
 		"configured":    a.AI.Configured(),

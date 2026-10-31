@@ -1709,12 +1709,12 @@ function FreeModelsCard({ config, save, toast }: Pick<SectionProps, 'config' | '
                             {m.id === config.ai.fast_model ? ' · pinned fast fallback' : ''}
                           </div>
                         </td>
-                        <td className="mono">{m.context ? compact(m.context) : '—'}</td>
+                        <td className="mono">{m.context ? compact(m.context) : '-'}</td>
                         <td>{m.tools ? <Verdict v={m.tool_ok} /> : <span className="verdict none">no tools</span>}</td>
                         <td><Verdict v={m.json_ok} /></td>
-                        <td className="mono">{m.latency_ms ? `${(m.latency_ms / 1000).toFixed(1)}s` : '—'}</td>
+                        <td className="mono">{m.latency_ms ? `${(m.latency_ms / 1000).toFixed(1)}s` : '-'}</td>
                         <td className="mono">
-                          {m.requests_today ? `${m.requests_today}${m.failures_today ? ` (${m.failures_today} failed)` : ''}` : '—'}
+                          {m.requests_today ? `${m.requests_today}${m.failures_today ? ` (${m.failures_today} failed)` : ''}` : '-'}
                         </td>
                         <td style={{ maxWidth: 260 }}>
                           {cooling ? (

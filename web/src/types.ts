@@ -385,6 +385,7 @@ export interface SystemStatus {
   self?: Record<string, unknown>
   filter_proxy: Record<string, unknown>
   ca?: Record<string, unknown>
+  threat?: Record<string, unknown>
   ai: Record<string, unknown>
 }
 

@@ -87,10 +87,10 @@ export function ServicesPage({ onNavigate }: { onNavigate: (r: 'clients' | 'inte
                       </td>
                       <td className="mono">{s.devices}</td>
                       <td className="mono">{num(s.conns)}</td>
-                      <td className="mono">{s.bytes_in ? bytes(s.bytes_in) : <span className="hint">—</span>}</td>
-                      <td className="mono">{s.bytes_out ? bytes(s.bytes_out) : <span className="hint">—</span>}</td>
+                      <td className="mono">{s.bytes_in ? bytes(s.bytes_in) : <span className="hint">-</span>}</td>
+                      <td className="mono">{s.bytes_out ? bytes(s.bytes_out) : <span className="hint">-</span>}</td>
                       <td className="mono">{num(s.lookups)}</td>
-                      <td className="mono" style={{ color: s.blocked ? 'var(--red)' : undefined }}>{s.blocked ? num(s.blocked) : '—'}</td>
+                      <td className="mono" style={{ color: s.blocked ? 'var(--red)' : undefined }}>{s.blocked ? num(s.blocked) : '-'}</td>
                       <td><Sparkline points={s.spark ?? []} height={26} /></td>
                     </tr>
                   ))}
@@ -256,7 +256,7 @@ function DeviceDrawer({ clientID, hours, onClose, onNavigate }: {
                     <td><span style={{ fontWeight: 560 }}>{s.service}</span> <span className={`cat ${s.category}`}>{s.category}</span></td>
                     <td className="mono">{num(s.conns)}</td>
                     <td className="mono">{totalBytes > 0 ? bytes(s.bytes_in + s.bytes_out) : num(s.lookups)}</td>
-                    <td className="mono" style={{ color: s.blocked ? 'var(--red)' : undefined }}>{s.blocked ? num(s.blocked) : '—'}</td>
+                    <td className="mono" style={{ color: s.blocked ? 'var(--red)' : undefined }}>{s.blocked ? num(s.blocked) : '-'}</td>
                     <td><Sparkline points={s.spark ?? []} height={22} /></td>
                   </tr>
                 ))}

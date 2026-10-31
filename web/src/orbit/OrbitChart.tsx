@@ -28,6 +28,8 @@ export interface OrbitHandle {
 interface Props {
   devices: OrbitDevice[]
   flows: OrbitFlow[]
+  /** The Overview's verdict, so the chart cannot look safe during a fault. */
+  tone?: 'ok' | 'attention' | 'problem'
   onSelect?: (id: string) => void
   /** Called with the name behind a mark on the shield. */
   onStrike?: (name: string) => void
@@ -76,11 +78,11 @@ const binLon = (bin: number) => bin * BIN - 180 + BIN / 2
  *  shield leave a mark that can be opened. It draws straight to a canvas from
  *  refs, so a busy network costs a frame, never a React render. */
 export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
-  { devices, flows, onSelect, onStrike, title, label, compact }, ref) {
+  { devices, flows, onSelect, onStrike, title, label, compact, tone }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const tipRef = useRef<HTMLDivElement>(null)
-  const data = useRef({ devices, flows })
-  data.current = { devices, flows }
+  const data = useRef({ devices, flows, tone })
+  data.current = { devices, flows, tone }
   const handlers = useRef({ onSelect, onStrike })
   handlers.current = { onSelect, onStrike }
   const strikes = useRef<Strike[]>([])
@@ -107,7 +109,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches
     const color = {
       ivory: cssVar('--text'), dim: cssVar('--text-dim'), faint: cssVar('--text-faint'), brass: cssVar('--brass'),
-      jade: cssVar('--accent'), red: cssVar('--red'), amber: cssVar('--amber'),
+      jade: cssVar('--accent'), jadeDim: cssVar('--accent-dim'), red: cssVar('--red'), amber: cssVar('--amber'),
+      amberDim: cssVar('--amber-dim'),
     }
     const sans = cssVar('--sans')
     const plateColor = cssVar('--bg-1')
@@ -250,8 +253,10 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
     }
 
     const frame = (t: number) => {
-      const { devices, flows } = data.current
+      const { devices, flows, tone } = data.current
       const shield = shieldR()
+      // At rest the lines themselves say whether things are well.
+      const rest = !tone || tone === 'ok' ? color.jadeDim : color.amberDim
       layout()
       ctx.clearRect(0, 0, w, h)
       ctx.drawImage(plate, 0, 0, w, h)
@@ -313,8 +318,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
           ctx.moveTo(b.x, b.y)
           ctx.quadraticCurveTo(c.x, c.y, c.g.x, c.g.y)
           ctx.lineWidth = lit ? 1.6 : 0.7 + Math.sqrt(d.rate / peak) * 1.3
-          ctx.strokeStyle = lit ? color.jade : color.ivory
-          ctx.globalAlpha = lit ? 0.9 : hovered ? 0.08 : 0.26
+          ctx.strokeStyle = lit ? color.jade : rest
+          ctx.globalAlpha = lit ? 0.9 : hovered ? 0.16 : 1
           ctx.stroke()
         }
       }
@@ -325,9 +330,10 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
         ctx.beginPath()
         ctx.arc(cx, cy, tr.r, tr.from, tr.to, tr.ccw)
         ctx.lineTo(cx + Math.cos(tr.to) * R, cy + Math.sin(tr.to) * R)
-        ctx.lineWidth = 0.8 + Math.sqrt(e.bytes / heaviest) * 2.6
-        ctx.strokeStyle = e.lit ? color.jade : color.ivory
-        ctx.globalAlpha = e.lit ? 0.95 : hovered ? 0.1 : 0.42
+        // Never wider than the gap to the next trunk, or they merge into a band.
+        ctx.lineWidth = Math.min(0.8 + Math.sqrt(e.bytes / heaviest) * 2.6, ((R - shield) * 0.6 * BIN) / 360 - 0.5)
+        ctx.strokeStyle = e.lit ? color.jade : rest
+        ctx.globalAlpha = e.lit ? 0.95 : hovered ? 0.2 : 1
         ctx.stroke()
         ctx.globalAlpha = 1
         ctx.beginPath()
@@ -462,6 +468,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
         }
         const gx = gateway()
         write('Gateway', gx.x - 9, gx.y - 13, -1) || write('Gateway', gx.x + 9, gx.y - 13, 1)
+        write('Orbis', cx + 9, cy, 1)
         for (const d of [...devices].sort((p, q) => q.rate - p.rate).slice(0, 4)) {
           const b = bodies.get(d.id)
           if (!b || d.id === hovered || d.rate <= 0) continue

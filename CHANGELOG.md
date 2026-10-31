@@ -49,6 +49,11 @@ Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones fr
   makes no outside requests.
 - **Restarts are quick.** The built block index is kept on disk, so filtering is back within seconds
   rather than after two and a half minutes, and shutdown no longer waits out its 20 second timeout.
+- **Vermilion means a block or a threat, nothing else.** Faults such as a lost gateway are amber, so
+  anything red on screen can be opened and traced to what decided it. The Overview's sentence, its
+  mark and the chart's lines all share one state, so a fault can never sit on the safe colour.
+- **The Overview says what each layer is doing:** DNS filtering, firewall, in-stream ads and threat
+  feeds, each on, off or not enforced. Node CPU, memory and temperature moved into Subsystems.
 - **The firewall opens ports 80 and 443 to your lan and vpn zones** when the block page is on, in inline
   mode. Everything else from your non-WAN zones gets a reset, so a blocked name fails at once on every
   port and in every zone rather than timing out. Guest and IoT zones still cannot reach the interface.

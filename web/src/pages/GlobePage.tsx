@@ -23,7 +23,7 @@ export function GlobePage() {
   const [hours, setHours] = useLocalStorage<number>('orbis.globe.hours', 24)
   const [clientFilter, setClientFilter] = useState<string>('')
   const [projection, setProjection] = useLocalStorage<Projection>('orbis.globe.projection', 'globe')
-  const [colorBy, setColorBy] = useLocalStorage<ColorBy>('orbis.globe.colour', 'kind')
+  const [colorBy, setColorBy] = useLocalStorage<ColorBy>('orbis.globe.colour', 'verdict')
   const [autoRotate, setAutoRotate] = useState(true)
   const [selected, setSelected] = useState<GlobeArc | null>(null)
   const [focus, setFocus] = useState<{ lat: number; lng: number } | null>(null)

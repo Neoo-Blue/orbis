@@ -181,7 +181,7 @@ A cool, saturated blue ground with warm brass and ivory on top, and a small set 
 
 ### Tertiary
 - **Observatory Jade** (#62d8b2): safe and live. The state rule under a healthy verdict, live badges, an allowed station, a lit orbit on the chart, the light that runs along a new connection. It is also the colour of links, progress and meter fills, and the default sparkline.
-- **Vermilion** (#f2643c): something was stopped or something is wrong. Blocks, threats, failed states, marks on the shield, the deciding station, and the destructive control that would stop something. **Vermilion Ink** (#1d0a04) is the text on a filled destructive button.
+- **Vermilion** (#f2643c): a block or a threat, and nothing else. Marks on the shield, the deciding station, blocked rows, and the destructive control that would stop something. A fault is amber, however serious. **Vermilion Ink** (#1d0a04) is the text on a filled destructive button.
 - **Decision Violet** (#b79cff): the line and open stations of a traced decision, on the domain tester and the block page.
 - **Rose** (#e8a7c0): what violet used to do elsewhere. Filtered traffic on the globe and tags, social traffic, music chips, and virtual hosts on the network map.
 - **Signal Amber** (#f2b544): needs attention. Warnings, a paused device on the chart, the attention verdict.
@@ -196,7 +196,7 @@ A cool, saturated blue ground with warm brass and ivory on top, and a small set 
 ### Named Rules
 **The Reserved Ink Rule.** Violet is the traced decision and nothing else. If a surface is not showing how one decision was reached, it contains no violet.
 
-**The Vermilion Rule.** Vermilion means something was stopped or something is wrong. It is never decoration, never a brand accent, and never a chart series for ordinary traffic.
+**The Vermilion Rule.** Vermilion means something was stopped or a threat was seen, so anything in vermilion can be opened and traced to what decided it. A broken gateway is amber. It is never decoration, never a brand accent, and never a chart series for ordinary traffic.
 
 **The Tinted State Rule.** A state chip is its ink as text, the same ink at about 8% as fill, and at about 25% as border. Solid fills are kept for the primary action and an armed destructive button.
 

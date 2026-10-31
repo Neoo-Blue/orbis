@@ -87,7 +87,7 @@ export function DNSPage() {
         <Stat label="Queries handled" value={compact(total)} tone="blue"
           sub={`${compact(Number(stats?.local ?? 0))} answered locally`} />
         <Stat label="Blocked" value={compact(blocked)} tone={blocked > 0 ? 'amber' : undefined}
-          sub={total > 0 ? `${pct(blocked / total, 1)} of all queries` : '—'} />
+          sub={total > 0 ? `${pct(blocked / total, 1)} of all queries` : '-'} />
         <Stat label="Cache hit rate" value={pct(cache.hit_rate ?? 0, 0)} tone="accent"
           sub={`${compact(cache.size ?? 0)} of ${compact(cache.capacity ?? 0)} entries`} />
         <Stat label="Collapsed" value={compact(Number(stats?.collapsed ?? 0))}
@@ -214,7 +214,7 @@ export function DNSPage() {
                       </td>
                       <td style={{ color: 'var(--text-faint)', fontSize: 11 }}>{q.qtype}</td>
                       <td className="truncate mono" style={{ maxWidth: 200, fontSize: 11, color: 'var(--text-dim)' }}>
-                        {q.answer?.slice(0, 2).join(', ') || '—'}
+                        {q.answer?.slice(0, 2).join(', ') || '-'}
                       </td>
                       <td>
                         {q.blocked
@@ -224,7 +224,7 @@ export function DNSPage() {
                             : <span className="tag" style={{ opacity: .65 }}>{q.rcode || 'ok'}</span>}
                       </td>
                       <td className="num" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-                        {q.latency_ms ? `${q.latency_ms.toFixed(0)}ms` : '—'}
+                        {q.latency_ms ? `${q.latency_ms.toFixed(0)}ms` : '-'}
                       </td>
                     </tr>
                   )

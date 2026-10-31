@@ -3,7 +3,7 @@ import { api } from '../api'
 import { usePoll } from '../hooks'
 import { useLiveBatch } from '../live'
 import { OrbitChart, type OrbitDevice, type OrbitFlow, type OrbitHandle } from '../orbit/OrbitChart'
-import { Card, Dot, Empty, Icons, Loading, Sparkline, Stat } from '../ui'
+import { Card, Dot, Empty, Icons, Loading, Sparkline } from '../ui'
 import { ago, bits, bytes, clientName, compact, duration, num, pct, countryFlag } from '../format'
 import type { Client, DNSQuery, EventItem, Flow, Health, Summary, SystemStatus, NodeResources } from '../types'
 
@@ -33,7 +33,11 @@ export function orbitFlows(flows: Flow[]): OrbitFlow[] {
   }))
 }
 
-interface Attention { key: string; level: 'problem' | 'attention' | 'notice'; title: string; go: () => void }
+interface Attention { key: string; level: 'problem' | 'attention' | 'notice'; title: string; threat?: boolean; go: () => void }
+type Tone = 'ok' | 'attention' | 'problem'
+
+/** Vermilion is for something stopped or a threat. A fault is amber, however bad. */
+const THREAT_EVENTS = new Set(['threat', 'ids'])
 
 interface Tick { rate_in: number; rate_out: number; flows_active: number }
 
@@ -87,6 +91,12 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
     : !health.protection_on ? 'Filtering is switched off'
     : netFault ? 'Protected, but the internet is unwell'
     : status?.mode === 'inline' ? 'Your network is protected' : 'Protected by DNS filtering'
+  // One tone for the sentence, its mark and the chart, so a fault can never sit
+  // on the safe colour.
+  const tone: Tone = !health ? 'attention'
+    : level !== 'ok' ? level
+    : !health.protection_on ? 'problem'
+    : netFault ? 'attention' : 'ok'
   const quiet = (health?.points ?? []).filter((p) => p.level === 'ok').slice(0, 3)
   const stoppedList = stopped ?? blockedLog?.queries ?? []
 
@@ -100,7 +110,7 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
   if (capture && capture.interfaces === 0) attention.push({ key: 'capture', level: 'attention', title: 'Packet capture opened no interfaces, so names and sites will be missing from connections.', go: () => onNavigate('settings') })
   if (sysctlIssues.length > 0 && status?.mode === 'inline') attention.push({ key: 'sysctl', level: 'problem', title: `${sysctlIssues.map((s) => s.key).join(', ')} not set correctly. Routing will not work as configured.`, go: () => onNavigate('firewall') })
   for (const e of (recentEvents?.events ?? []).filter((e) => !e.acknowledged && (e.severity === 'warning' || e.severity === 'critical')).slice(0, 3)) {
-    attention.push({ key: e.id, level: e.severity === 'critical' ? 'problem' : 'attention', title: e.title, go: () => onNavigate('events') })
+    attention.push({ key: e.id, level: e.severity === 'critical' ? 'problem' : 'attention', title: e.title, threat: THREAT_EVENTS.has(e.category), go: () => onNavigate('events') })
   }
   if (summary.ad_candidates > 0) attention.push({ key: 'ads', level: 'notice', title: `${summary.ad_candidates} new ${summary.ad_candidates === 1 ? 'host looks' : 'hosts look'} like ads`, go: () => onNavigate('adblock') })
   const order = { problem: 0, attention: 1, notice: 2 }
@@ -110,17 +120,23 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
     <div style={{ display: 'grid', gap: 14 }}>
       <section className="plate">
         <div className="plate-state">
-          <h2 className={`verdict-line ${level}`}>{verdict}</h2>
+          <h2 className={`verdict-line ${tone}`}>{verdict}</h2>
           <ul className="plate-points">
             {status?.mode === 'observe' && (
               <li>Filtering every device that uses this resolver. Firewall rules are not enforced in observe mode.</li>
             )}
             {quiet.map((p) => <li key={p.text}>{p.text}</li>)}
           </ul>
+          {status && health && (
+            <dl className="plate-ledger">
+              {protectionLayers(status, health).map((l) => (
+                <div key={l.name}><dt>{l.name}</dt><dd className={l.on ? 'on' : undefined}>{l.state}</dd></div>
+              ))}
+            </dl>
+          )}
           <div className="plate-stopped">
-            <div className="plate-figure">{compact(summary.dns_blocked)}</div>
-            <div className="plate-caption">stopped today, {pct(summary.block_rate, 0)} of lookups</div>
-            {blockedPoints.length > 1 && <Sparkline points={blockedPoints} tone="red" height={40} />}
+            <div className="plate-caption"><b className="plate-figure">{compact(summary.dns_blocked)}</b> stopped today, {pct(summary.block_rate, 0)} of lookups</div>
+            {blockedPoints.length > 1 && <Sparkline points={blockedPoints} tone="red" height={36} />}
           </div>
           <dl className="plate-facts">
             <div><dt>Devices online</dt><dd>{clients ? online.length : summary.clients_online} of {clients?.clients.length ?? summary.clients}</dd></div>
@@ -131,7 +147,7 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
         </div>
 
         <div className="plate-chart">
-          <OrbitChart ref={orbit} devices={devices} flows={flows} title={status?.node}
+          <OrbitChart ref={orbit} devices={devices} flows={flows} title={status?.node} tone={tone}
             onSelect={(id) => onNavigate('clients', id)} onStrike={(name) => onNavigate('dnstools', name)}
             label={`${devices.length} devices online with ${flows.length} connections. The same devices are listed under Busiest devices.`} />
         </div>
@@ -145,7 +161,7 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
               {attention.slice(0, 5).map((a) => (
                 <li key={a.key}>
                   <button type="button" className="row-btn needs" onClick={a.go}>
-                    <span className={`issue-sev ${a.level === 'problem' ? 'critical' : a.level === 'attention' ? 'warning' : 'notice'}`} />
+                    <span className={`issue-sev ${a.threat ? 'critical' : a.level === 'notice' ? 'notice' : 'warning'}`} />
                     <span className="needs-title">{a.title}</span>
                   </button>
                 </li>
@@ -172,8 +188,6 @@ export function Dashboard({ status, summary, setupRequired, onNavigate }: Props)
           )}
         </div>
       </section>
-
-      {status?.resources && <NodeResourcesRow r={status.resources} version={status.version} />}
 
       <div className="grid c3">
         <Card title="Busiest devices"
@@ -263,7 +277,7 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
     {
       name: 'Firewall',
       on: Boolean((status.firewall as Record<string, unknown>)?.applied),
-      detail: String((status.firewall as Record<string, unknown>)?.last_error || 'ruleset applied'),
+      detail: firewallDetail(String((status.firewall as Record<string, unknown>)?.last_error ?? '')),
     },
     {
       name: 'DHCP',
@@ -292,10 +306,11 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
         ? `${(status.ai as Record<string, string>).model}${(status.ai as Record<string, boolean>).allow_write ? ' · can make changes' : ' · read-only'}`
         : 'no provider configured',
     },
+    ...(status.resources ? resourceRows(status.resources, status.version) : []),
   ]
 
   return (
-    <div style={{ display: 'grid', gap: 8 }}>
+    <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       {rows.map((r) => (
         <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Dot state={r.warn ? 'warn' : r.on ? 'on' : 'off'} />
@@ -346,7 +361,7 @@ function TopFlows({ flows, onOpen }: { flows: Flow[]; onOpen: () => void }) {
                 {f.country && <span style={{ marginRight: 6 }}>{countryFlag(f.country)}</span>}
                 {f.hostname || f.sni || f.dst_ip}
               </td>
-              <td style={{ color: 'var(--text-dim)' }}>{f.app || f.as_org || '—'}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{f.app || f.as_org || '-'}</td>
               <td className="num">{bytes(f.bytes_in)}</td>
               <td className="num">{bytes(f.bytes_out)}</td>
             </tr>
@@ -388,26 +403,45 @@ function EventList({ events, onOpen }: { events: EventItem[]; onOpen: () => void
  * machine. A Pi's firmware throttle word is decoded when present, since
  * under-voltage is the usual reason a Pi "feels slow".
  */
-function NodeResourcesRow({ r, version }: { r: NodeResources; version?: string }) {
+function resourceRows(r: NodeResources, version?: string) {
   const gb = (b: number) => (b / (1024 ** 3)).toFixed(b >= 10 * 1024 ** 3 ? 0 : 1) + ' GB'
   const memPct = r.mem_total_bytes > 0 ? Math.round((r.rss_bytes / r.mem_total_bytes) * 100) : 0
-  const hostUsed = r.mem_total_bytes > 0 ? Math.round(((r.mem_total_bytes - r.mem_available_bytes) / r.mem_total_bytes) * 100) : 0
-  const hot = (r.temp_c ?? 0) >= 75
-  const throttledNow = (r.throttled ?? '').startsWith('now')
-  return (
-    <div className="grid c4">
-      <Stat label="Orbis CPU" tone={r.process_cpu_percent > 150 ? 'amber' : undefined}
-        value={`${Math.round(r.process_cpu_percent)}%`}
-        sub={`of one core · host ${Math.round(r.host_cpu_percent)}% of ${r.cores} · load ${r.load1.toFixed(2)}`} />
-      <Stat label="Orbis memory" tone={memPct > 60 ? 'amber' : undefined}
-        value={gb(r.rss_bytes)}
-        sub={`${memPct}% of ${gb(r.mem_total_bytes)} · host ${hostUsed}% used · heap ${gb(r.heap_bytes)}`} />
-      <Stat label="Temperature" tone={hot || throttledNow ? 'red' : (r.throttled ?? 'ok') !== 'ok' && r.throttled ? 'amber' : undefined}
-        value={r.temp_c ? `${Math.round(r.temp_c)} °C` : 'n/a'}
-        sub={r.throttled ? r.throttled : 'no throttle data on this platform'} />
-      <Stat label="Uptime"
-        value={duration(r.uptime_seconds)}
-        sub={`${version ? `Orbis ${version} · ` : ''}${num(r.goroutines)} goroutines`} />
-    </div>
-  )
+  const throttled = Boolean(r.throttled) && r.throttled !== 'ok'
+  return [
+    {
+      name: 'CPU', on: true, warn: r.process_cpu_percent > 150,
+      detail: `${Math.round(r.process_cpu_percent)}% of one core · host ${Math.round(r.host_cpu_percent)}% of ${r.cores} · load ${r.load1.toFixed(2)}`,
+    },
+    {
+      name: 'Memory', on: true, warn: memPct > 60,
+      detail: `${gb(r.rss_bytes)}, ${memPct}% of ${gb(r.mem_total_bytes)} · heap ${gb(r.heap_bytes)}`,
+    },
+    {
+      name: 'Temperature', on: Boolean(r.temp_c), warn: (r.temp_c ?? 0) >= 75 || throttled,
+      detail: `${r.temp_c ? `${Math.round(r.temp_c)} °C` : 'no sensor'}${r.throttled ? ` · ${r.throttled}` : ''}`,
+    },
+    {
+      name: 'Orbis', on: true,
+      detail: `${version ?? 'dev'} · up ${duration(r.uptime_seconds)} · ${num(r.goroutines)} goroutines`,
+    },
+  ]
+}
+
+/** What each layer of protection is doing now, in the words it would be judged by. */
+function protectionLayers(status: SystemStatus, health: Health) {
+  const inline = status.mode === 'inline'
+  const applied = Boolean((status.firewall as Record<string, unknown>)?.applied)
+  const proxy = Boolean((status.filter_proxy as Record<string, unknown>)?.running)
+  const threat = Boolean((status.threat as Record<string, unknown> | undefined)?.enabled)
+  return [
+    { name: 'DNS filtering', on: health.protection_on, state: health.protection_on ? 'On' : 'Off' },
+    { name: 'Firewall', on: inline && applied, state: !inline ? 'Not enforced' : applied ? 'Enforced' : 'Not applied' },
+    { name: 'In-stream ads', on: proxy, state: proxy ? 'Removed' : 'Off' },
+    { name: 'Threat feeds', on: threat, state: threat ? 'On' : 'Off' },
+  ]
+}
+
+function firewallDetail(error: string) {
+  if (!error) return 'ruleset applied'
+  return error.includes('executable file not found') ? 'nft not installed' : error
 }

@@ -47,16 +47,18 @@ h1.long { font-size: clamp(23px, 3.5vw, 34px); }
 .route { list-style: none; padding: 0; display: grid; gap: 0; }
 .stop {
   position: relative; display: grid; grid-template-columns: 22px 1fr; column-gap: 14px;
-  padding: 0 0 18px; opacity: 0; transform: translateX(-6px);
-  animation: arrive .46s var(--ease) forwards; animation-delay: calc(var(--i) * 130ms + 180ms);
+  padding: 0 0 18px;
 }
+/* Lit from the plate as the request passes each station. Without the script
+   they simply stay readable. */
+.route.sync .stop { opacity: .3; transform: translateX(-6px); transition: opacity .4s var(--ease), transform .4s var(--ease); }
+.route.sync .stop.lit { opacity: 1; transform: none; }
 .stop::before {
   content: ''; position: absolute; left: 10px; top: 16px; bottom: -4px; width: 2px;
-  background: var(--violet); transform-origin: top; transform: scaleY(0);
-  animation: draw .3s linear forwards; animation-delay: calc(var(--i) * 130ms + 300ms);
+  background: var(--violet); transform-origin: top;
 }
-.stop:nth-child(1) { --i: 0; } .stop:nth-child(2) { --i: 1; } .stop:nth-child(3) { --i: 2; } .stop:nth-child(4) { --i: 3; }
-.stop:nth-child(5) { --i: 4; } .stop:nth-child(6) { --i: 5; } .stop:nth-child(7) { --i: 6; } .stop:nth-child(n+8) { --i: 7; }
+.route.sync .stop::before { transform: scaleY(0); transition: transform .5s linear; }
+.route.sync .stop.lit::before { transform: scaleY(1); }
 .stop:last-child { padding-bottom: 0; }
 .stop:last-child::before { display: none; }
 .dot { width: 12px; height: 12px; margin: 5px 0 0 5px; border-radius: 50%; background: var(--ground); border: 2px solid var(--violet); position: relative; }
@@ -65,7 +67,7 @@ h1.long { font-size: clamp(23px, 3.5vw, 34px); }
 .stop.decided .dot { background: var(--vermilion); border-color: var(--vermilion); }
 .stop.decided .dot::after {
   content: ''; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid var(--vermilion);
-  animation: flare 2.6s var(--ease) infinite; animation-delay: calc(var(--i) * 130ms + 420ms);
+  animation: flare 2.6s var(--ease) infinite;
 }
 .stop.decided b { color: var(--vermilion); }
 .stop.decided::before { background: repeating-linear-gradient(to bottom, var(--faint) 0 3px, transparent 3px 8px); }
@@ -92,8 +94,6 @@ dd.code, .stop .code { font-family: var(--mono); font-size: 13px; font-variant-n
 .btn:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
 footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
 
-@keyframes arrive { to { opacity: 1; transform: none; } }
-@keyframes draw { to { transform: scaleY(1); } }
 @keyframes flare { 0% { transform: scale(1); opacity: .9; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
 @media (min-width: 760px) {
   main { padding-right: 0; }
@@ -111,13 +111,12 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
   .actions .btn { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .stop, .stop::before { animation: none; opacity: 1; transform: none; }
   .stop.decided .dot::after { animation: none; opacity: 0; }
 }
 </style>
 </head>
 <body>
-<canvas id="sky" data-host="{{.Host}}" aria-hidden="true"></canvas>
+<canvas id="sky" data-host="{{.Host}}" data-source="{{.Source}}" aria-hidden="true"></canvas>
 <main>
   <div class="mark">
     <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="16" cy="16" r="11.5" stroke="currentColor" stroke-width="1.6"/><ellipse cx="16" cy="16" rx="11.5" ry="4.4" stroke="currentColor" stroke-width="1.1" opacity=".6"/><circle cx="16" cy="16" r="2.6" fill="currentColor"/></svg>
@@ -133,10 +132,7 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
     {{end}}
   </ol>
   <dl>
-    {{if .Rule}}<dt>Rule</dt><dd class="code">{{.Rule}}</dd>{{end}}
-    {{if .Source}}<dt>Decided by</dt><dd>{{.Source}}</dd>{{end}}
     {{if .Category}}<dt>Category</dt><dd>{{.Category}}</dd>{{end}}
-    {{if .Device}}<dt>This device</dt><dd{{if .DeviceAddress}} class="code"{{end}}>{{.Device}}</dd>{{end}}
     <dt>When</dt><dd>{{.When}}</dd>
   </dl>
   <div class="actions">
@@ -164,13 +160,26 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
   // dying at the shield. Nothing here is invented traffic.
   var c = document.getElementById('sky'), x = c.getContext('2d');
   if (!x) return;
-  var still = matchMedia('(prefers-reduced-motion: reduce)').matches, host = c.dataset.host;
+  var still = matchMedia('(prefers-reduced-motion: reduce)').matches, host = c.dataset.host, source = c.dataset.source;
   var w, h, cx, cy, R, dpr = Math.min(devicePixelRatio || 1, 2), wide, stars = [], raf = 0, last = 0;
-  var CYCLE = 7000, TRAVEL = 1500, FROM = 1.9, TO = 3.95;
+  var CYCLE = 7500, TRAVEL = 2400, FROM = 1.9, TO = 3.6;
+  // The same stations as the list, in order, so the two are one drawing.
+  var stops = [].slice.call(document.querySelectorAll('.stop')), route = document.querySelector('.route');
+  var decided = stops.findIndex(function (s) { return s.classList.contains('decided') });
+  var lit = 0;
+  if (route && decided > 0 && !still) route.classList.add('sync');
+  function reached(e) {
+    // Each station is lit once. The line keeps cycling; the words must not.
+    while (lit <= decided && e >= lit / decided - .001) stops[lit++].classList.add('lit');
+    if (lit > decided) for (var i = decided + 1; i < stops.length; i++) stops[i].classList.add('lit');
+  }
   function size() {
     wide = innerWidth >= 760; w = innerWidth; h = wide ? innerHeight : 128;
     c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
-    cx = wide ? Math.max(w * .76, 640 + h * .44) : w * .66; cy = wide ? h * .5 : 66; R = wide ? Math.min(h * .44, 440) : 54;
+    // Wide, the ring runs off the plate on purpose and clears the text column,
+    // while the device on it stays on screen.
+    R = wide ? Math.min(h * .62, (w - 688) / .852) : 54;
+    cx = wide ? Math.max(w * .86, 672 + R) : w * .66; cy = wide ? h * .5 : 66;
     stars = [];
     var seed = 11;
     function next() { return (seed = seed * 16807 % 2147483647) / 2147483647 }
@@ -204,8 +213,16 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
     var device = point(0);
     x.beginPath(); x.fillStyle = '#efe9da'; x.arc(device[0], device[1], 3.2, 0, 6.2832); x.fill();
 
-    var age = t % CYCLE, p = Math.min(1, age / TRAVEL), e = 1 - Math.pow(1 - p, 3);
+    var age = t % CYCLE, p = Math.min(1, age / TRAVEL), e = 1 - Math.pow(1 - p, 2.2);
     var fade = age > CYCLE - 900 ? (CYCLE - age) / 900 : 1;
+    if (decided > 0) {
+      reached(e);
+      for (var n = 1; n < decided; n++) {
+        var st = point(n / decided), on = e >= n / decided;
+        x.beginPath(); x.lineWidth = 1.6; x.strokeStyle = on ? '#b79cff' : 'rgba(183,156,255,.4)'; x.fillStyle = '#041c2f';
+        x.arc(st[0], st[1], wide ? 4.5 : 2.6, 0, 6.2832); x.fill(); x.stroke();
+      }
+    }
     x.globalAlpha = fade; x.beginPath(); x.lineWidth = 1.6; x.strokeStyle = '#b79cff';
     for (var k = 0; k <= 40; k++) { var q = point(e * k / 40); k ? x.lineTo(q[0], q[1]) : x.moveTo(q[0], q[1]); }
     x.stroke();
@@ -216,9 +233,16 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
       x.globalAlpha = fade * (1 - f); x.strokeStyle = '#f2643c'; x.lineWidth = 2;
       x.beginPath(); x.arc(cx, cy, R, TO - .04 - f * .2, TO + .04 + f * .2); x.stroke();
       x.globalAlpha = fade; x.fillStyle = '#f2643c'; x.beginPath(); x.arc(head[0], head[1], 4, 0, 6.2832); x.fill();
+      // Past the shield, the leg that never happened.
+      var rx = Math.cos(TO), ry = Math.sin(TO);
+      x.beginPath(); x.setLineDash([3, 5]); x.lineWidth = 1.4; x.strokeStyle = '#93a4b8';
+      x.moveTo(head[0] + rx * 6, head[1] + ry * 6); x.lineTo(head[0] + rx * R * .07, head[1] + ry * R * .07); x.stroke(); x.setLineDash([]);
+      x.beginPath(); x.arc(head[0] + rx * (R * .07 + 4), head[1] + ry * (R * .07 + 4), wide ? 4 : 2.4, 0, 6.2832); x.stroke();
       if (wide) {
+        var lx = Math.min(head[0] + 16, w - 250);
         x.font = "500 12.5px 'Geist Mono', ui-monospace, monospace"; x.textAlign = 'left'; x.textBaseline = 'middle';
-        x.fillStyle = '#efe9da'; x.fillText(host.length > 30 ? host.slice(0, 29) + '…' : host, Math.min(head[0] + 12, w - 250), head[1] - 14);
+        x.fillStyle = '#efe9da'; x.fillText(host.length > 30 ? host.slice(0, 29) + '…' : host, lx, head[1] - 9);
+        if (source) { x.font = "400 12.5px Geist, sans-serif"; x.fillStyle = '#f2643c'; x.fillText('Stopped by ' + source, lx, head[1] + 10) }
       }
     }
     x.globalAlpha = 1;

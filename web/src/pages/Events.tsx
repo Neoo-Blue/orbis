@@ -64,11 +64,11 @@ export function EventsPage() {
                       <td className="truncate" style={{ maxWidth: 180, fontSize: 12 }}>{a.actor}</td>
                       <td className="mono" style={{ fontSize: 11.5 }}>{a.action}</td>
                       <td className="truncate mono" style={{ maxWidth: 240, fontSize: 11, color: 'var(--text-dim)' }}>
-                        {a.target || '—'}
+                        {a.target || '-'}
                       </td>
                       <td>
                         <span className={`tag ${a.result === 'ok' ? 'allow' : a.result === 'error' ? 'block' : ''}`}>
-                          {a.result || '—'}
+                          {a.result || '-'}
                         </span>
                       </td>
                     </tr>

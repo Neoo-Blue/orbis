@@ -154,7 +154,7 @@ export function FlowsPage() {
                         )}
                       </td>
                       <td className="truncate" style={{ maxWidth: 130, color: 'var(--text-dim)' }}>
-                        {f.app || f.as_org || '—'}
+                        {f.app || f.as_org || '-'}
                       </td>
                       <td className="num" style={{ color: 'var(--text-faint)' }}>{f.dst_port}</td>
                       <td className="num">{bytes(f.bytes_in)}</td>

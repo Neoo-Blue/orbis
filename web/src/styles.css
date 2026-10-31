@@ -10,7 +10,7 @@
   *, *::before, *::after { box-sizing: border-box; }
   * { margin: 0; }
   html, body, #root { height: 100%; }
-  body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-variant-numeric: tabular-nums; }
   button, input, select, textarea { font: inherit; color: inherit; }
   img, svg, canvas { display: block; max-width: 100%; }
   :focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; border-radius: 4px; }
@@ -39,6 +39,7 @@
     --violet: #b79cff; /* one ink, kept for a traced decision and nothing else */
     --rose: #e8a7c0;
     --amber: #f2b544;
+    --amber-dim: #a6802f;
     --red: #f2643c;
     --green: #62d8b2;
 
@@ -480,7 +481,8 @@
     border: 1px solid var(--line); background: var(--bg-2); font-size: 12.5px; margin-bottom: 14px;
   }
   .banner.warn { border-color: rgba(242,181,68,.3); background: rgba(242,181,68,.06); }
-  .banner.err  { border-color: rgba(242,100,60,.3); background: rgba(242,100,60,.06); }
+  /* An error is a fault, not a block: amber, a heavier line than a warning. */
+  .banner.err  { border-color: rgba(242,181,68,.6); background: rgba(242,181,68,.09); }
   .banner.info { border-color: rgba(143,183,255,.26); background: rgba(143,183,255,.05); }
   .banner svg { width: 15px; height: 15px; flex: none; margin-top: 1px; }
   .banner .spacer { flex: 1; }
@@ -531,14 +533,19 @@
 .verdict-line { font-size: 27px; line-height: 1.16; font-weight: 540; letter-spacing: -.024em; text-wrap: balance; color: var(--text); }
 .verdict-line.ok::after { content: ''; display: block; width: 44px; height: 2px; margin-top: 12px; background: var(--accent); }
 .verdict-line.attention::after { content: ''; display: block; width: 44px; height: 2px; margin-top: 12px; background: var(--amber); }
-.verdict-line.problem::after { content: ''; display: block; width: 44px; height: 2px; margin-top: 12px; background: var(--red); }
+.verdict-line.problem::after { content: ''; display: block; width: 44px; height: 4px; margin-top: 12px; background: var(--amber); }
 .plate-points { list-style: none; padding: 0; display: grid; gap: 7px; font-size: 13.5px; line-height: 1.45; color: var(--text-dim); }
 .plate-points .attention { color: var(--amber); }
-.plate-points .problem { color: var(--red); }
-.plate-stopped { margin-top: auto; }
-.plate-figure { font-size: 42px; line-height: 1; font-weight: 520; letter-spacing: -.03em; color: var(--text); }
-.plate-caption { margin-top: 5px; font-size: 13px; color: var(--text-dim); }
-.plate-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.plate-points .problem { color: var(--amber); }
+.plate-ledger { display: grid; }
+.plate-ledger > div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line-soft); font-size: 13.5px; }
+.plate-ledger > div:last-child { border-bottom: 1px solid var(--line-soft); }
+.plate-ledger dt { color: var(--text-dim); }
+.plate-ledger dd { color: var(--text-faint); }
+.plate-ledger dd.on { color: var(--accent); }
+.plate-figure { font-size: 20px; line-height: 1; font-weight: 540; letter-spacing: -.02em; color: var(--text); margin-right: 3px; }
+.plate-caption { font-size: 13px; color: var(--text-dim); margin-bottom: 6px; }
+.plate-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-top: 14px; margin-top: auto; border-top: 1px solid var(--line-soft); }
 .plate-facts dt { font-size: 12px; color: var(--text-faint); }
 .plate-facts dd { font-size: 14.5px; font-weight: 520; }
 .plate-clear { font-size: 13px; color: var(--text-dim); }
@@ -577,9 +584,9 @@
 @media (max-width: 760px) {
   .plate { grid-template-columns: minmax(0, 1fr); }
   .plate-state { border-right: 0; border-bottom: 1px solid var(--line-soft); padding: 18px 16px; }
-  .plate-chart { min-height: 0; aspect-ratio: 1; }
-  .plate-side { display: flex; }
-  .plate-stopped { margin-top: 0; }
+  .plate-chart { min-height: 0; aspect-ratio: 1; order: 2; }
+  /* On a phone what needs the owner comes before the drawing. */
+  .plate-side { display: flex; order: 1; border-bottom: 1px solid var(--line-soft); border-top: 0; }
   .verdict-line { font-size: 24px; }
 }
 
@@ -692,6 +699,7 @@
 
 @media (max-width: 880px) {
   .btn, .btn.sm, .nav-item, .segmented button, .input, .select, .row-btn, .wizard-actions .btn { min-height: 44px; }
+  .btn, .btn.sm { min-width: 44px; }
   .switch { min-height: 44px; }
   .shell { height: 100dvh; }
   .topbar { gap: 8px; padding: 0 12px; }

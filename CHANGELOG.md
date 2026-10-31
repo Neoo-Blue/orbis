@@ -8,7 +8,7 @@ under "Show release notes" when it offers an update.
 
 The interface is new, DNS is never stale, and the whole node does far less work. On the reference
 Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones from 2.5 ms to under
-1 ms, the Go heap from about 600 MB to about 100 MB, and no log rows are dropped.
+1 ms, the Go heap from about 600 MB to about 130 MB, and no log rows are dropped.
 
 ### Added
 - **The block page.** A browser opening a blocked site gets a page saying what stopped it: the

@@ -277,7 +277,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
       layout()
       // The focal moment: the plate opens from the centre, the devices rise to
       // their orbits and the lines run out to the rim.
-      const intro = 1 - (1 - Math.min(1, (t - born) / 1200)) ** 3
+      // A frame's timestamp can be a moment before the chart was mounted.
+      const intro = 1 - (1 - Math.min(1, Math.max(0, (t - born) / 1200))) ** 3
       ctx.clearRect(0, 0, w, h)
       if (intro < 1) {
         ctx.save()

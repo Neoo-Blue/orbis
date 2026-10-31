@@ -45,6 +45,18 @@ func (a *App) DiagnoseDomain(ctx context.Context, domain, clientID string, resol
 	final := "allow"
 	reason := "Nothing blocks this name."
 
+	// An approved request answers before anything else gets a say.
+	if a.Unblock != nil && a.Unblock.Granted(clientID, name, time.Now()) {
+		steps = append(steps, DiagnoseStep{
+			Stage: "Approved request", Hit: true, Verdict: "allow",
+			Detail: "The owner of this network approved this site for this device.", Source: "unblock",
+		})
+		return map[string]any{
+			"domain": name, "verdict": "allow", "reason": "Approved by the owner of this network.", "steps": steps,
+			"cname_chain": []string{}, "answers": []string{}, "policy": "",
+		}, nil
+	}
+
 	// 0. Shortcuts: the name is one of ours and points at something on a port.
 	if sc := a.ShortcutFor(name); sc != nil {
 		steps = append(steps, DiagnoseStep{

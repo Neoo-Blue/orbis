@@ -93,6 +93,22 @@ dd.code, .stop .code { font-family: var(--mono); font-size: 13px; font-variant-n
 .btn.primary:hover { background: #e6cc92; }
 .btn:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
 footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
+footer a { color: var(--dim); text-underline-offset: 3px; }
+.ask-form { display: grid; gap: 10px; max-width: 540px; animation: unfold .3s var(--ease); }
+.ask-form[hidden], .ask-state[hidden] { display: none; }
+.ask-form label { font-size: 14px; color: var(--dim); }
+.ask-form textarea {
+  width: 100%; min-height: 72px; padding: 10px 12px; resize: vertical; border-radius: 7px; border: 1px solid var(--line-strong);
+  background: transparent; color: var(--ivory); font: 400 16px/1.5 var(--sans); caret-color: var(--brass);
+}
+.ask-form textarea:focus { outline: 2px solid var(--brass); outline-offset: 1px; }
+.ask-form .row { display: flex; gap: 10px; }
+.ask-state { display: flex; align-items: center; gap: 12px; font-size: 16px; animation: unfold .3s var(--ease); }
+.ask-state i { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--brass); animation: wait 1.6s ease-in-out infinite; }
+.ask-state.yes i { background: #62d8b2; animation: none; }
+.ask-state.no i { background: var(--faint); animation: none; }
+@keyframes wait { 50% { opacity: .3; transform: scale(.75); } }
+@keyframes unfold { from { opacity: 0; transform: translateY(6px); } }
 .copy-buffer { position: fixed; opacity: 0; }
 
 @keyframes flare { 0% { transform: scale(1); opacity: .9; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
@@ -113,6 +129,7 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
 }
 @media (prefers-reduced-motion: reduce) {
   .stop.decided .dot::after { animation: none; opacity: 0; }
+  .ask-form, .ask-state, .ask-state i { animation: none; }
 }
 </style>
 </head>
@@ -137,21 +154,67 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
     <dt>When</dt><dd>{{.When}}</dd>
   </dl>
   <div class="actions">
-    {{if .AdminURL}}<a class="btn primary" href="{{.AdminURL}}">Review in Orbis</a>{{end}}
+    {{if .Trusted}}<button class="btn primary" id="self" type="button"{{if .Risky}} data-risky="1"{{end}}>Unblock for an hour</button>
+    {{else}}<button class="btn primary" id="ask" type="button"{{if eq .Asked "pending"}} data-asked="1"{{end}}>Ask to unblock</button>{{end}}
     <button class="btn" id="back" type="button">Go back</button>
     <button class="btn" id="copy" type="button" data-copy="{{.Copy}}">Copy details</button>
   </div>
-  <footer>If this should be open, whoever runs this network can allow it in one step.</footer>
+  <form class="ask-form" id="ask-form" hidden>
+    <label for="note">Why do you need it? This is optional, and whoever runs this network will see it.</label>
+    <textarea id="note" maxlength="280"></textarea>
+    <div class="row">
+      <button class="btn primary" type="submit">Send request</button>
+      <button class="btn" id="ask-cancel" type="button">Cancel</button>
+    </div>
+  </form>
+  <p class="ask-state" id="ask-state" role="status" hidden><i></i><span></span></p>
+  <footer>{{if .Trusted}}This device can unblock without asking. {{if .AdminURL}}<a href="{{.AdminURL}}">Review in Orbis</a>{{end}}{{else}}Whoever runs this network gets your request and can say yes in one tap.{{if .AdminURL}} <a href="{{.AdminURL}}">Run this network?</a>{{end}}{{end}}</footer>
   {{else}}
-  <p class="lede">Orbis no longer blocks this site. Your device is still remembering the old answer for a few seconds.</p>
-  <div class="actions"><button class="btn primary" id="reload" type="button">Try again</button></div>
+  <p class="lede">Orbis no longer blocks this site. Your device is still remembering the old answer for a few seconds, so this page will try again by itself.</p>
+  <div class="actions"><button class="btn primary" id="reload" type="button">Try again now</button></div>
   {{end}}
 </main>
 <script nonce="{{.Nonce}}">
 (function () {
   var back = document.getElementById('back'), copy = document.getElementById('copy'), reload = document.getElementById('reload');
   if (back) back.onclick = function () { history.length > 1 ? history.back() : (location.href = 'about:blank') };
-  if (reload) reload.onclick = function () { location.reload() };
+  if (reload) { reload.onclick = function () { location.reload() }; setTimeout(function () { location.reload() }, 5000) }
+
+  // Asking. The page waits here and opens the site itself once the answer is yes.
+  var ask = document.getElementById('ask'), form = document.getElementById('ask-form'), self = document.getElementById('self');
+  var stateEl = document.getElementById('ask-state'), note = document.getElementById('note'), cancel = document.getElementById('ask-cancel');
+  function say(text, tone) { stateEl.hidden = false; stateEl.className = 'ask-state ' + (tone || ''); stateEl.lastElementChild.textContent = text }
+  function opened() { say('Approved. Opening the site.', 'yes'); setTimeout(function () { location.reload() }, 2500) }
+  function send(path, body) {
+    return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (r) {
+      return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'That did not work.'); return j });
+    });
+  }
+  function watch() {
+    if (ask) ask.hidden = true;
+    say('Asked. Waiting for an answer. You can leave this open.');
+    var poll = setInterval(function () {
+      if (document.hidden) return;
+      fetch('/__orbis/ask').then(function (r) { return r.json() }).then(function (s) {
+        if (s.state === 'approved') { clearInterval(poll); opened() }
+        if (s.state === 'denied') { clearInterval(poll); say('Not approved this time.', 'no') }
+      }).catch(function () {});
+    }, 3000);
+  }
+  if (ask) {
+    ask.onclick = function () { ask.hidden = true; form.hidden = false; note.focus() };
+    cancel.onclick = function () { form.hidden = true; ask.hidden = false };
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      send('/__orbis/ask', { note: note.value }).then(function () { form.hidden = true; watch() }, function (err) { say(err.message, 'no') });
+    };
+    if (ask.dataset.asked) watch();
+  }
+  if (self) self.onclick = function () {
+    if (self.dataset.risky === '1') { self.dataset.risky = '2'; self.textContent = 'It is on a threat list. Unblock anyway'; return }
+    self.disabled = true;
+    send('/__orbis/self').then(opened, function (err) { self.disabled = false; say(err.message, 'no') });
+  };
   if (copy) copy.onclick = function () {
     var done = function () { copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = 'Copy details' }, 1800) };
     if (navigator.clipboard) { navigator.clipboard.writeText(copy.dataset.copy).then(done); return }

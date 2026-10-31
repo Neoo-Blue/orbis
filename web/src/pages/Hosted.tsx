@@ -64,7 +64,7 @@ export function HostedPage() {
         <Stat label="Devices hosting something" value={num(hosts.filter((h) => h.services.some((s) => s.online)).length)}
           sub={data.last_scan ? `scanned ${ago(data.last_scan)}` : 'not scanned yet'} />
         <Stat label="Services" value={num(services)} sub={containers > 0 ? `${containers} from Docker` : 'from port scans'} />
-        <Stat label="Storage devices" value={num(storage?.storage.length ?? 0)} sub={(storage?.storage ?? []).map((s) => s.Name).slice(0, 3).join(', ') || 'none found'} />
+        <Stat label="Storage devices" value={num(storage?.storage?.length ?? 0)} sub={(storage?.storage ?? []).map((s) => s.Name).slice(0, 3).join(', ') || 'none found'} />
         <Stat label="Port forwards" value={num(forwards.length)}
           sub={router?.found ? `router: ${router.model || router.name || 'found'}${router.external_ip ? `, ${router.external_ip}` : ''}` : data.forwarding.inline ? 'this node is the gateway' : router?.upnp_enabled ? 'router not found over UPnP' : 'UPnP off'} />
       </div>
@@ -72,7 +72,7 @@ export function HostedPage() {
       <div className="toolbar">
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'apps', label: `Apps (${services})` },
-          { value: 'storage', label: `Storage (${storage?.storage.length ?? 0})` },
+          { value: 'storage', label: `Storage (${storage?.storage?.length ?? 0})` },
           { value: 'forwards', label: `Port forwards (${forwards.length})` },
         ]} />
         <div className="spacer" />
@@ -170,13 +170,13 @@ function StorageTab({ storage, onForward }: { storage: StorageDevice[]; onForwar
           </div>
         } actions={s.web_ui ? <a className="btn sm" href={s.web_ui} target="_blank" rel="noreferrer">Open admin</a> : undefined}>
           <div style={{ display: 'grid', gap: 12 }}>
-            {s.exposed.length > 0 && (
+            {(s.exposed ?? []).length > 0 && (
               <Banner tone="warn">This storage is forwarded from the internet: {s.exposed.join(', ')}. File protocols on the open internet are the classic way a NAS gets ransomed. Prefer a VPN.</Banner>
             )}
             <div>
               <div className="hint" style={{ marginBottom: 6 }}>Protocols</div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {s.protocols.length === 0 && <span className="hint">no file protocol answered; the vendor or identifier says storage</span>}
+                {(s.protocols ?? []).length === 0 && <span className="hint">no file protocol answered; the vendor or identifier says storage</span>}
                 {s.protocols.map((p) => (
                   <span key={p.port} className="tag" title={`port ${p.port}. Forwarding a file protocol to the internet is not recommended; click to do it anyway.`}
                     style={{ cursor: 'pointer' }} onClick={() => onForward(s.IP, p.port, `${s.Name} ${p.name}`)}>
@@ -187,7 +187,7 @@ function StorageTab({ storage, onForward }: { storage: StorageDevice[]; onForwar
             </div>
             <div>
               <div className="hint" style={{ marginBottom: 6 }}>Using it right now</div>
-              {s.users.length === 0
+              {(s.users ?? []).length === 0
                 ? <span className="hint">no live connections seen from here{s.bytes_in + s.bytes_out === 0 ? ' (this node only sees traffic that passes through it)' : ''}</span>
                 : (
                   <div className="table-wrap"><table className="t">

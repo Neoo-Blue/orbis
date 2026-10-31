@@ -127,6 +127,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountOps(r)
 	s.mountGateway(r)
 	s.mountConsent(r)
+	s.mountUnblock(r)
 	s.mountDNSTools(r)
 	s.mountDNSRecords(r)
 	s.mountShortcuts(r)

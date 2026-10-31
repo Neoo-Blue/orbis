@@ -467,3 +467,23 @@ func TestAConnectionReturnedAfterCloseIsNotKept(t *testing.T) {
 		t.Fatal("a retired upstream kept a connection")
 	}
 }
+
+func TestAnApprovedSitePassesForThatDeviceOnly(t *testing.T) {
+	up := startUpstream(t, 0, goodAnswer)
+	s, matcher := newTestServer(t, true, up)
+	b := adblock.NewBuilder()
+	b.AddBlock("ads.example.com", "test", "ads", false)
+	matcher.Commit(b)
+	s.cfg.DNS.SinkholeIPv4, s.cfg.DNS.SinkholeIPv6 = "0.0.0.0", "::"
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
+		t.Fatalf("blocked name answered %v", a.A)
+	}
+	s.hooks.Granted = func(_ netip.Addr, name string) bool { return name == "ads.example.com" }
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); a.A.Equal(net.IPv4zero) {
+		t.Fatal("an approved site was still blocked")
+	}
+	s.hooks.Granted = func(netip.Addr, string) bool { return false }
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
+		t.Fatalf("after the grant ended it answered %v", a.A)
+	}
+}

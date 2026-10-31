@@ -6,6 +6,7 @@ import { OrbitChart, type OrbitDevice, type OrbitFlow, type OrbitHandle } from '
 import { Card, Dot, Empty, Icons, Loading, Segmented, Sparkline, useToast } from '../ui'
 import { Tween } from '../motion'
 import { WhyDrawer } from './Why'
+import { RequestRow, useUnblock } from './Requests'
 import { ago, bits, bytes, clientName, compact, duration, num, pct } from '../format'
 import type { Client, DNSQuery, EventItem, Flow, Health, Summary, SystemStatus, NodeResources } from '../types'
 
@@ -47,6 +48,7 @@ const ClientDrawer = lazy(() => import('./Clients').then((m) => ({ default: m.Cl
 export function Dashboard({ status, summary, onNavigate }: Props) {
   const [openDevice, setOpenDevice] = useState<string | null>(null)
   const [why, setWhy] = useState<{ name: string; client?: string } | null>(null)
+  const { data: asks, refresh: refreshAsks } = useUnblock()
   // The device under the pointer, on the chart or on a row: each lights the other.
   const [lit, setLit] = useState<string | null>(null)
   const [hours, setHours] = useLocalStorage<'1' | '6' | '24'>('orbis.overview.hours', '24')
@@ -133,7 +135,7 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
   }
   if (netFault) attention.push({ key: 'internet', level: netFault.state === 'down' ? 'problem' : 'attention', title: netFault.headline, go: () => onNavigate('health') })
   if (capture && capture.interfaces === 0) attention.push({ key: 'capture', level: 'attention', title: 'Packet capture opened no interfaces, so names and sites will be missing from connections.', go: () => onNavigate('settings') })
-  for (const e of (recentEvents?.events ?? []).filter((e) => !e.acknowledged && (e.severity === 'warning' || e.severity === 'critical')).slice(0, 3)) {
+  for (const e of (recentEvents?.events ?? []).filter((e) => !e.acknowledged && e.category !== 'unblock' && (e.severity === 'warning' || e.severity === 'critical')).slice(0, 3)) {
     attention.push({ key: e.id, level: e.severity === 'critical' ? 'problem' : 'attention', title: e.title, threat: THREAT_EVENTS.has(e.category), go: () => onNavigate('events') })
   }
   if (summary.ad_candidates > 0) attention.push({ key: 'ads', level: 'notice', title: `${summary.ad_candidates} new ${summary.ad_candidates === 1 ? 'host looks' : 'hosts look'} like ads`, go: () => onNavigate('adblock') })
@@ -163,11 +165,7 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
             </dl>
           )}
           <div className="plate-stopped">
-            <div className="plate-range">
-              <div className="plate-caption"><b className="plate-figure"><Tween rise value={summary.dns_blocked} format={(n) => compact(Math.round(n))} /></b> stopped today, {pct(summary.block_rate, 0)} of lookups</div>
-              <Segmented value={hours} onChange={setHours}
-                options={[{ value: '1', label: '1h' }, { value: '6', label: '6h' }, { value: '24', label: '24h' }]} />
-            </div>
+            <div className="plate-caption"><b className="plate-figure"><Tween rise value={summary.dns_blocked} format={(n) => compact(Math.round(n))} /></b> stopped today, {pct(summary.block_rate, 0)} of lookups</div>
             {blockedPoints.length > 1 && (
               <>
                 <Sparkline points={blockedPoints} tone="red" height={96}
@@ -175,7 +173,12 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
                     const p = blockedSeries?.points?.[i]
                     return p ? `${compact(p.v)} at ${new Date(p.t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''
                   }} />
-                <div className="plate-axis"><span>{hours}h ago</span><span>now</span></div>
+                <div className="plate-axis plate-range">
+                  <span>{hours}h ago</span>
+                  <Segmented value={hours} onChange={setHours}
+                    options={[{ value: '1', label: '1h' }, { value: '6', label: '6h' }, { value: '24', label: '24h' }]} />
+                  <span>now</span>
+                </div>
               </>
             )}
           </div>
@@ -195,9 +198,14 @@ export function Dashboard({ status, summary, onNavigate }: Props) {
 
         <div className="plate-side">
           <h3>Needs you</h3>
-          {attention.length === 0 ? (
+          {(asks?.pending.length ?? 0) > 0 && (
+            <div className="stack-in" style={{ display: 'grid', gap: 10, marginBottom: 6 }}>
+              {asks!.pending.slice(0, 3).map((r) => <RequestRow key={r.id} r={r} onDone={refreshAsks} />)}
+            </div>
+          )}
+          {attention.length === 0 && !asks?.pending.length ? (
             <p className="plate-clear">Nothing right now.</p>
-          ) : (
+          ) : attention.length === 0 ? null : (
             <ul className="plate-list">
               {attention.slice(0, 5).map((a) => (
                 <li key={a.key}>

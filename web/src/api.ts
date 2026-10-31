@@ -14,7 +14,7 @@ import type {
   LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus, IDSStatus,
   UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus,
   NetwatchStatus, NetwatchHistory,
-  ConfigHistoryListResponse, ConfigHistoryPending, ConfigHistoryRestoreResult } from './types'
+  ConfigHistoryListResponse, ConfigHistoryPending, ConfigHistoryRestoreResult, UnblockRequest } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -167,6 +167,12 @@ export const api = {
     flush: (domain?: string) => post<{ flushed: number }>(`/dns/flush${qs({ domain })}`),
   },
 
+  unblock: {
+    list: () => get<{ pending: UnblockRequest[]; grants: UnblockRequest[]; past: UnblockRequest[]; trusted: string[] }>('/unblock'),
+    decide: (id: string, body: { allow: boolean; minutes: number; everyone: boolean }) => post<UnblockRequest>(`/unblock/${id}/decide`, body),
+    revoke: (id: string) => post<{ ok: boolean }>(`/unblock/${id}/revoke`),
+    trust: (client_id: string, trusted: boolean) => post<{ ok: boolean }>('/unblock/trust', { client_id, trusted }),
+  },
   adblock: {
     status: () => get<Record<string, unknown>>('/adblock/status'),
     lists: () => get<{ lists: BlockList[]; builtin: BuiltinList[] }>('/adblock/lists'),

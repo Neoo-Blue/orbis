@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -28,10 +29,14 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
+
+//go:embed approve.html
+var approveHTML string
 
 //go:embed page.html
 var pageHTML string
@@ -43,6 +48,7 @@ var font []byte
 var monoFont []byte
 
 var pageTemplate = template.Must(template.New("page").Parse(pageHTML))
+var approvalTemplate = template.Must(template.New("approve").Parse(approveHTML))
 
 // Station is one stop on the line drawn from the device to the decision.
 type Station struct {
@@ -75,6 +81,17 @@ type Page struct {
 	// HostParts lets a long name wrap at its dots, not in the middle of a word.
 	HostParts []string
 	Long      bool
+	// Trusted is a device that may unblock without asking.
+	Trusted bool
+	// Risky is a site on a threat list, which takes a second look.
+	Risky bool
+	// Asked is where this device's request stands, if it made one.
+	Asked string
+}
+
+// AskState is what the page learns about its request.
+type AskState struct {
+	State string `json:"state"`
 }
 
 // Server answers on port 443 and on whatever serves port 80.
@@ -85,6 +102,11 @@ type Server struct {
 	Claims func(hostport string) bool
 	// Allow limits TLS handshakes per client.
 	Allow func(client netip.Addr) bool
+	// Ask, Status and Self are the page's way to the owner: request the site,
+	// see the answer, and for a trusted device open it without asking.
+	Ask    func(host, note string, client netip.Addr) (AskState, error)
+	Status func(host string, client netip.Addr) AskState
+	Self   func(host string, client netip.Addr) (AskState, error)
 	// Leaf mints a certificate for a name from the Orbis CA.
 	Leaf func(host string) (*tls.Certificate, error)
 	// Guard learns which devices can show the page over HTTPS.
@@ -166,6 +188,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil && s.Guard != nil && (r.Header.Get("Sec-Fetch-Dest") != "" || opensDocument(r)) {
 		s.Guard.Note(client, true, time.Now())
 	}
+	if r.URL.Path == "/__orbis/ask" || r.URL.Path == "/__orbis/self" {
+		s.serveAsk(w, r, client)
+		return
+	}
 	if face, ok := map[string][]byte{"/__orbis/geist.woff2": font, "/__orbis/geist-mono.woff2": monoFont}[r.URL.Path]; ok {
 		w.Header().Set("Content-Type", "font/woff2")
 		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
@@ -187,13 +213,83 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+page.Nonce+"'; script-src 'nonce-"+page.Nonce+"'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+page.Nonce+"'; script-src 'nonce-"+page.Nonce+"'; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	if page.Blocked {
 		w.WriteHeader(http.StatusForbidden)
 	}
 	_, _ = w.Write(body.Bytes())
+}
+
+// serveAsk is the page talking to its node. Asking only ever reaches the owner,
+// and the owner still decides, but a request is a notification on someone's
+// phone, so it has to come from this page and not from one elsewhere.
+func (s *Server) serveAsk(w http.ResponseWriter, r *http.Request, client netip.Addr) {
+	host := hostOnly(r.Host)
+	h := w.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Type", "application/json")
+	if s.Ask == nil || s.Status == nil || s.Self == nil || (s.Claims != nil && !s.Claims(host)) {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	var state AskState
+	var err error
+	switch {
+	case r.Method == http.MethodGet:
+		state = s.Status(host, client)
+	case r.Method != http.MethodPost || !sameOrigin(r):
+		w.WriteHeader(http.StatusForbidden)
+		return
+	case r.URL.Path == "/__orbis/self":
+		state, err = s.Self(host, client)
+	default:
+		var body struct {
+			Note string `json:"note"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body) != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		state, err = s.Ask(host, body.Note, client)
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(state)
+}
+
+// sameOrigin holds a POST to this page's own origin. JSON makes a cross-site
+// request preflight, which nothing here answers, and Origin must name this host.
+func sameOrigin(r *http.Request) bool {
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		return false
+	}
+	origin, err := url.Parse(r.Header.Get("Origin"))
+	return err == nil && origin.Host != "" && origin.Host == r.Host
+}
+
+// Approval is the page behind a one-tap link.
+type Approval struct {
+	Host, Device, Note, Why, State, Token string
+	Risky                                 bool
+	Nonce                                 string
+}
+
+// WriteApproval renders it.
+func WriteApproval(w http.ResponseWriter, a Approval) {
+	a.Nonce = nonce()
+	h := w.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+a.Nonce+"'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	h.Set("X-Content-Type-Options", "nosniff")
+	// A token in the address must not leave in a Referer.
+	h.Set("Referrer-Policy", "no-referrer")
+	_ = approvalTemplate.Execute(w, a)
 }
 
 // opensDocument reports a browser navigating to the site, as opposed to a

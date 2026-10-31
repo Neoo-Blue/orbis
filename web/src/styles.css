@@ -1119,8 +1119,9 @@ table.t tbody tr, .plate-list > li, .stack-in > * { animation: row-in .3s var(--
 .fact { display: block; border-radius: 4px; }
 .fact dd, .fact dt { transition: color .16s var(--ease); }
 .fact:hover dd { color: var(--brass); }
-.plate-range { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.plate-range .segmented button { padding: 1px 7px; font-size: 11.5px; min-height: 0; }
+.plate-range { align-items: center; }
+.plate-range .segmented { border-color: var(--line-soft); }
+.plate-range .segmented button { padding: 1px 8px; font-size: 11.5px; }
 
 @media (max-width: 880px) {
   .topbar { flex-wrap: wrap; height: auto; min-height: var(--header-h); row-gap: 0; padding-top: 8px; }
@@ -1131,3 +1132,17 @@ table.t tbody tr, .plate-list > li, .stack-in > * { animation: row-in .3s var(--
   .shell.tabs > .nav .nav-item { padding: 6px 2px; }
   .shell.tabs > .nav .nav-ask { display: none; }
 }
+
+/* A request from the block page, answered where it appears. */
+.request { display: grid; gap: 5px; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); animation: row-in .34s var(--spring) both; }
+.request-title { font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.request-title b { font-weight: 560; }
+.request-title .mono { font-size: 12.5px; }
+.request-note { font-size: 13px; color: var(--text); padding: 4px 0 2px; overflow-wrap: anywhere; }
+.request-why { font-size: 12px; line-height: 1.45; color: var(--text-faint); }
+.request-why.risky { color: var(--amber); }
+.request-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.nav-badge.asks { background: rgba(242, 181, 68, .16); color: var(--amber); margin-left: 6px; }
+.nav-item .nav-badge.asks { margin-left: auto; }
+.grant { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.grant:last-child { border-bottom: 0; }

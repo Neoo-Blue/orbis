@@ -229,6 +229,8 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
     const size = () => {
       const box = canvas.parentElement!.getBoundingClientRect()
       dpr = Math.min(devicePixelRatio || 1, 2)
+      // A kept page sits hidden with no size; it is drawn again when it returns.
+      if (!box.width || !box.height) return
       w = box.width; h = box.height
       canvas.width = w * dpr; canvas.height = h * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -396,7 +398,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
         const fall = ctx.createConicGradient(a, cx, cy)
         fall.addColorStop(0, `rgba(${ink},0)`)
         fall.addColorStop(0.86, `rgba(${ink},0)`)
-        fall.addColorStop(1, `rgba(${ink},.2)`)
+        fall.addColorStop(1, `rgba(${ink},.11)`)
         ctx.globalAlpha = intro
         ctx.fillStyle = fall
         ctx.beginPath()
@@ -406,7 +408,7 @@ export const OrbitChart = forwardRef<OrbitHandle, Props>(function OrbitChart(
         ctx.beginPath()
         ctx.moveTo(cx + Math.cos(a) * shield, cy + Math.sin(a) * shield)
         ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R)
-        ctx.strokeStyle = `rgba(${ink},.55)`
+        ctx.strokeStyle = `rgba(${ink},.4)`
         ctx.stroke()
         ctx.globalAlpha = 1
       }

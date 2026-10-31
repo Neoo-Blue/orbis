@@ -389,6 +389,23 @@ export interface SystemStatus {
   ai: Record<string, unknown>
 }
 
+export interface UnblockRequest {
+  id: string
+  host: string
+  client_id: string
+  client_ip: string
+  device: string
+  note?: string
+  why?: string
+  category?: string
+  risky?: boolean
+  asked: string
+  state: 'pending' | 'approved' | 'denied'
+  decided?: string
+  until?: string
+  everyone?: boolean
+}
+
 export interface GlobeArc {
   id: string
   client_id?: string

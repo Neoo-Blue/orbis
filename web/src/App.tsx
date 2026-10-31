@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, useRef, lazy, Suspense } from 'react'
 import { flushSync } from 'react-dom'
 import { api, setUnauthorizedHandler } from './api'
 import { usePoll, useLocalStorage, useMediaQuery, ViewVisible } from './hooks'
-import { useLiveConnected } from './live'
+import { useLiveBatch, useLiveConnected } from './live'
 import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast, Loading } from './ui'
 import { transition, useThumb } from './motion'
 import type { AppConfig, SystemStatus, Summary } from './types'
@@ -43,6 +43,7 @@ const HostedPage = lazy(() => import('./pages/Hosted').then(m => ({ default: m.H
 const LinksPage = lazy(() => import('./pages/Links').then(m => ({ default: m.LinksPage })))
 const ServicesPage = lazy(() => import('./pages/Services').then(m => ({ default: m.ServicesPage })))
 const ProfilesPage = lazy(() => import('./pages/Profiles').then(m => ({ default: m.ProfilesPage })))
+const RequestsPage = lazy(() => import('./pages/Requests').then(m => ({ default: m.RequestsPage })))
 const EventsPage = lazy(() => import('./pages/Events').then(m => ({ default: m.EventsPage })))
 const InternetHealthPage = lazy(() => import('./pages/InternetHealth').then(m => ({ default: m.InternetHealthPage })))
 const ChangeTimelinePage = lazy(() => import('./pages/ChangeTimeline').then(m => ({ default: m.ChangeTimelinePage })))
@@ -51,7 +52,7 @@ const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default:
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
   | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services' | 'threats' | 'hosted' | 'links'
-  | 'profiles' | 'health' | 'changes' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
+  | 'profiles' | 'health' | 'changes' | 'requests' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
 
 type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; short?: string }
 /** A section of the product: one place in the rail, its pages as tabs. Every
@@ -74,6 +75,7 @@ const HUBS: Hub[] = [
   ] },
   { id: 'protection', label: 'Protection', short: 'Protect', icon: 'shield', routes: [
     { id: 'dns', label: 'DNS', icon: 'dns' },
+    { id: 'requests', label: 'Requests', icon: 'question' },
     { id: 'adblock', label: 'Ad blocking', icon: 'block' },
     { id: 'firewall', label: 'Firewall', icon: 'shield' },
     { id: 'threats', label: 'Threats', icon: 'target' },
@@ -128,7 +130,7 @@ const PAGE_CODE: Partial<Record<Route, () => Promise<unknown>>> = {
   flows: () => import('./pages/Flows'), services: () => import('./pages/Services'), analytics: () => import('./pages/Analytics'),
   topology: () => import('./pages/Topology'), health: () => import('./pages/InternetHealth'), clients: () => import('./pages/Clients'),
   profiles: () => import('./pages/Profiles'), consent: () => import('./pages/Consent'), dns: () => import('./pages/DNS'),
-  adblock: () => import('./pages/AdBlock'), firewall: () => import('./pages/Firewall'), threats: () => import('./pages/Threats'),
+  requests: () => import('./pages/Requests'), adblock: () => import('./pages/AdBlock'), firewall: () => import('./pages/Firewall'), threats: () => import('./pages/Threats'),
   youtube: () => import('./pages/YouTube'), dnstools: () => import('./pages/DNSTools'), links: () => import('./pages/Links'),
   network: () => import('./pages/Network'), gateway: () => import('./pages/Gateway'), vpn: () => import('./pages/VPN'),
   intercept: () => import('./pages/Intercept'), hosted: () => import('./pages/Hosted'), problems: () => import('./pages/Problems'),
@@ -263,6 +265,9 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
     if (loadedVersion.current === null) loadedVersion.current = v
     else if (v !== loadedVersion.current) setUpdated(v)
   }, [status?.version])
+  const { data: requests, refresh: refreshRequests } = usePoll(() => api.unblock.list(), 15000)
+  useLiveBatch(['unblock.pending', 'unblock.decided'], () => refreshRequests())
+  const waiting = requests?.pending.length ?? 0
   const candidates = summary?.ad_candidates ?? 0
 
   const narrow = useMediaQuery('(max-width: 880px)')
@@ -323,6 +328,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
       case 'topology': return <TopologyPage />
       case 'dns': return <DNSPage />
       case 'adblock': return <AdBlockPage />
+      case 'requests': return <RequestsPage />
       case 'dnstools': return <DNSToolsPage />
       case 'youtube': return <YouTubePage />
       case 'consent': return <ConsentPage />
@@ -383,6 +389,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
             const Icon = Icons[h.icon]
             const badge =
               h.id === 'system' && alerts > 0 ? <span className="nav-badge alert">{alerts}</span>
+              : h.id === 'protection' && waiting > 0 ? <span className="nav-badge asks">{waiting}</span>
               : h.id === 'protection' && candidates > 0 ? <span className="nav-badge live">{candidates}</span>
               : null
             return (
@@ -421,7 +428,9 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
               {hub.routes.map((r) => (
                 <button key={r.id} onClick={() => navigate(r.id)}
                   onPointerEnter={() => void PAGE_CODE[r.id]?.()}
-                  aria-current={shown === r.id ? 'page' : undefined}>{r.label}</button>
+                  aria-current={shown === r.id ? 'page' : undefined}>
+                  {r.label}{r.id === 'requests' && waiting > 0 && <span className="nav-badge asks">{waiting}</span>}
+                </button>
               ))}
             </div>
           )}
@@ -432,7 +441,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
           </button>
           <Segmented value={ui} onChange={(v) => setUIPref(v)}
             options={[{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Advanced' }]} />
-          <GlossaryButton />
+          {!narrow && <GlossaryButton />}
         </header>
 
         <div ref={pageRef} className={`page${shown === 'globe' || shown === 'assistant' ? ' flush' : ''}`}>

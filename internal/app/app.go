@@ -22,6 +22,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/confighistory"
 	"github.com/Neoo-Blue/orbis/internal/consent"
+	"github.com/Neoo-Blue/orbis/internal/unblock"
 	"github.com/Neoo-Blue/orbis/internal/country"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
 	"github.com/Neoo-Blue/orbis/internal/discover"
@@ -132,6 +133,8 @@ type App struct {
 
 	// Consent is ask-on-first-connection for enrolled devices.
 	Consent *consent.Store
+	// Unblock holds requests from the block page and the grants they became.
+	Unblock *unblock.Manager
 
 	// Bus is the live fan-out used by the WebSocket layer.
 	Bus *Bus
@@ -556,7 +559,16 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	// DNS.
 	a.BlockGuard = blockpage.NewGuard()
 	handshakes := dnsproxy.NewRateLimiter(blockPageHandshakes)
+	unblockPath := filepath.Join(filepath.Dir(cfg.Store.Path), "unblock.json")
+	if a.Unblock, err = unblock.New(unblockPath); err != nil {
+		logf("unblock: starting over: %v", err)
+		_ = os.Rename(unblockPath, unblockPath+".bad")
+		if a.Unblock, err = unblock.New(unblockPath); err != nil {
+			return nil, err
+		}
+	}
 	a.BlockPage = &blockpage.Server{Explain: a.explainBlock, Claims: a.ClaimsBlockedHost, Guard: a.BlockGuard, Log: logf,
+		Ask: a.AskUnblock, Status: a.AskStatus, Self: a.SelfUnblock,
 		Allow: func(client netip.Addr) bool { return handshakes.Allow(client, time.Now()) }}
 	if a.CA != nil {
 		a.BlockPage.Leaf = a.CA.Leaf
@@ -569,6 +581,13 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		LocalRecords: a.localRecords,
 		Publish: func(q store.DNSQuery) {
 			a.Bus.Publish(Event{Type: "dns.query", Data: q})
+		},
+		Granted: func(client netip.Addr, name string) bool {
+			if !a.Unblock.Any() {
+				return false
+			}
+			id, _ := a.clientForAddr(client)
+			return a.Unblock.Granted(id, name, time.Now())
 		},
 		BlockPageAddr: func(client netip.Addr, name string) (netip.Addr, bool) {
 			return a.BlockGuard.AddrFor(client, name, time.Now())

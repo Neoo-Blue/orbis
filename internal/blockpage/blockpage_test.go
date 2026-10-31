@@ -336,3 +336,76 @@ func TestABrowserOverTLSIsProof(t *testing.T) {
 		t.Fatal("this device already showed it trusts the CA")
 	}
 }
+
+func askServer() (*Server, *[]string) {
+	calls := &[]string{}
+	s := testServer()
+	s.Claims = func(host string) bool { return host == "ads.example.com" }
+	s.Ask = func(host, note string, _ netip.Addr) (AskState, error) {
+		*calls = append(*calls, "ask:"+host+":"+note)
+		return AskState{State: "pending"}, nil
+	}
+	s.Status = func(string, netip.Addr) AskState { return AskState{State: "approved"} }
+	s.Self = func(host string, _ netip.Addr) (AskState, error) {
+		*calls = append(*calls, "self:"+host)
+		return AskState{State: "approved"}, nil
+	}
+	return s, calls
+}
+
+func post(s *Server, path, host, origin, contentType, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	r.Host = host
+	if origin != "" {
+		r.Header.Set("Origin", origin)
+	}
+	r.Header.Set("Content-Type", contentType)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	return w
+}
+
+func TestThePageCanAskForItself(t *testing.T) {
+	s, calls := askServer()
+	w := post(s, "/__orbis/ask", "ads.example.com", "http://ads.example.com", "application/json", `{"note":"homework"}`)
+	if w.Code != http.StatusOK || len(*calls) != 1 || (*calls)[0] != "ask:ads.example.com:homework" {
+		t.Fatalf("code %d, calls %v", w.Code, *calls)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/__orbis/ask", nil)
+	r.Host = "ads.example.com"
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if !strings.Contains(w.Body.String(), `"approved"`) {
+		t.Fatalf("status: %s", w.Body.String())
+	}
+}
+
+func TestAnotherPageCannotAskOrUnblock(t *testing.T) {
+	s, calls := askServer()
+	for _, tc := range []struct{ path, host, origin, ctype string }{
+		{"/__orbis/ask", "ads.example.com", "http://evil.example", "application/json"},
+		{"/__orbis/ask", "ads.example.com", "", "application/json"},
+		{"/__orbis/ask", "ads.example.com", "http://ads.example.com", "text/plain"},
+		{"/__orbis/self", "ads.example.com", "http://evil.example", "application/json"},
+		{"/__orbis/ask", "not-claimed.example", "http://not-claimed.example", "application/json"},
+	} {
+		if w := post(s, tc.path, tc.host, tc.origin, tc.ctype, "{}"); w.Code == http.StatusOK {
+			t.Errorf("%+v went through", tc)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("calls %v", *calls)
+	}
+}
+
+func TestTheApprovalPageCarriesNothingUnescaped(t *testing.T) {
+	w := httptest.NewRecorder()
+	WriteApproval(w, Approval{Host: "a.example", Device: "<b>phone</b>", Note: `"><script>alert(1)</script>`, State: "pending", Token: "tok"})
+	body := w.Body.String()
+	if strings.Contains(body, "<script>alert") || strings.Contains(body, "<b>phone") {
+		t.Fatal("a guest's note reached the owner's page unescaped")
+	}
+	if !strings.Contains(body, "Allow for 1 hour") || !strings.Contains(w.Header().Get("Referrer-Policy"), "no-referrer") {
+		t.Fatalf("referrer %q", w.Header().Get("Referrer-Policy"))
+	}
+}

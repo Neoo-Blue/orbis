@@ -1,4 +1,5 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useContext, useEffect, useRef, useSyncExternalStore } from 'react'
+import { ViewVisible } from './hooks'
 
 export interface LiveEvent {
   type: string
@@ -97,7 +98,8 @@ export function useLiveBatch(types: string[], fn: Batch) {
   const handler = useRef(fn)
   handler.current = fn
   const key = types.join(',')
-  useEffect(() => subscribeLive(key.split(','), (b) => handler.current(b)), [key])
+  const visible = useContext(ViewVisible)
+  useEffect(() => (visible ? subscribeLive(key.split(','), (b) => handler.current(b)) : undefined), [key, visible])
 }
 
 /** useLiveConnected reports whether the event stream is up. */

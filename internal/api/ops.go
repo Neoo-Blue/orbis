@@ -110,6 +110,7 @@ func (s *Server) handleNotifySaveWebhook(w http.ResponseWriter, r *http.Request)
 		URL     string            `json:"url"`
 		Format  string            `json:"format"`
 		Headers map[string]string `json:"headers"`
+		Only    string            `json:"only"`
 	}
 	if err := decodeJSON(r, &hook); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -122,7 +123,7 @@ func (s *Server) handleNotifySaveWebhook(w http.ResponseWriter, r *http.Request)
 	err := s.cfg.Update(func(c *config.Config) {
 		next := config.Webhook{
 			Name: hook.Name, Enabled: hook.Enabled, URL: hook.URL,
-			Format: hook.Format, Headers: hook.Headers,
+			Format: hook.Format, Headers: hook.Headers, Only: hook.Only,
 		}
 		for i := range c.Notify.Webhooks {
 			if c.Notify.Webhooks[i].Name == hook.Name {

@@ -984,3 +984,168 @@
     justify-content: center;
   }
 }
+
+/* ============================================================
+   Motion. Things move the way the navigation is laid out, numbers
+   run instead of swapping, and anything that changes is seen changing.
+   ============================================================ */
+:root { --spring: cubic-bezier(.16, 1, .3, 1); --vt-x: 0px; --vt-y: 0px; }
+
+/* One marker slides to whatever is current. */
+.thumb {
+  position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none;
+  width: var(--thumb-w, 0); height: var(--thumb-h, 0); opacity: var(--thumb-o, 0);
+  transform: translate3d(var(--thumb-x, 0), var(--thumb-y, 0), 0);
+  border-radius: var(--radius-sm); background: rgba(214, 190, 138, .15);
+}
+[data-thumb='on'] > .thumb { transition: transform .36s var(--spring), width .36s var(--spring), height .36s var(--spring), opacity .2s; }
+
+.nav-section { position: relative; display: grid; gap: 3px; }
+.nav-section .nav-item { padding: 10px 11px; font-size: 14px; gap: 12px; z-index: 1; }
+.nav-section .nav-item svg { width: 17px; height: 17px; }
+.nav-section .nav-item[aria-current='page'] { background: transparent; }
+.nav-item { transition: background .16s var(--ease), color .16s var(--ease), transform .12s var(--ease); }
+.nav-item:active { transform: scale(.98); }
+.nav-ask { margin-top: 12px; padding: 10px 11px; font-size: 14px; gap: 12px; border: 1px solid var(--line-soft); }
+.nav-ask svg { width: 17px; height: 17px; }
+
+.topbar { flex-wrap: nowrap; gap: 18px; }
+.topbar h1 { flex: none; }
+.subnav { position: relative; display: flex; align-self: stretch; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.subnav::-webkit-scrollbar { display: none; }
+.subnav button {
+  position: relative; z-index: 1; flex: none; border: 0; background: none; cursor: pointer; padding: 0 13px;
+  font: inherit; font-size: 13.5px; color: var(--text-dim); white-space: nowrap; transition: color .16s var(--ease);
+}
+.subnav button:hover { color: var(--text); }
+.subnav button[aria-current='page'] { color: var(--brass); font-weight: 520; }
+.subnav .thumb { top: auto; bottom: 0; height: 2px; border-radius: 2px 2px 0 0; background: var(--brass); transform: translate3d(var(--thumb-x, 0), 0, 0); }
+
+.search-pill {
+  display: inline-flex; align-items: center; gap: 8px; flex: none; height: 32px; padding: 0 9px 0 11px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 13px; cursor: pointer; transition: border-color .16s var(--ease), color .16s var(--ease), transform .12s var(--ease);
+}
+.search-pill:hover { border-color: var(--brass); color: var(--text); }
+.search-pill:active { transform: scale(.97); }
+.search-pill kbd { font: 500 11px var(--sans); color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: 4px; padding: 1px 5px; }
+
+.segmented { position: relative; }
+.segmented button { position: relative; z-index: 1; }
+.segmented button[aria-pressed='true'] { background: transparent; }
+
+/* Moving between pages. Sideways between tabs, up and down between sections. */
+.page { view-transition-name: orbis-page; }
+.view[hidden] { display: none; }
+::view-transition { pointer-events: none; }
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-old(orbis-page) { animation: page-out .13s ease-in both; }
+::view-transition-new(orbis-page) { animation: page-in .3s var(--spring) both; }
+@keyframes page-out { to { opacity: 0; transform: translate(calc(var(--vt-x) * -.4), calc(var(--vt-y) * -.4)); } }
+@keyframes page-in { from { opacity: 0; transform: translate(var(--vt-x), var(--vt-y)); } }
+
+/* Acknowledge every press. */
+.btn { transition: background .16s var(--ease), border-color .16s var(--ease), color .16s var(--ease), transform .12s var(--ease); }
+.btn:active:not(:disabled) { transform: scale(.97); }
+.row-btn { transition: background .16s var(--ease); }
+.card { transition: border-color .2s var(--ease); }
+.card:hover { border-color: var(--line); }
+
+/* New rows arrive; rows already there stay put. */
+table.t tbody tr, .plate-list > li, .stack-in > * { animation: row-in .3s var(--spring) both; }
+.plate-list > li:nth-child(2) { animation-delay: 30ms; } .plate-list > li:nth-child(3) { animation-delay: 60ms; }
+.plate-list > li:nth-child(4) { animation-delay: 90ms; } .plate-list > li:nth-child(n+5) { animation-delay: 120ms; }
+@keyframes row-in { from { opacity: 0; transform: translateY(5px); } }
+
+.bar > i { transition: width .5s var(--spring), transform .5s var(--spring); }
+.switch-track, .switch-track::after { transition: background .2s var(--ease), transform .26s var(--spring); }
+
+.spark { animation: spark-in .9s var(--spring) both; }
+@keyframes spark-in { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+
+.drawer { animation: drawer-in .34s var(--spring); }
+.drawer.closing { animation: drawer-out .17s ease-in forwards; }
+.scrim { animation: fade-in .22s var(--ease); }
+.scrim.closing { animation: fade-out .17s ease-in forwards; }
+@keyframes drawer-in { from { transform: translateX(40px); opacity: 0; } }
+@keyframes drawer-out { to { transform: translateX(40px); opacity: 0; } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+.toast { animation: toast-in .34s var(--spring); }
+@keyframes toast-in { from { transform: translateY(14px) scale(.97); opacity: 0; } }
+
+.trace-stop { animation: row-in .34s var(--spring) both; }
+.trace-stop:nth-child(2) { animation-delay: 70ms; } .trace-stop:nth-child(3) { animation-delay: 140ms; }
+.trace-stop:nth-child(4) { animation-delay: 210ms; } .trace-stop:nth-child(n+5) { animation-delay: 280ms; }
+
+/* Waiting holds the shape of what is coming. */
+.skeleton { display: grid; gap: 12px; padding: 18px 2px; }
+.skeleton i {
+  display: block; height: 12px; border-radius: 3px; background-size: 300% 100%;
+  background-image: linear-gradient(90deg, var(--line-soft) 0%, rgba(214, 190, 138, .2) 50%, var(--line-soft) 100%);
+  animation: shimmer 1.5s linear infinite;
+}
+.skeleton i:nth-child(1) { width: 62%; } .skeleton i:nth-child(2) { width: 88%; }
+.skeleton i:nth-child(3) { width: 76%; } .skeleton i:nth-child(4) { width: 44%; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* A line that answers the pointer. */
+.spark-read { position: relative; cursor: crosshair; touch-action: none; }
+.spark-cross { position: absolute; top: 8px; bottom: 0; width: 1px; background: var(--line); pointer-events: none; }
+.spark-value {
+  position: absolute; top: -14px; width: 100px; text-align: center; pointer-events: none;
+  font-size: 11.5px; color: var(--text); white-space: nowrap;
+}
+
+/* Actions sit on the row they act on, and come up with the pointer. */
+.acts { position: relative; }
+.acts > .row-acts {
+  position: absolute; right: 0; top: 50%; display: flex; gap: 6px; padding-left: 26px; opacity: 0; pointer-events: none;
+  transform: translate(6px, -50%); transition: opacity .14s var(--ease), transform .2s var(--spring);
+  background: linear-gradient(90deg, transparent, var(--bg-1) 22px);
+}
+.acts:hover > .row-acts, .acts:focus-within > .row-acts { opacity: 1; pointer-events: auto; transform: translate(0, -50%); }
+.acts.lit > .row-btn { background: rgba(214, 190, 138, .09); }
+.plate-side .acts > .row-acts { background: linear-gradient(90deg, transparent, var(--plate, var(--bg-1)) 22px); }
+@media (hover: none) { .acts > .row-acts { position: static; opacity: 1; pointer-events: auto; transform: none; padding: 4px 0 6px; background: none; } }
+
+.plate-ledger a, .plate-ledger button, .fact {
+  all: unset; box-sizing: border-box; display: flex; width: 100%; cursor: pointer;
+}
+.plate-ledger button { justify-content: space-between; gap: 12px; padding: 7px 4px; margin: 0 -4px; width: calc(100% + 8px); border-radius: 4px; transition: background .16s var(--ease); }
+.plate-ledger button:hover { background: rgba(214, 190, 138, .08); }
+.plate-ledger button:focus-visible, .fact:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+.plate-ledger > div { padding: 0; }
+.fact { display: block; border-radius: 4px; }
+.fact dd, .fact dt { transition: color .16s var(--ease); }
+.fact:hover dd { color: var(--brass); }
+.plate-range { align-items: center; }
+.plate-range .segmented { border-color: var(--line-soft); }
+.plate-range .segmented button { padding: 1px 8px; font-size: 11.5px; }
+
+@media (max-width: 880px) {
+  .topbar { flex-wrap: wrap; height: auto; min-height: var(--header-h); row-gap: 0; padding-top: 8px; }
+  .subnav { order: 9; flex: 1 0 100%; height: 40px; }
+  .search-pill { padding: 0 10px; height: 44px; min-width: 44px; justify-content: center; }
+  .search-pill span, .search-pill kbd { display: none; }
+  .shell.tabs > .nav .nav-section { display: flex; flex: 1; min-width: 0; gap: 0; }
+  .shell.tabs > .nav .nav-item { padding: 6px 2px; }
+  .shell.tabs > .nav .nav-ask { display: none; }
+}
+
+/* A request from the block page, answered where it appears. */
+.request { display: grid; gap: 5px; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); animation: row-in .34s var(--spring) both; }
+.request-title { font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.request-title b { font-weight: 560; }
+.request-title .mono { font-size: 12.5px; }
+.request-note { font-size: 13px; color: var(--text); padding: 4px 0 2px; overflow-wrap: anywhere; }
+.request-why { font-size: 12px; line-height: 1.45; color: var(--text-faint); }
+.request-why.risky { color: var(--amber); }
+.request-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.nav-badge.asks { background: rgba(242, 181, 68, .16); color: var(--amber); margin-left: 6px; }
+.nav-item .nav-badge.asks { margin-left: auto; }
+.grant { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.grant:last-child { border-bottom: 0; }
+
+.phone-steps { display: grid; gap: 10px; padding-left: 20px; font-size: 13.5px; }
+.phone-steps .mono { font-size: 12.5px; overflow-wrap: anywhere; }

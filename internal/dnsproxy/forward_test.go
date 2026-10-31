@@ -467,3 +467,40 @@ func TestAConnectionReturnedAfterCloseIsNotKept(t *testing.T) {
 		t.Fatal("a retired upstream kept a connection")
 	}
 }
+
+func TestAnApprovedSitePassesForThatDeviceOnly(t *testing.T) {
+	up := startUpstream(t, 0, goodAnswer)
+	s, matcher := newTestServer(t, true, up)
+	b := adblock.NewBuilder()
+	b.AddBlock("ads.example.com", "test", "ads", false)
+	matcher.Commit(b)
+	s.cfg.DNS.SinkholeIPv4, s.cfg.DNS.SinkholeIPv6 = "0.0.0.0", "::"
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
+		t.Fatalf("blocked name answered %v", a.A)
+	}
+	s.hooks.Granted = func(_ netip.Addr, name string) bool { return name == "ads.example.com" }
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); a.A.Equal(net.IPv4zero) {
+		t.Fatal("an approved site was still blocked")
+	}
+	s.hooks.Granted = func(netip.Addr, string) bool { return false }
+	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
+		t.Fatalf("after the grant ended it answered %v", a.A)
+	}
+}
+
+func TestFirefoxIsToldNotToBypassTheResolver(t *testing.T) {
+	up := startUpstream(t, 0, goodAnswer)
+	s, _ := newTestServer(t, true, up)
+	s.cfg.DNS.SinkholeIPv4, s.cfg.DNS.SinkholeIPv6 = "0.0.0.0", "::"
+	s.cfg.DNS.BlockPage = true
+	s.hooks.BlockPageAddr = func(netip.Addr, string) (netip.Addr, bool) { return netip.MustParseAddr("192.168.50.75"), true }
+	for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+		got := ask(t, s, "use-application-dns.net", qtype)
+		if got.Rcode != dns.RcodeNameError || len(got.Answer) != 0 {
+			t.Fatalf("anything but NXDOMAIN tells Firefox to go around this resolver: %v", got)
+		}
+	}
+	if up.queries.Load() != 0 {
+		t.Fatal("the answer must come from here, not from an upstream that would say yes")
+	}
+}

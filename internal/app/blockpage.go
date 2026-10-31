@@ -47,12 +47,14 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 		page.Device = firstNonEmpty(c.Label, c.Hostname, c.IP)
 	}
 	page.DeviceAddress = net.ParseIP(page.Device) != nil
-	if addr, ok := a.BlockGuard.AddrFor(client, host, now); ok {
-		port := ""
-		if _, p, err := net.SplitHostPort(a.Cfg.Snapshot().API.Listen); err == nil && p != "80" {
-			port = ":" + p
+	if base := a.adminBase(client, host); base != "" {
+		page.AdminURL = base + "/#/dnstools/" + host
+	}
+	if a.Unblock != nil {
+		page.Trusted = clientID != "" && a.Unblock.Trusted(clientID)
+		if r := a.Unblock.Status(clientID, host, now); r != nil {
+			page.Asked = string(r.State)
 		}
-		page.AdminURL = fmt.Sprintf("http://%s%s/#/dnstools/%s", addr, port, host)
 	}
 
 	out, err := a.DiagnoseDomain(ctx, host, clientID, false)
@@ -83,6 +85,7 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 	}
 	if match := a.Matcher.Lookup(host); match.Category != "" {
 		page.Category = blockpage.Sentence(match.Category)
+		page.Risky = match.Category == "malware" || match.Category == "phishing"
 	}
 	page.Stations = append(page.Stations, blockpage.Station{Title: "The site", Detail: "Never contacted", Class: "unreached"})
 	page.Copy = strings.TrimSpace(fmt.Sprintf("%s blocked by %s, rule %s, on %s, %s", host, page.Source, page.Rule, page.Device, page.When))

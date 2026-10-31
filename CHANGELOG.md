@@ -4,6 +4,54 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.36.0
+
+Orbis is now far easier to get around, it moves, and a blocked site can be asked for and opened in one
+tap.
+
+### Added
+- **Ask to unblock.** The block page has a button to ask for the site, with an optional note. Whoever
+  runs the network answers 1 hour, Today, Always or Deny from Needs you on the Overview, from
+  Protection, Requests, or from a one-tap link in a notification that needs no sign-in. The person
+  waiting does nothing: their page opens the site by itself, though a browser can take up to a minute
+  to let go of the old answer.
+- **Answer from your phone.** Protection, Requests sets up ntfy, a free push app with no account and
+  nothing opened on your network. Each request arrives with Allow 1 hour and Deny on the notification
+  itself. The buttons need the phone on home Wi-Fi or Tailscale.
+- **Trusted devices.** Mark your own devices under Protection, Requests and their block page offers
+  Unblock for an hour with no request.
+- **Approvals are their own thing.** Each one covers one device for a set time unless you say
+  otherwise, ends by itself, and can be ended early under Open right now. No blocklist is touched. A
+  site on a threat list takes a second tap and is limited to one device for a limited time.
+- **Why, in place.** A stopped row on the Overview or in the DNS log opens the decision in a drawer,
+  with Allow or Block right there and Undo afterwards.
+
+### Changed
+- **Six sections instead of 29 links:** Overview, Traffic, Devices, Protection, Network and System,
+  with each section's pages as tabs. A section remembers the tab you left it on, every old link still
+  works, and 1 to 6, the [ and ] keys and / move around without the mouse.
+- **Going back is instant.** The last eight pages stay ready, keeping their filters and scroll
+  position, and page code is fetched before you ask for it.
+- **It moves.** Pages slide the way the navigation is laid out, markers glide between tabs, numbers
+  run to their new value, new rows arrive, drawers and toasts come and go, and loading holds the shape
+  of the page. The Overview chart draws itself in, shows traffic travelling along its lines and keeps a
+  slow watch round the shield. All of it stops if your system asks for reduced motion.
+- **The Overview answers to the pointer.** Hovering a device or a stopped site lights it on the chart
+  and in the lists, rows carry Allow and Pause, the history has a value under the pointer and a range
+  to pick, and a device opens over the chart.
+
+### Fixed
+- **The block page could not appear on a device without the Orbis certificate.** Such a device was sent
+  the sinkhole, which also shut off plain http. It now fails HTTPS at once and keeps the page, so a
+  browser falling back from https shows it.
+- **Hosted apps crashed on a node with no storage devices.**
+- **Aggressive lists broke the Facebook app.** They block `b-graph.facebook.com`, the server the app
+  depends on, along with its fallback and live connection. Those three now have a built-in exception,
+  while Facebook's real trackers stay blocked.
+- **Orbis told Firefox it could skip the filter.** Firefox asks `use-application-dns.net` whether a
+  network allows encrypted DNS, and any answer, even a block, means yes. It now gets NXDOMAIN, the
+  agreed no, so Firefox stays on the network's resolver unless someone has forced it on.
+
 ## v1.35.0
 
 The interface is new, DNS is never stale, and the whole node does far less work. On the reference

@@ -76,6 +76,10 @@ func (s *Server) Start() error {
 	r.Get("/orbis-ca.crt", s.handleCACert)
 	r.Get("/orbis-ca.mobileconfig", s.handleCAMobileConfig)
 	r.Get("/setup", s.handleSetup)
+	// The link in a notification: its token is the authority for one request.
+	r.Get("/unblock/{id}", s.handleApproval)
+	r.Post("/unblock/{id}", s.handleApproval)
+	r.Get("/__orbis/{font}", func(w http.ResponseWriter, r *http.Request) { s.app.BlockPage.ServeHTTP(w, r) })
 
 	// Prometheus scrapes cannot present a session cookie, so /metrics sits
 	// outside the auth wrapper and is guarded by an optional bearer token.

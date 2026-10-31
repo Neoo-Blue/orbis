@@ -127,6 +127,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountOps(r)
 	s.mountGateway(r)
 	s.mountConsent(r)
+	s.mountUnblock(r)
 	s.mountDNSTools(r)
 	s.mountDNSRecords(r)
 	s.mountShortcuts(r)
@@ -1188,6 +1189,7 @@ func (s *Server) handleCAInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
+	s.forgiveCADownload(r)
 	if s.app.CA == nil {
 		http.Error(w, "no certificate authority", http.StatusServiceUnavailable)
 		return
@@ -1355,3 +1357,11 @@ func sanitizeFilename(s string) string {
 
 var _ = netip.Addr{}
 var _ = adblock.Match{}
+
+// forgiveCADownload starts a device over on HTTPS: it is about to trust the CA,
+// and the hour it was given up on should not stand in its way.
+func (s *Server) forgiveCADownload(r *http.Request) {
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil && s.app.BlockGuard != nil {
+		s.app.BlockGuard.Forgive(ap.Addr().Unmap())
+	}
+}

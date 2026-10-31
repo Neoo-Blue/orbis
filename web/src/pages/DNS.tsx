@@ -7,12 +7,14 @@ import { clientName, clock, compact, pct } from '../format'
 import type { Client, DNSQuery } from '../types'
 
 import { DNSRecordsCard } from './DNSRecords'
+import { WhyDrawer } from './Why'
 
 export function DNSPage() {
   const [query, setQuery] = useState('')
   const [blockedOnly, setBlockedOnly] = useState(false)
   const [clientId, setClientId] = useState('')
   const [paused, setPaused] = useState(false)
+  const [why, setWhy] = useState<{ name: string; client?: string } | null>(null)
   const [lookup, setLookup] = useState('')
   const [lookupResult, setLookupResult] = useState<Awaited<ReturnType<typeof api.adblock.check>> | null>(null)
   const debounced = useDebounced(query, 250)
@@ -185,6 +187,7 @@ export function DNSPage() {
           </Empty>
         ) : (
           <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 520px)', minHeight: 240 }}>
+            {why && <WhyDrawer name={why.name} clientId={why.client} onClose={() => setWhy(null)} />}
             <table className="t">
               <thead>
                 <tr>
@@ -201,7 +204,8 @@ export function DNSPage() {
                 {rows.map((q) => {
                   const c = q.client_id ? clientMap.get(q.client_id) : undefined
                   return (
-                    <tr key={`${q.ts}|${q.client_ip}|${q.qtype}|${q.name}`}>
+                    <tr key={`${q.ts}|${q.client_ip}|${q.qtype}|${q.name}`} className="clickable" title="See why"
+                      onClick={() => setWhy({ name: q.name, client: q.client_id })}>
                       <td className="mono" style={{ fontSize: 11, color: 'var(--text-faint)' }}>{clock(q.ts)}</td>
                       <td className="truncate" style={{ maxWidth: 140 }}>{c ? clientName(c) : q.client_ip}</td>
                       <td className="truncate mono" style={{ maxWidth: 300, fontSize: 11.5 }} title={q.name}>
@@ -218,7 +222,7 @@ export function DNSPage() {
                       </td>
                       <td>
                         {q.blocked
-                          ? <a className="tag block" href={`#/dnstools/${encodeURIComponent(q.name)}`} title={`${q.block_source}. See why`}>blocked</a>
+                          ? <span className="tag block" title={`${q.block_source}. See why`}>blocked</span>
                           : q.cached
                             ? <span className="tag" style={{ opacity: .65 }}>cached</span>
                             : <span className="tag" style={{ opacity: .65 }}>{q.rcode || 'ok'}</span>}

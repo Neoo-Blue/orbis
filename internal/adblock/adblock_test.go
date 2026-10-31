@@ -448,3 +448,23 @@ func TestListRowsChangingForcesARebuildAtBoot(t *testing.T) {
 		t.Fatal("a rebuild should clear the marker")
 	}
 }
+
+func TestAppServersWorkWhileTheirTrackersStayBlocked(t *testing.T) {
+	b := NewBuilder()
+	for _, d := range append([]string{"an.facebook.com", "pixel.facebook.com"}, essentialHosts...) {
+		b.AddBlock(d, "aggressive-list", "ads", false)
+	}
+	addEssentialHosts(b)
+	m := New()
+	m.Commit(b)
+	for _, d := range essentialHosts {
+		if m.Lookup(d).Blocked {
+			t.Errorf("%s is blocked, and the app stops working", d)
+		}
+	}
+	for _, d := range []string{"an.facebook.com", "pixel.facebook.com"} {
+		if !m.Lookup(d).Blocked {
+			t.Errorf("%s is a tracker and must stay blocked", d)
+		}
+	}
+}

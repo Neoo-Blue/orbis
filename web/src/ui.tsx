@@ -2,6 +2,7 @@ import {
   Children, cloneElement, createContext, isValidElement, useCallback, useContext, useEffect, useId, useMemo, useRef, useState,
   type ReactElement, type ReactNode,
 } from 'react'
+import { useThumb } from './motion'
 
 /* ---------- icons ----------
    Inline strokes rather than an icon package: eleven glyphs is not worth a
@@ -138,9 +139,12 @@ export function Stat({ label, value, sub, tone, spark }: {
 
 /** Sparkline draws a normalised polyline. Flat series are drawn as a centred
  *  line rather than collapsing to the baseline, which reads as "no data". */
-export function Sparkline({ points, tone, height = 34 }: {
+export function Sparkline({ points, tone, height = 34, readout }: {
   points: number[]; tone?: string; height?: number
+  /** Turns the line into something to read: a pointer shows the value there. */
+  readout?: (i: number) => string
 }) {
+  const [at, setAt] = useState<number | null>(null)
   const d = useMemo(() => {
     if (points.length < 2) return ''
     const max = Math.max(...points)
@@ -158,10 +162,27 @@ export function Sparkline({ points, tone, height = 34 }: {
   if (!d) return null
   const color = tone === 'red' ? 'var(--red)' : tone === 'amber' ? 'var(--amber)'
     : tone === 'blue' ? 'var(--blue)' : 'var(--accent)'
-  return (
+  const line = (
     <svg className="spark" viewBox={`0 0 100 ${height}`} preserveAspectRatio="none" style={{ marginTop: 8 }} aria-hidden="true">
       <path d={d} fill="none" stroke={color} strokeWidth={1.4} vectorEffect="non-scaling-stroke" opacity={0.85} />
     </svg>
+  )
+  if (!readout) return line
+  const x = at === null ? 0 : (at / (points.length - 1)) * 100
+  return (
+    <div className="spark-read" onPointerLeave={() => setAt(null)}
+      onPointerMove={(e) => {
+        const box = e.currentTarget.getBoundingClientRect()
+        setAt(Math.round(((e.clientX - box.left) / box.width) * (points.length - 1)))
+      }}>
+      {line}
+      {at !== null && (
+        <>
+          <i className="spark-cross" style={{ left: `${x}%` }} />
+          <span className="spark-value" style={{ left: `clamp(0px, calc(${x}% - 50px), calc(100% - 100px))` }}>{readout(at)}</span>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -223,8 +244,10 @@ function tagControl(node: ReactElement, id: string): ReactElement {
 export function Segmented<T extends string>({ value, options, onChange }: {
   value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void
 }) {
+  const thumb = useThumb<HTMLDivElement>(`${value}|${options.map((o) => o.label).join()}`)
   return (
-    <div className="segmented" role="group">
+    <div className="segmented" role="group" ref={thumb}>
+      <span className="thumb" aria-hidden="true" />
       {options.map((o) => (
         <button key={o.value} type="button" aria-pressed={value === o.value} onClick={() => onChange(o.value)}>
           {o.label}
@@ -273,6 +296,12 @@ export function Drawer({ title, onClose, children, actions }: {
 }) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const prevFocus = useRef<HTMLElement | null>(null)
+  // It leaves the way it came, then the parent removes it.
+  const [closing, setClosing] = useState(false)
+  const close = useCallback(() => {
+    setClosing(true)
+    setTimeout(onClose, 170)
+  }, [onClose])
 
   useEffect(() => {
     prevFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -284,19 +313,19 @@ export function Drawer({ title, onClose, children, actions }: {
   }, [])
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [close])
 
   return (
     <>
-      <div className="scrim" onClick={onClose} />
-      <aside className="drawer" role="dialog" aria-modal="true">
+      <div className={`scrim${closing ? ' closing' : ''}`} onClick={close} />
+      <aside className={`drawer${closing ? ' closing' : ''}`} role="dialog" aria-modal="true">
         <header className="drawer-head">
           <h2 style={{ flex: 1, fontSize: 14 }}>{title}</h2>
           {actions}
-          <button ref={closeRef} type="button" className="btn icon" onClick={onClose} aria-label="Close"><Icons.close /></button>
+          <button ref={closeRef} type="button" className="btn icon" onClick={close} aria-label="Close"><Icons.close /></button>
         </header>
         <div className="drawer-body">{children}</div>
       </aside>
@@ -414,6 +443,8 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
 
 export function Spinner() { return <span className="spinner" /> }
 
+/** Loading holds the shape of what is coming, so the page does not jump when
+ *  it arrives. */
 export function Loading({ what = 'data' }: { what?: string }) {
-  return <div className="empty"><Spinner /> <span style={{ marginLeft: 8 }}>Loading {what}…</span></div>
+  return <div className="skeleton" role="status" aria-label={`Loading ${what}`}><i /><i /><i /><i /></div>
 }

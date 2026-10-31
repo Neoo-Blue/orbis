@@ -37,6 +37,8 @@ type Hooks struct {
 	// BlockPageAddr returns the address that serves the block page to this
 	// client, or false when the client should get the plain sinkhole.
 	BlockPageAddr func(client netip.Addr, name string) (netip.Addr, bool)
+	// Granted reports an approved request covering this device and name.
+	Granted func(client netip.Addr, name string) bool
 }
 
 type Server struct {
@@ -373,7 +375,9 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	//    evaluated whether or not the blocklists are enabled, because they are
 	//    an operator decision rather than a subscription.
 	policy := s.policyFor(clientAddr)
-	if policy != nil && ScheduleActive(policy.Schedule, start) {
+	// The owner said yes to this, so nothing below gets to say no.
+	granted := s.hooks.Granted != nil && s.hooks.Granted(clientAddr, name)
+	if policy != nil && !granted && ScheduleActive(policy.Schedule, start) {
 		if svc, hit := MatchBlockedService(name, policy.BlockedServices); hit {
 			m := s.blockedReply(r, q, cfg, adblock.Match{
 				Blocked: true, Source: "policy:" + policy.Name, Rule: "service:" + svc,
@@ -415,11 +419,27 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	// 4. Block policy on the queried name. A client on an unfiltered policy
 	//    skips the subscriptions entirely (its own denylist was applied in
 	//    step 3's spirit by evaluateBlock; here nothing from a list applies).
-	unfiltered := policy != nil && policy.Unfiltered && ScheduleActive(policy.Schedule, start)
-	if unfiltered {
+	unfiltered := granted || (policy != nil && policy.Unfiltered && ScheduleActive(policy.Schedule, start))
+	if granted {
+		logEntry.BlockSource = "approved"
+	} else if unfiltered {
 		logEntry.BlockSource = "policy:" + policy.Name + ":unfiltered"
 	}
 	if cfg.AdBlock.Enabled && !unfiltered {
+		// Firefox asks this name whether it may send its lookups past this
+		// resolver. NXDOMAIN is the agreed no. Any answer, a block included,
+		// reads as yes and takes the browser out of filtering altogether.
+		if name == dohCanary {
+			m := &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeNameError}}
+			reply(m, r)
+			logEntry.Blocked = true
+			logEntry.BlockSource = "doh-canary"
+			logEntry.RCode = dns.RcodeToString[m.Rcode]
+			logEntry.LatencyMS = msSince(start)
+			s.stats.Blocked.Add(1)
+			s.finish(w, m, logEntry, cfg)
+			return
+		}
 		if match, blocked := s.evaluateBlock(name, clientAddr, cfg); blocked {
 			m := s.blockedReply(r, q, cfg, match, clientAddr)
 			logEntry.Blocked = true
@@ -491,7 +511,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	logEntry.RCode = dns.RcodeToString[resp.Rcode]
 	logEntry.LatencyMS = msSince(start)
 	logEntry.Answer = answerStrings(resp)
-	if m, code := s.countryBlocked(r, q, cfg, clientAddr, name, resp); m != nil {
+	if m, code := s.countryBlocked(r, q, cfg, clientAddr, name, resp); m != nil && !granted {
 		logEntry.Blocked, logEntry.BlockSource, logEntry.Answer = true, "country:"+code, answerStrings(m)
 		logEntry.RCode = dns.RcodeToString[m.Rcode]
 		s.stats.Blocked.Add(1)
@@ -508,6 +528,9 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 //
 // The stored OPT belongs to the conversation with the upstream, so the client
 // gets its own, and none at all if it did not offer EDNS (RFC 6891).
+// dohCanary is the name Firefox uses to ask a network about encrypted DNS.
+const dohCanary = "use-application-dns.net"
+
 func reply(m, r *dns.Msg) {
 	rcode := m.Rcode
 	m.SetReply(r)

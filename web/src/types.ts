@@ -389,6 +389,25 @@ export interface SystemStatus {
   ai: Record<string, unknown>
 }
 
+export interface UnblockRequest {
+  id: string
+  host: string
+  client_id: string
+  client_ip: string
+  device: string
+  note?: string
+  reason?: string
+  wants: number
+  why?: string
+  category?: string
+  risky?: boolean
+  asked: string
+  state: 'pending' | 'approved' | 'denied'
+  decided?: string
+  until?: string
+  everyone?: boolean
+}
+
 export interface GlobeArc {
   id: string
   client_id?: string
@@ -1111,7 +1130,7 @@ export interface LoungeDevice {
 
 export interface Webhook {
   name: string; enabled: boolean; url: string
-  format?: string; headers?: Record<string, string>
+  format?: string; headers?: Record<string, string>; only?: string
 }
 
 export interface NotifyConfig {

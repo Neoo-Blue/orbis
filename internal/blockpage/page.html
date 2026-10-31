@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#041c2f">
-<title>{{.Host}} stopped by Orbis</title>
+<title>{{if .Blocked}}{{.Host}} stopped by Orbis{{else}}Opening {{.Host}}{{end}}</title>
+{{if eq .Asked "pending"}}<noscript><meta http-equiv="refresh" content="8"></noscript>{{end}}
 <style nonce="{{.Nonce}}">
 @font-face { font-family: Geist; src: url(/__orbis/geist.woff2) format('woff2'); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: 'Geist Mono'; src: url(/__orbis/geist-mono.woff2) format('woff2'); font-weight: 100 900; font-display: swap; }
@@ -93,6 +94,44 @@ dd.code, .stop .code { font-family: var(--mono); font-size: 13px; font-variant-n
 .btn.primary:hover { background: #e6cc92; }
 .btn:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
 footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
+footer a { color: var(--dim); text-underline-offset: 3px; }
+.ask { flex-basis: auto; }
+.ask[open] { flex-basis: 100%; order: -1; }
+.ask summary { list-style: none; }
+.ask summary::-webkit-details-marker { display: none; }
+.ask[open] summary { display: none; }
+.ask-form { display: grid; gap: 16px; max-width: 540px; animation: unfold .3s var(--ease); }
+fieldset { border: 0; padding: 0; min-width: 0; display: grid; gap: 8px; }
+legend, .ask-form label.field { font-size: 14px; color: var(--dim); padding: 0; margin-bottom: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { position: relative; cursor: pointer; }
+.chip input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.chip span {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 15px; border-radius: 22px;
+  border: 1px solid var(--line-strong); font-size: 15px; color: var(--ivory);
+  transition: background .16s var(--ease), border-color .16s var(--ease), color .16s var(--ease), transform .12s var(--ease);
+}
+.chip:hover span { border-color: var(--brass); background: rgba(217, 188, 124, .08); }
+.chip:active span { transform: scale(.97); }
+.chip input:checked + span { background: var(--brass); border-color: var(--brass); color: var(--brass-ink); font-weight: 520; }
+.chip input:focus-visible + span { outline: 2px solid var(--brass); outline-offset: 3px; }
+.self { display: grid; gap: 10px; flex-basis: 100%; order: -1; }
+.self .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.self .lead { font-size: 15px; color: var(--dim); }
+.confirm { display: flex; align-items: center; gap: 10px; font-size: 14.5px; color: #f2b544; }
+.confirm input { width: 18px; height: 18px; accent-color: #f2b544; }
+.ask-form textarea {
+  width: 100%; min-height: 72px; padding: 10px 12px; resize: vertical; border-radius: 7px; border: 1px solid var(--line-strong);
+  background: transparent; color: var(--ivory); font: 400 16px/1.5 var(--sans); caret-color: var(--brass);
+}
+.ask-form textarea:focus { outline: 2px solid var(--brass); outline-offset: 1px; }
+.ask-form .row { display: flex; gap: 10px; }
+.ask-state { display: flex; align-items: center; gap: 12px; font-size: 16px; animation: unfold .3s var(--ease); }
+.ask-state i { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--brass); animation: wait 1.6s ease-in-out infinite; }
+.ask-state.yes i { background: #62d8b2; animation: none; }
+.ask-state.no i { background: var(--faint); animation: none; }
+@keyframes wait { 50% { opacity: .3; transform: scale(.75); } }
+@keyframes unfold { from { opacity: 0; transform: translateY(6px); } }
 .copy-buffer { position: fixed; opacity: 0; }
 
 @keyframes flare { 0% { transform: scale(1); opacity: .9; } 70%, 100% { transform: scale(2.6); opacity: 0; } }
@@ -113,6 +152,8 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
 }
 @media (prefers-reduced-motion: reduce) {
   .stop.decided .dot::after { animation: none; opacity: 0; }
+  .ask-form, .ask-state, .ask-state i { animation: none; }
+  .chip span { transition: none; }
 }
 </style>
 </head>
@@ -136,22 +177,68 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
     {{if .Category}}<dt>Category</dt><dd>{{.Category}}</dd>{{end}}
     <dt>When</dt><dd>{{.When}}</dd>
   </dl>
+  {{if .Problem}}<p class="ask-state no" role="alert"><i></i><span>{{.Problem}}</span></p>{{end}}
+  {{if eq .Asked "pending"}}<p class="ask-state" id="waiting" role="status"><i></i><span>Asked. Waiting for an answer. This page opens the site by itself.</span></p>
+  {{else if eq .Asked "denied"}}<p class="ask-state no" role="status"><i></i><span>Not approved this time. You can ask again.</span></p>{{end}}
   <div class="actions">
-    {{if .AdminURL}}<a class="btn primary" href="{{.AdminURL}}">Review in Orbis</a>{{end}}
+    {{if .Trusted}}
+    <form class="self" method="post" action="/__orbis/self">
+      <input type="hidden" name="back" value="{{.Path}}">
+      {{if .Risky}}<label class="confirm"><input type="checkbox" required> I know this site is on a threat list</label>{{end}}
+      <div class="row">
+        <span class="lead">Unblock for</span>
+        <button class="btn" name="minutes" value="15">15 minutes</button>
+        <button class="btn primary" name="minutes" value="60">1 hour</button>
+        <button class="btn" name="minutes" value="1440">Today</button>
+      </div>
+    </form>
+    {{else if ne .Asked "pending"}}
+    <details class="ask">
+      <summary class="btn primary">Ask to unblock</summary>
+      <form class="ask-form" method="post" action="/__orbis/ask">
+        <input type="hidden" name="back" value="{{.Path}}">
+        <fieldset>
+          <legend>What do you need it for?</legend>
+          <div class="chips">{{range .Reasons}}<label class="chip"><input type="radio" name="reason" value="{{.}}"><span>{{.}}</span></label>{{end}}</div>
+        </fieldset>
+        <fieldset>
+          <legend>For how long?</legend>
+          <div class="chips">{{range .Durations}}<label class="chip"><input type="radio" name="minutes" value="{{.Minutes}}"{{if .On}} checked{{end}}><span>{{.Label}}</span></label>{{end}}</div>
+        </fieldset>
+        <div>
+          <label class="field" for="note">Anything to add? Optional.</label>
+          <textarea id="note" name="note" maxlength="280"></textarea>
+        </div>
+        <div class="row"><button class="btn primary" type="submit">Send request</button></div>
+      </form>
+    </details>
+    {{end}}
     <button class="btn" id="back" type="button">Go back</button>
     <button class="btn" id="copy" type="button" data-copy="{{.Copy}}">Copy details</button>
   </div>
-  <footer>If this should be open, whoever runs this network can allow it in one step.</footer>
+  <footer>{{if .Trusted}}This device can unblock without asking. {{if .AdminURL}}<a href="{{.AdminURL}}">Review in Orbis</a>{{end}}{{else}}Whoever runs this network gets your request and can say yes in one tap.{{if .AdminURL}} <a href="{{.AdminURL}}">Run this network?</a>{{end}}{{end}}</footer>
   {{else}}
-  <p class="lede">Orbis no longer blocks this site. Your device is still remembering the old answer for a few seconds.</p>
-  <div class="actions"><button class="btn primary" id="reload" type="button">Try again</button></div>
+  <p class="lede">Orbis no longer blocks this site. Your browser can hold on to the old answer for up to a minute, so this page keeps trying and opens the site by itself.</p>
+  <div class="actions"><button class="btn primary" id="reload" type="button">Try again now</button></div>
   {{end}}
 </main>
 <script nonce="{{.Nonce}}">
 (function () {
   var back = document.getElementById('back'), copy = document.getElementById('copy'), reload = document.getElementById('reload');
   if (back) back.onclick = function () { history.length > 1 ? history.back() : (location.href = 'about:blank') };
-  if (reload) reload.onclick = function () { location.reload() };
+  if (reload) { reload.onclick = function () { location.reload() }; setTimeout(function () { location.reload() }, 5000) }
+
+  // Waiting. The answer comes through a reload, so a script call that fails
+  // only means reloading sooner.
+  var waiting = document.getElementById('waiting');
+  if (waiting) {
+    var check = setInterval(function () {
+      if (document.hidden) return;
+      fetch('/__orbis/ask').then(function (r) { return r.json() }).then(function (s) {
+        if (s.state !== 'pending') location.reload();
+      }).catch(function () { clearInterval(check); setTimeout(function () { location.reload() }, 6000) });
+    }, 3000);
+  }
   if (copy) copy.onclick = function () {
     var done = function () { copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = 'Copy details' }, 1800) };
     if (navigator.clipboard) { navigator.clipboard.writeText(copy.dataset.copy).then(done); return }
@@ -174,7 +261,7 @@ footer { font-size: 13.5px; color: var(--faint); max-width: 56ch; }
   var stops = [].slice.call(document.querySelectorAll('.stop')), route = document.querySelector('.route');
   var decided = stops.findIndex(function (s) { return s.classList.contains('decided') });
   var lit = 0;
-  if (route && decided > 0 && !still) route.classList.add('sync');
+  if (route && decided > 0 && !still && !waiting) route.classList.add('sync');
   function reached(e) {
     // Each station is lit once. The line keeps cycling; the words must not.
     while (lit <= decided && e >= lit / decided - .001) stops[lit++].classList.add('lit');

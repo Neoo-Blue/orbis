@@ -839,6 +839,48 @@ func (s *Store) countryTotals(since time.Time) ([]map[string]any, error) {
 	return out, rows.Err()
 }
 
+// FlowAddrTotal groups recent flows by endpoint pair so callers can attribute
+// traffic to zones without scanning individual rows outside the window.
+type FlowAddrTotal struct {
+	SrcIP   string
+	DstIP   string
+	Flows   int64
+	Bytes   int64
+	Blocked int64
+}
+
+// FlowAddrTotals sums flows since the given timestamp by (src_ip, dst_ip),
+// memoised for 30 s so polling the zone matrix never touches the whole table.
+func (s *Store) FlowAddrTotals(since time.Time) ([]FlowAddrTotal, error) {
+	v, err := s.aggregates.get("flowaddrs|"+window(since), 30*time.Second, func() (any, error) {
+		return s.flowAddrTotals(since)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]FlowAddrTotal), nil
+}
+
+func (s *Store) flowAddrTotals(since time.Time) ([]FlowAddrTotal, error) {
+	rows, err := s.db.Query(`SELECT src_ip, dst_ip, COUNT(*), COALESCE(SUM(bytes_in+bytes_out), 0),
+		COALESCE(SUM(CASE WHEN verdict='block' THEN 1 ELSE 0 END), 0)
+		FROM flows INDEXED BY idx_flows_started
+		WHERE started_at >= ? GROUP BY src_ip, dst_ip`, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FlowAddrTotal{}
+	for rows.Next() {
+		var t FlowAddrTotal
+		if err := rows.Scan(&t.SrcIP, &t.DstIP, &t.Flows, &t.Bytes, &t.Blocked); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // ---------- events ----------
 
 func (s *Store) AddEvent(e Event) error {

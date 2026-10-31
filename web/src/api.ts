@@ -1,7 +1,7 @@
 import type {
   AdCandidate, AIBrief, AIModelsStatus, AINote, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery, DNSShortcut, Health, ServiceBundle,
   Issue, IssuesResponse, Recommendation, ServiceDetail, ServiceDevice, ServicePoint, ServicesResponse, ServiceTotal,
-  EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule,
+  EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule, ZoneMatrixResponse,
   Summary, SysctlStatus, SystemStatus, TailscaleStatus, WGPeer,
   YouTubeStatus, DiscoveredScreen, LoungeDevice,
   NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
@@ -195,6 +195,7 @@ export const api = {
   },
 
   firewall: {
+    matrix: () => get<ZoneMatrixResponse>('/firewall/matrix'),
     rules: () => get<{ rules: Rule[] }>('/firewall/rules'),
     create: (rule: Partial<Rule>) => post<Rule>('/firewall/rules', rule),
     update: (id: string, rule: Partial<Rule>) => put<Rule>(`/firewall/rules/${id}`, rule),

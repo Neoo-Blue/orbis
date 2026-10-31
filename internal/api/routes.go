@@ -151,6 +151,7 @@ func (s *Server) mount(r chi.Router) {
 	s.mountUpdate(r)
 	s.mountSafety(r)
 	s.mountSimple(r)
+	s.mountConfigHistory(r)
 
 	r.Route("/chat", func(r chi.Router) {
 		r.Get("/conversations", s.handleConversations)
@@ -1313,50 +1314,7 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.app.Store.Audit(r.RemoteAddr, "config.patch", strings.Join(applied, ","), "", "", "ok")
-
-	// Some changes need a subsystem nudged rather than a restart.
-	for _, key := range applied {
-		switch {
-		case strings.HasPrefix(key, "adblock."):
-			if err := s.app.Lists.Rebuild(); err != nil {
-				s.app.Log("adblock: rebuild after config change: %v", err)
-			}
-			s.app.FlushDNSCache("")
-		case strings.HasPrefix(key, "dns.upstreams"), key == "dns.strategy":
-			if err := s.app.DNS.ReloadUpstreams(); err != nil {
-				s.app.Log("dns: reload upstreams: %v", err)
-			}
-		case strings.HasPrefix(key, "vpn."), strings.HasPrefix(key, "tailscale."),
-			key == "firewall.wan_interface":
-			// Anything that changes which interfaces carry tunnel traffic,
-			// or where it egresses, invalidates the tunnel ruleset.
-			s.app.SyncTunnelRules()
-		case strings.HasPrefix(key, "country."):
-			s.app.Country.Reconfigure()
-			go s.app.ReapplyThreatEnforcement()
-		case strings.HasPrefix(key, "wifi."):
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-				defer cancel()
-				if err := s.app.WiFi.Reconcile(ctx); err != nil {
-					s.app.Log("wifi: %v", err)
-				}
-			}()
-		case key == "discover.enabled", key == "discover.extra_ports":
-			s.app.Discover.RequestScan()
-		case strings.HasPrefix(key, "threat."):
-			s.app.Threat.Reconfigure()
-			if key == "threat.enabled" || key == "threat.block_inbound" || key == "threat.block_outbound" {
-				// The drop rules themselves live in the rendered rulesets.
-				go s.app.ReapplyThreatEnforcement()
-			}
-		case key == "ai.enabled", key == "ai.provider", key == "ai.api_key", key == "ai.base_url",
-			key == "ai.auto_discover":
-			// A new provider or key deserves a fresh ranking straight away
-			// rather than at the next scheduled probe.
-			s.app.AI.Router().RequestProbe()
-		}
-	}
+	s.app.ApplyConfigChanges(applied)
 	writeOK(w, map[string]any{"applied": applied, "config": s.cfg.Redacted()})
 }
 

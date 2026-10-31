@@ -19,6 +19,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/ai"
 	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/confighistory"
 	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/country"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
@@ -50,10 +51,11 @@ import (
 )
 
 type App struct {
-	Cfg   *config.Config
-	Store *store.Store
-	Geo   *geoip.Resolver
-	Self  *geoip.SelfLocator
+	Cfg     *config.Config
+	Store   *store.Store
+	History *confighistory.Manager
+	Geo     *geoip.Resolver
+	Self    *geoip.SelfLocator
 
 	Tracker   *flows.Tracker
 	Registry  *flows.ClientRegistry
@@ -195,6 +197,23 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		logRing:       ring,
 		interceptKick: make(chan struct{}, 1),
 	}
+
+	// The systemd unit runs with ProtectSystem=strict and only /var/lib/orbis
+	// writable, so configuration history must live under the store's directory.
+	historyDir := filepath.Join(filepath.Dir(cfg.Store.Path), "config-history")
+	cfg.SetHistoryDir(historyDir)
+	a.History = confighistory.New(historyDir, cfg, confighistory.Hooks{
+		OnApply: a.ApplyConfigChanges,
+		OnAutoRevert: func(restoredID, revertToID string, err error) {
+			if err != nil {
+				logf("confighistory: auto-revert from %s to %s failed: %v", restoredID, revertToID, err)
+				st.Audit("timer", "config.history.autorevert", restoredID, restoredID, revertToID, "error: "+err.Error())
+				return
+			}
+			logf("confighistory: unconfirmed restore %s reverted to %s", restoredID, revertToID)
+			st.Audit("timer", "config.history.autorevert", restoredID, restoredID, revertToID, "ok")
+		},
+	})
 
 	// Flow tracking.
 	flows.SetAppClassifier(dpi.ClassifyApp)
@@ -841,6 +860,9 @@ func (a *App) Start() {
 
 func (a *App) Stop() {
 	a.log("orbis: shutting down")
+	if a.History != nil {
+		a.History.Stop()
+	}
 	a.stop()
 	if a.MITM != nil {
 		a.MITM.Stop()

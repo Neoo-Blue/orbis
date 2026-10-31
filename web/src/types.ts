@@ -1471,3 +1471,36 @@ export interface SafetyStatus {
   config: { fallback_dns: string; lifeboat: boolean; hardware_watchdog: boolean; liveness_probe: boolean }
   last_episode?: { started: string; last_seen: string; reason: string; retries: number }
 }
+
+export interface ConfigHistoryEntry {
+  id: string
+  time: string
+  size: number
+  summary: string
+  keys: string[]
+  touches_network: boolean
+}
+
+export interface ConfigHistoryPending {
+  pending: boolean
+  id?: string
+  revert_to_id?: string
+  summary?: string
+  started_at?: string
+  expires_at?: string
+  remaining_seconds: number
+}
+
+export interface ConfigHistoryListResponse {
+  entries: ConfigHistoryEntry[]
+  pending: ConfigHistoryPending
+}
+
+export interface ConfigHistoryRestoreResult {
+  restored_id: string
+  backup_id: string
+  keys: string[]
+  summary: string
+  pending: ConfigHistoryPending
+  config: AppConfig
+}

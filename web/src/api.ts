@@ -12,7 +12,9 @@ import type {
   ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
   HostedResponse, StorageDevice, PortForward, RouterInfo,
   LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus, IDSStatus,
- UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus } from './types'
+  UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus,
+  ConfigHistoryListResponse, ConfigHistoryPending, ConfigHistoryRestoreResult,
+} from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -582,6 +584,24 @@ export const api = {
     patch: (body: Record<string, unknown>) =>
       patch<{ applied: string[]; config: AppConfig }>('/config', body),
     interfaces: () => get<{ interfaces: InterfaceInfo[] }>('/config/interfaces'),
+  },
+
+  configHistory: {
+    list: () => get<ConfigHistoryListResponse>('/config/history'),
+    get: (id: string) => get<{ id: string; yaml: string }>(`/config/history/${encodeURIComponent(id)}`),
+    diff: (id: string) => get<{ id: string; diff: string }>(`/config/history/${encodeURIComponent(id)}/diff`),
+    restore: (id: string, confirmSeconds = 0) =>
+      post<ConfigHistoryRestoreResult>(`/config/history/${encodeURIComponent(id)}/restore`, {
+        confirm_seconds: confirmSeconds,
+      }),
+    confirm: () =>
+      post<{ ok: boolean; confirmed_id: string; pending: ConfigHistoryPending }>('/config/history/confirm', {}),
+    revert: () =>
+      post<{ ok: boolean; reverted_to_id: string; pending: ConfigHistoryPending; config: AppConfig }>(
+        '/config/history/revert',
+        {},
+      ),
+    pending: () => get<ConfigHistoryPending>('/config/history/pending'),
   },
 }
 

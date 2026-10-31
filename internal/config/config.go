@@ -245,11 +245,14 @@ type DNSConfig struct {
 	// Upstreams accept plain (1.1.1.1:53), DoT (tls://1.1.1.1:853) and
 	// DoH (https://cloudflare-dns.com/dns-query) forms.
 	Upstreams []string `yaml:"upstreams" json:"upstreams"`
-	// Strategy: "parallel" races every upstream, "sequential" tries in order.
+	// Strategy: "parallel" races the fastest upstreams and brings in the rest
+	// when they fail or a negative answer needs a second opinion; "sequential"
+	// tries them in order.
 	Strategy  string `yaml:"strategy" json:"strategy"`
 	CacheSize int    `yaml:"cache_size" json:"cache_size"`
-	MinTTL    int    `yaml:"min_ttl" json:"min_ttl"`
-	MaxTTL    int    `yaml:"max_ttl" json:"max_ttl"`
+	// MaxTTL lowers long TTLs. There is deliberately no minimum: raising a
+	// TTL serves an answer after its owner said it may have changed.
+	MaxTTL int `yaml:"max_ttl" json:"max_ttl"`
 	// BlockTTL is the TTL handed out for sinkholed answers.
 	BlockTTL int `yaml:"block_ttl" json:"block_ttl"`
 	// SinkholeIPv4/6 are returned for blocked names. Empty => NXDOMAIN.
@@ -1107,7 +1110,6 @@ func Default() *Config {
 			Upstreams:    []string{"tls://1.1.1.1:853", "tls://9.9.9.9:853"},
 			Strategy:     "parallel",
 			CacheSize:    50000,
-			MinTTL:       60,
 			MaxTTL:       86400,
 			BlockTTL:     10,
 			SinkholeIPv4: "0.0.0.0",

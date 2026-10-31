@@ -617,7 +617,7 @@ export interface AppConfig {
   }
   dns: {
     enabled: boolean; listen: string[]; upstreams: string[]; strategy: string
-    cache_size: number; min_ttl: number; max_ttl: number; block_ttl: number
+    cache_size: number; max_ttl: number; block_ttl: number
     sinkhole_ipv4: string; sinkhole_ipv6: string; log_queries: boolean
     local_domain: string; block_ede: boolean
   }

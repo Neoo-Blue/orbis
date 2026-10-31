@@ -131,7 +131,7 @@ A Pi 4 runs the resolver for a household with room to spare. What maps to what:
 | Filter list subscriptions | Ad blocking, Lists (hosts, domain, dnsmasq and AdBlock syntax) |
 | Custom rules, `\|\|host^` and `@@` | Ad blocking, My rules, or a profile's deny and allow lists |
 | Clients with filtering disabled | The **Unfiltered** profile, assigned per device |
-| unbound or another DoT forwarder | `dns.upstreams` entries such as `tls://1.1.1.1:853`; `cache_size` and `min_ttl` are settings |
+| unbound or another DoT forwarder | `dns.upstreams` entries such as `tls://1.1.1.1:853`; `cache_size` and `max_ttl` are settings |
 | Port 53, admin UI on 80 | `dns.listen` and `api.listen`; the UI moves with `api.listen` |
 
 Stop the old resolver first: two services cannot share port 53, and the DNS page says so rather

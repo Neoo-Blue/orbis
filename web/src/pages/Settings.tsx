@@ -602,9 +602,6 @@ function DNSSection({ config, status, save, toast }: SectionProps) {
         <div className="grid c3">
           <NumberSetting label="Cache size" value={config.dns.cache_size} min={100} max={1000000} suffix="entries"
             onSave={(v) => save({ 'dns.cache_size': v })} />
-          <NumberSetting label="Minimum TTL" value={config.dns.min_ttl} min={0} max={86400} suffix="sec"
-            hint="Raises short TTLs to cut query volume."
-            onSave={(v) => save({ 'dns.min_ttl': v })} />
           <NumberSetting label="Maximum TTL" value={config.dns.max_ttl} min={60} max={604800} suffix="sec"
             hint="Caps long TTLs so a changed record is not stale for days."
             onSave={(v) => save({ 'dns.max_ttl': v })} />

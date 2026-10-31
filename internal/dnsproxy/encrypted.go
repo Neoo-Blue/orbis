@@ -257,9 +257,9 @@ type captureWriter struct {
 func (c *captureWriter) LocalAddr() net.Addr { return &net.UDPAddr{} }
 func (c *captureWriter) RemoteAddr() net.Addr {
 	if c.client.IsValid() {
-		return &net.UDPAddr{IP: c.client.AsSlice(), Port: 0}
+		return &net.TCPAddr{IP: c.client.AsSlice(), Port: 0}
 	}
-	return &net.UDPAddr{IP: net.IPv4zero}
+	return &net.TCPAddr{IP: net.IPv4zero}
 }
 func (c *captureWriter) WriteMsg(m *dns.Msg) error { c.msg = m; return nil }
 func (c *captureWriter) Write(b []byte) (int, error) {

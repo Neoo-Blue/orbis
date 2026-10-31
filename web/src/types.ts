@@ -396,6 +396,8 @@ export interface UnblockRequest {
   client_ip: string
   device: string
   note?: string
+  reason?: string
+  wants: number
   why?: string
   category?: string
   risky?: boolean

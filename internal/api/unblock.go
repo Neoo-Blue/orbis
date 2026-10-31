@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/app"
@@ -96,7 +97,12 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
-		minutes := map[string]int{"hour": 60, "day": 1440}[r.FormValue("for")]
+		// A link answers for a while, never for good: that takes the owner's
+		// own session.
+		minutes, err := strconv.Atoi(r.FormValue("minutes"))
+		if err != nil || (minutes != 15 && minutes != 1440) {
+			minutes = 60
+		}
 		got, err := s.app.DecideUnblock(id, r.FormValue("answer") == "allow", minutes, false, "notification link")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -105,7 +111,7 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 		req = got
 	}
 	blockpage.WriteApproval(w, blockpage.Approval{
-		Host: req.Host, Device: req.Device, Note: req.Note, Why: req.Why, Risky: req.Risky,
-		State: string(req.State), Token: token,
+		Host: req.Host, Device: req.Device, Note: req.Note, Reason: req.Reason, Why: req.Why, Risky: req.Risky,
+		State: string(req.State), Token: token, Minutes: req.Wants, Wants: app.HowLong(req.Wants),
 	})
 }

@@ -47,12 +47,15 @@ var (
 
 // Request is one ask and, once answered, the grant it became.
 type Request struct {
-	ID       string    `json:"id"`
-	Host     string    `json:"host"`
-	ClientID string    `json:"client_id"`
-	ClientIP string    `json:"client_ip"`
-	Device   string    `json:"device"`
-	Note     string    `json:"note,omitempty"`
+	ID       string `json:"id"`
+	Host     string `json:"host"`
+	ClientID string `json:"client_id"`
+	ClientIP string `json:"client_ip"`
+	Device   string `json:"device"`
+	Note     string `json:"note,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	// Wants is how long they asked for, in minutes; zero means for good.
+	Wants    int       `json:"wants"`
 	Why      string    `json:"why,omitempty"`
 	Category string    `json:"category,omitempty"`
 	Risky    bool      `json:"risky,omitempty"`

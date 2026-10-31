@@ -31,15 +31,15 @@ button.primary { background: #d9bc7c; border-color: #d9bc7c; color: #1b1608; }
 <main>
   <p class="who">{{.Device}} asks to open</p>
   <h1>{{.Host}}</h1>
+  {{if .Reason}}<p class="why">For {{.Reason}}, wants it {{.Wants}}.</p>{{else}}<p class="why">Wants it {{.Wants}}.</p>{{end}}
   {{if .Note}}<blockquote>{{.Note}}</blockquote>{{end}}
   {{if .Why}}<p class="why">{{.Why}}</p>{{end}}
   {{if eq .State "pending"}}
     {{if .Risky}}<p class="risk">This site is on a threat list. Allowing it lets this device reach it.</p>{{end}}
     <form method="post">
       <input type="hidden" name="t" value="{{.Token}}">
-      <button class="primary" name="answer" value="allow" formaction="?for=hour">Allow for 1 hour</button>
-      <button name="answer" value="allow" formaction="?for=day">Allow for today</button>
-      <button name="answer" value="deny">Deny</button>
+      {{range .Durations}}<button{{if .On}} class="primary"{{end}} name="answer" value="allow" formaction="?minutes={{.Minutes}}">Allow {{.Label}}</button>
+      {{end}}<button name="answer" value="deny">Deny</button>
     </form>
   {{else if eq .State "approved"}}<p class="done">Allowed. {{.Device}} can open it now.</p>
   {{else}}<p class="done">Not allowed.</p>{{end}}

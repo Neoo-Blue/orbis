@@ -136,7 +136,14 @@ func ntfyMessage(topicURL string, ev store.Event) (string, map[string]any, error
 		}
 		msg["priority"] = 4
 		msg["click"] = link + "?t=" + url.QueryEscape(token)
-		msg["actions"] = []map[string]any{answer("Allow 1 hour", "?for=hour", "answer=allow"), answer("Deny", "", "answer=deny")}
+		label, minutes := "Allow 1 hour", "60"
+		switch ev.Data["wants"] {
+		case 15:
+			label, minutes = "Allow 15 minutes", "15"
+		case 0, 1440:
+			label, minutes = "Allow today", "1440"
+		}
+		msg["actions"] = []map[string]any{answer(label, "?minutes="+minutes, "answer=allow"), answer("Deny", "", "answer=deny")}
 	}
 	return u.String(), msg, nil
 }

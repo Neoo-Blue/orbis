@@ -341,35 +341,38 @@ func askServer() (*Server, *[]string) {
 	calls := &[]string{}
 	s := testServer()
 	s.Claims = func(host string) bool { return host == "ads.example.com" }
-	s.Ask = func(host, note string, _ netip.Addr) (AskState, error) {
-		*calls = append(*calls, "ask:"+host+":"+note)
+	s.Ask = func(host string, f AskForm, _ netip.Addr) (AskState, error) {
+		*calls = append(*calls, fmt.Sprintf("ask:%s:%s:%s:%d", host, f.Reason, f.Note, f.Minutes))
 		return AskState{State: "pending"}, nil
 	}
 	s.Status = func(string, netip.Addr) AskState { return AskState{State: "approved"} }
-	s.Self = func(host string, _ netip.Addr) (AskState, error) {
-		*calls = append(*calls, "self:"+host)
+	s.Self = func(host string, minutes int, _ netip.Addr) (AskState, error) {
+		*calls = append(*calls, fmt.Sprintf("self:%s:%d", host, minutes))
 		return AskState{State: "approved"}, nil
 	}
 	return s, calls
 }
 
-func post(s *Server, path, host, origin, contentType, body string) *httptest.ResponseRecorder {
+func post(s *Server, path, host, origin, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	r.Host = host
 	if origin != "" {
 		r.Header.Set("Origin", origin)
 	}
-	r.Header.Set("Content-Type", contentType)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	return w
 }
 
-func TestThePageCanAskForItself(t *testing.T) {
+func TestTheFormAsksAndReturnsToThePage(t *testing.T) {
 	s, calls := askServer()
-	w := post(s, "/__orbis/ask", "ads.example.com", "http://ads.example.com", "application/json", `{"note":"homework"}`)
-	if w.Code != http.StatusOK || len(*calls) != 1 || (*calls)[0] != "ask:ads.example.com:homework" {
-		t.Fatalf("code %d, calls %v", w.Code, *calls)
+	w := post(s, "/__orbis/ask", "ads.example.com", "http://ads.example.com", "reason=Work&minutes=15&note=homework&back=%2Fa%3Fb%3D1")
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/a?b=1" {
+		t.Fatalf("code %d, location %q", w.Code, w.Header().Get("Location"))
+	}
+	if len(*calls) != 1 || (*calls)[0] != "ask:ads.example.com:Work:homework:15" {
+		t.Fatalf("calls %v", *calls)
 	}
 	r := httptest.NewRequest(http.MethodGet, "/__orbis/ask", nil)
 	r.Host = "ads.example.com"
@@ -380,17 +383,40 @@ func TestThePageCanAskForItself(t *testing.T) {
 	}
 }
 
+func TestOnlyWhatIsOfferedCanBeAskedFor(t *testing.T) {
+	s, calls := askServer()
+	post(s, "/__orbis/ask", "ads.example.com", "http://ads.example.com", "reason=made+up&minutes=99999")
+	if (*calls)[0] != "ask:ads.example.com:::60" {
+		t.Fatalf("calls %v", *calls)
+	}
+	post(s, "/__orbis/self", "ads.example.com", "http://ads.example.com", "minutes=0")
+	if (*calls)[1] != "self:ads.example.com:60" {
+		t.Fatalf("a trusted device must not open a site for good from the page: %v", *calls)
+	}
+}
+
+func TestTheReturnAddressStaysOnThisSite(t *testing.T) {
+	for raw, want := range map[string]string{
+		"/a/b?c=1": "/a/b?c=1", "": "/", "https://evil.example/": "/", "//evil.example": "/",
+		"javascript:alert(1)": "/", "/__orbis/ask": "/",
+	} {
+		if got := backPath(raw); got != want {
+			t.Errorf("%q = %q", raw, got)
+		}
+	}
+}
+
 func TestAnotherPageCannotAskOrUnblock(t *testing.T) {
 	s, calls := askServer()
-	for _, tc := range []struct{ path, host, origin, ctype string }{
-		{"/__orbis/ask", "ads.example.com", "http://evil.example", "application/json"},
-		{"/__orbis/ask", "ads.example.com", "", "application/json"},
-		{"/__orbis/ask", "ads.example.com", "http://ads.example.com", "text/plain"},
-		{"/__orbis/self", "ads.example.com", "http://evil.example", "application/json"},
-		{"/__orbis/ask", "not-claimed.example", "http://not-claimed.example", "application/json"},
+	for _, tc := range []struct{ path, host, origin string }{
+		{"/__orbis/ask", "ads.example.com", "http://evil.example"},
+		{"/__orbis/ask", "ads.example.com", ""},
+		{"/__orbis/ask", "ads.example.com", "null"},
+		{"/__orbis/self", "ads.example.com", "http://evil.example"},
+		{"/__orbis/ask", "not-claimed.example", "http://not-claimed.example"},
 	} {
-		if w := post(s, tc.path, tc.host, tc.origin, tc.ctype, "{}"); w.Code == http.StatusOK {
-			t.Errorf("%+v went through", tc)
+		if w := post(s, tc.path, tc.host, tc.origin, "minutes=60"); w.Code < 400 {
+			t.Errorf("%+v went through with %d", tc, w.Code)
 		}
 	}
 	if len(*calls) != 0 {
@@ -398,14 +424,34 @@ func TestAnotherPageCannotAskOrUnblock(t *testing.T) {
 	}
 }
 
+func TestThePageOffersReasonsAndTimes(t *testing.T) {
+	body := get(testServer(), "ads.example.com", map[string]string{"Sec-Fetch-Dest": "document"}).Body.String()
+	for _, want := range []string{`action="/__orbis/ask"`, "Blocked by mistake", "15 minutes", "Today", "Always", `value="60" checked`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q", want)
+		}
+	}
+}
+
+func TestAThreatSiteIsNotOfferedForGood(t *testing.T) {
+	s := testServer()
+	s.Explain = func(_ context.Context, host string, _ netip.Addr) Page {
+		return Page{Host: host, Blocked: true, Risky: true, When: "now"}
+	}
+	body := get(s, "bad.example", map[string]string{"Sec-Fetch-Dest": "document"}).Body.String()
+	if strings.Contains(body, "<span>Always</span>") {
+		t.Fatal("always should not be offered for a site on a threat list")
+	}
+}
+
 func TestTheApprovalPageCarriesNothingUnescaped(t *testing.T) {
 	w := httptest.NewRecorder()
-	WriteApproval(w, Approval{Host: "a.example", Device: "<b>phone</b>", Note: `"><script>alert(1)</script>`, State: "pending", Token: "tok"})
+	WriteApproval(w, Approval{Host: "a.example", Device: "<b>phone</b>", Note: `"><script>alert(1)</script>`, State: "pending", Token: "tok", Minutes: 15, Wants: "for 15 minutes"})
 	body := w.Body.String()
 	if strings.Contains(body, "<script>alert") || strings.Contains(body, "<b>phone") {
 		t.Fatal("a guest's note reached the owner's page unescaped")
 	}
-	if !strings.Contains(body, "Allow for 1 hour") || !strings.Contains(w.Header().Get("Referrer-Policy"), "no-referrer") {
+	if !strings.Contains(body, "Allow 15 minutes") || !strings.Contains(w.Header().Get("Referrer-Policy"), "no-referrer") {
 		t.Fatalf("referrer %q", w.Header().Get("Referrer-Policy"))
 	}
 }

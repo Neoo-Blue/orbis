@@ -19,8 +19,18 @@ import (
 // the owner's own rules, with the list in front of them.
 var ErrTooBroad = errors.New("a site on a threat list can only be allowed for this device, for a limited time")
 
-// selfUnblockFor is how long a trusted device's one tap lasts.
-const selfUnblockFor = time.Hour
+// HowLong puts a request's length into words.
+func HowLong(minutes int) string {
+	switch minutes {
+	case 0:
+		return "always"
+	case 15:
+		return "for 15 minutes"
+	case 1440:
+		return "for today"
+	}
+	return "for 1 hour"
+}
 
 // adminBase is this node's interface, as this client reaches it.
 func (a *App) adminBase(client netip.Addr, host string) string {
@@ -35,12 +45,13 @@ func (a *App) adminBase(client netip.Addr, host string) string {
 	return fmt.Sprintf("http://%s%s", addr, port)
 }
 
-func (a *App) unblockRequest(host, note string, client netip.Addr) unblock.Request {
+func (a *App) unblockRequest(host string, form blockpage.AskForm, client netip.Addr) unblock.Request {
 	page := a.explainBlock(context.Background(), host, client)
 	clientID, _ := a.clientForAddr(client)
 	return unblock.Request{
 		Host: host, ClientID: clientID, ClientIP: client.String(), Device: firstNonEmpty(page.Device, client.String()),
-		Note: strings.Join(strings.Fields(note), " "), Why: page.Why, Category: page.Category, Risky: page.Risky,
+		Note: strings.Join(strings.Fields(form.Note), " "), Reason: form.Reason, Wants: form.Minutes,
+		Why: page.Why, Category: page.Category, Risky: page.Risky,
 	}
 }
 
@@ -52,21 +63,24 @@ func askState(r *unblock.Request) blockpage.AskState {
 }
 
 // AskUnblock records a request from the block page and tells the owner.
-func (a *App) AskUnblock(host, note string, client netip.Addr) (blockpage.AskState, error) {
-	r, isNew, err := a.Unblock.Ask(a.unblockRequest(host, note, client), time.Now())
+func (a *App) AskUnblock(host string, form blockpage.AskForm, client netip.Addr) (blockpage.AskState, error) {
+	r, isNew, err := a.Unblock.Ask(a.unblockRequest(host, form, client), time.Now())
 	if err != nil {
 		return blockpage.AskState{}, err
 	}
 	if isNew {
-		detail := r.Why
+		detail := fmt.Sprintf("Wants it %s.\n%s", HowLong(r.Wants), r.Why)
+		if r.Reason != "" {
+			detail = fmt.Sprintf("For %s, wants it %s.\n%s", r.Reason, HowLong(r.Wants), r.Why)
+		}
 		if r.Note != "" {
-			detail = fmt.Sprintf("They say: %s\n%s", r.Note, r.Why)
+			detail = fmt.Sprintf("They say: %s\n%s", r.Note, detail)
 		}
 		data := map[string]any{}
 		if base := a.adminBase(client, host); base != "" {
 			link := fmt.Sprintf("%s/unblock/%s", base, r.ID)
 			detail += fmt.Sprintf("\nAnswer in one tap: %s?t=%s", link, a.Unblock.Token(r.ID))
-			data["approve_url"], data["token"] = link, a.Unblock.Token(r.ID)
+			data["approve_url"], data["token"], data["wants"] = link, a.Unblock.Token(r.ID), r.Wants
 		}
 		a.emit(store.Event{Severity: store.SevWarning, Category: "unblock", ClientID: r.ClientID,
 			Title: fmt.Sprintf("%s asks to open %s", r.Device, r.Host), Detail: detail, Data: data})
@@ -82,12 +96,12 @@ func (a *App) AskStatus(host string, client netip.Addr) blockpage.AskState {
 }
 
 // SelfUnblock opens a name for a trusted device without asking anyone.
-func (a *App) SelfUnblock(host string, client netip.Addr) (blockpage.AskState, error) {
+func (a *App) SelfUnblock(host string, minutes int, client netip.Addr) (blockpage.AskState, error) {
 	clientID, _ := a.clientForAddr(client)
 	if clientID == "" || !a.Unblock.Trusted(clientID) {
 		return blockpage.AskState{}, errors.New("this device is not trusted to unblock")
 	}
-	r, err := a.Unblock.Grant(a.unblockRequest(host, "", client), selfUnblockFor, time.Now())
+	r, err := a.Unblock.Grant(a.unblockRequest(host, blockpage.AskForm{Minutes: minutes}, client), time.Duration(minutes)*time.Minute, time.Now())
 	if err != nil {
 		return blockpage.AskState{}, err
 	}

@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -87,11 +88,57 @@ type Page struct {
 	Risky bool
 	// Asked is where this device's request stands, if it made one.
 	Asked string
+	// Path is where the visitor was going, so an answer brings them back to it.
+	Path string
+	// Problem is why the last thing they tried did not work.
+	Problem string
+	// Reasons and Durations are what the form offers.
+	Reasons   []string
+	Durations []Duration
 }
 
 // AskState is what the page learns about its request.
 type AskState struct {
 	State string `json:"state"`
+}
+
+// AskForm is what someone filled in.
+type AskForm struct {
+	Reason  string
+	Note    string
+	Minutes int
+}
+
+// Duration is a length of time on offer.
+type Duration struct {
+	Minutes int
+	Label   string
+	On      bool
+}
+
+// reasons are offered so asking takes one tap and reads the same every time.
+var reasons = []string{"Work", "School", "Shopping or banking", "Blocked by mistake", "Something else"}
+
+// durations are the temporary options. Asking for good is offered only for a
+// site that is not on a threat list.
+func durations(risky bool) []Duration {
+	out := []Duration{{15, "15 minutes", false}, {60, "1 hour", true}, {1440, "Today", false}}
+	if !risky {
+		out = append(out, Duration{0, "Always", false})
+	}
+	return out
+}
+
+func minutesFrom(raw string, allowForever bool) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 60
+	}
+	switch {
+	case n == 15, n == 60, n == 1440, n == 0 && allowForever:
+		return n
+	}
+	return 60
 }
 
 // Server answers on port 443 and on whatever serves port 80.
@@ -104,9 +151,9 @@ type Server struct {
 	Allow func(client netip.Addr) bool
 	// Ask, Status and Self are the page's way to the owner: request the site,
 	// see the answer, and for a trusted device open it without asking.
-	Ask    func(host, note string, client netip.Addr) (AskState, error)
+	Ask    func(host string, form AskForm, client netip.Addr) (AskState, error)
 	Status func(host string, client netip.Addr) AskState
-	Self   func(host string, client netip.Addr) (AskState, error)
+	Self   func(host string, minutes int, client netip.Addr) (AskState, error)
 	// Leaf mints a certificate for a name from the Orbis CA.
 	Leaf func(host string) (*tls.Certificate, error)
 	// Guard learns which devices can show the page over HTTPS.
@@ -206,8 +253,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	s.render(w, r, client, r.URL.RequestURI(), "")
+}
+
+func (s *Server) render(w http.ResponseWriter, r *http.Request, client netip.Addr, path, problem string) {
 	page := s.Explain(r.Context(), hostOnly(r.Host), client)
 	page.Nonce = nonce()
+	page.Path, page.Problem = path, problem
+	page.Reasons, page.Durations = reasons, durations(page.Risky)
 	page.HostParts, page.Long = breakable(page.Host), len(page.Host) > 26
 	var body bytes.Buffer
 	if err := pageTemplate.Execute(&body, page); err != nil {
@@ -216,75 +269,101 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+page.Nonce+"'; script-src 'nonce-"+page.Nonce+"'; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+page.Nonce+"'; script-src 'nonce-"+page.Nonce+"'; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Referrer-Policy", "no-referrer")
+	// same-origin, not no-referrer: that would send the form with Origin: null.
+	h.Set("Referrer-Policy", "same-origin")
 	if page.Blocked {
 		w.WriteHeader(http.StatusForbidden)
 	}
 	_, _ = w.Write(body.Bytes())
 }
 
-// serveAsk is the page talking to its node. Asking only ever reaches the owner,
-// and the owner still decides, but a request is a notification on someone's
-// phone, so it has to come from this page and not from one elsewhere.
+// serveAsk takes the page's forms. They are real form posts and not script
+// calls, because a form is a navigation: a browser extension, a script error or
+// a blip in the connection cannot quietly swallow it, and it works with
+// JavaScript off. A request still becomes a notification on someone's phone, so
+// it has to come from this page and not from one elsewhere.
 func (s *Server) serveAsk(w http.ResponseWriter, r *http.Request, client netip.Addr) {
 	host := hostOnly(r.Host)
-	h := w.Header()
-	h.Set("Cache-Control", "no-store")
-	h.Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	if s.Ask == nil || s.Status == nil || s.Self == nil || (s.Claims != nil && !s.Claims(host)) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	var state AskState
-	var err error
-	switch {
-	case r.Method == http.MethodGet:
-		state = s.Status(host, client)
-	case r.Method != http.MethodPost || !sameOrigin(r):
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(s.Status(host, client))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if r.Method != http.MethodPost || !sameOrigin(r) || r.ParseForm() != nil {
 		w.WriteHeader(http.StatusForbidden)
 		return
-	case r.URL.Path == "/__orbis/self":
-		state, err = s.Self(host, client)
-	default:
-		var body struct {
-			Note string `json:"note"`
-		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body) != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		state, err = s.Ask(host, body.Note, client)
+	}
+	back := backPath(r.PostFormValue("back"))
+	var err error
+	if r.URL.Path == "/__orbis/self" {
+		_, err = s.Self(host, minutesFrom(r.PostFormValue("minutes"), false), client)
+	} else {
+		_, err = s.Ask(host, AskForm{
+			Reason:  offered(r.PostFormValue("reason")),
+			Note:    r.PostFormValue("note"),
+			Minutes: minutesFrom(r.PostFormValue("minutes"), true),
+		}, client)
 	}
 	if err != nil {
-		w.WriteHeader(http.StatusTooManyRequests)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		w.Header().Set("Referrer-Policy", "same-origin")
+		s.render(w, r, client, back, err.Error())
 		return
 	}
-	_ = json.NewEncoder(w).Encode(state)
+	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
-// sameOrigin holds a POST to this page's own origin. JSON makes a cross-site
-// request preflight, which nothing here answers, and Origin must name this host.
-func sameOrigin(r *http.Request) bool {
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-		return false
+func offered(reason string) string {
+	for _, x := range reasons {
+		if x == reason {
+			return x
+		}
 	}
-	origin, err := url.Parse(r.Header.Get("Origin"))
-	return err == nil && origin.Host != "" && origin.Host == r.Host
+	return ""
+}
+
+// backPath keeps a return address on this site. Only the path survives, so the
+// field cannot send anyone anywhere else.
+func backPath(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host != "" || u.Scheme != "" || !strings.HasPrefix(u.Path, "/") ||
+		strings.HasPrefix(u.Path, "//") || strings.HasPrefix(u.Path, "/__orbis") {
+		return "/"
+	}
+	return u.RequestURI()
+}
+
+// sameOrigin holds a form to this page's own origin.
+func sameOrigin(r *http.Request) bool {
+	from := r.Header.Get("Origin")
+	if from == "" || from == "null" {
+		from = r.Header.Get("Referer")
+	}
+	u, err := url.Parse(from)
+	return err == nil && u.Host != "" && u.Host == r.Host
 }
 
 // Approval is the page behind a one-tap link.
 type Approval struct {
-	Host, Device, Note, Why, State, Token string
-	Risky                                 bool
-	Nonce                                 string
+	Host, Device, Note, Reason, Why, State, Token, Wants string
+	Risky                                                bool
+	Nonce                                                string
+	// Minutes is what they asked for, and Durations what can be given by link.
+	Minutes   int
+	Durations []Duration
 }
 
 // WriteApproval renders it.
 func WriteApproval(w http.ResponseWriter, a Approval) {
 	a.Nonce = nonce()
+	a.Durations = []Duration{{15, "15 minutes", a.Minutes == 15}, {60, "1 hour", a.Minutes == 60 || a.Minutes == 0}, {1440, "Today", a.Minutes == 1440}}
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Type", "text/html; charset=utf-8")
@@ -473,8 +552,14 @@ func (g *Guard) remember(name string, now time.Time) bool {
 func (g *Guard) Pointed(name string, now time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	at, ok := g.pointed[nameKey(name)]
-	return ok && now.Sub(at) < pointedFor
+	key := nameKey(name)
+	at, ok := g.pointed[key]
+	if !ok || now.Sub(at) >= pointedFor {
+		return false
+	}
+	// Someone waiting on the page should not lose it while they wait.
+	g.pointed[key] = now
+	return true
 }
 
 // Note records how a TLS connection from a client ended.

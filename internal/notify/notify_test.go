@@ -25,7 +25,7 @@ func TestARequestReachesAPhoneWithItsButtons(t *testing.T) {
 	n := New(config.Default(), func(string, ...any) {})
 	err := n.postWebhook(t.Context(), config.Webhook{URL: srv.URL + "/orbis-topic", Format: "ntfy"}, store.Event{
 		Title: "Guest phone asks to open site.example", Detail: "They say: homework\nAnswer in one tap: http://node/unblock/abc?t=tok",
-		Data: map[string]any{"approve_url": "http://node/unblock/abc", "token": "tok"},
+		Data: map[string]any{"approve_url": "http://node/unblock/abc", "token": "tok", "wants": 15},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestARequestReachesAPhoneWithItsButtons(t *testing.T) {
 		t.Fatalf("actions %v", actions)
 	}
 	allow := actions[0].(map[string]any)
-	if allow["url"] != "http://node/unblock/abc?for=hour" || allow["body"] != "answer=allow&t=tok" {
+	if allow["label"] != "Allow 15 minutes" || allow["url"] != "http://node/unblock/abc?minutes=15" || allow["body"] != "answer=allow&t=tok" {
 		t.Fatalf("allow %v", allow)
 	}
 }

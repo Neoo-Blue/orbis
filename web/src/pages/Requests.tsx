@@ -6,7 +6,7 @@ import { useLiveBatch } from '../live'
 import { Card, CopyButton, Empty, Loading, Switch, useToast } from '../ui'
 import type { UnblockRequest } from '../types'
 
-const HOUR = 60, DAY = 1440
+const QUARTER = 15, HOUR = 60, DAY = 1440
 const PHONE = 'Phone'
 
 function until(r: UnblockRequest) {
@@ -20,28 +20,37 @@ export function useUnblock() {
   return state
 }
 
-/** One ask. It is answered here, in place, in one tap. */
+function howLong(minutes: number) {
+  return minutes === 0 ? 'always' : minutes === 15 ? 'for 15 minutes' : minutes === 1440 ? 'for today' : 'for 1 hour'
+}
+
+/** One ask. It is answered here, in place, in one tap, and what they asked for
+ *  is the button that stands out. */
 export function RequestRow({ r, onDone }: { r: UnblockRequest; onDone: () => void }) {
   const toast = useToast()
-  const answer = async (allow: boolean, minutes: number, everyone: boolean, done: string) => {
+  const answer = async (allow: boolean, minutes: number, done: string) => {
     try {
-      await api.unblock.decide(r.id, { allow, minutes, everyone })
+      await api.unblock.decide(r.id, { allow, minutes, everyone: false })
       toast(done, allow ? 'ok' : 'info')
       onDone()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not answer that', 'err')
     }
   }
+  const options = [{ minutes: QUARTER, label: '15 min' }, { minutes: HOUR, label: '1 hour' }, { minutes: DAY, label: 'Today' }]
+  if (!r.risky) options.push({ minutes: 0, label: 'Always' })
+  const wants = r.risky && r.wants === 0 ? HOUR : r.wants
   return (
     <div className="request">
       <div className="request-title"><b>{r.device}</b> asks for <span className="mono">{r.host}</span></div>
-      {r.note && <div className="request-note">{r.note}</div>}
+      <div className="request-note">{r.reason ? `${r.reason}, ${howLong(r.wants)}` : `Wants it ${howLong(r.wants)}`}{r.note ? `. ${r.note}` : ''}</div>
       <div className={`request-why${r.risky ? ' risky' : ''}`}>{r.risky ? `On a threat list. ${r.why ?? ''}` : r.why}</div>
       <div className="request-acts">
-        <button className="btn sm primary" onClick={() => void answer(true, HOUR, false, `${r.device} can open ${r.host} for an hour`)}>1 hour</button>
-        <button className="btn sm" onClick={() => void answer(true, DAY, false, `${r.device} can open ${r.host} today`)}>Today</button>
-        {!r.risky && <button className="btn sm" onClick={() => void answer(true, 0, false, `${r.device} can always open ${r.host}`)}>Always</button>}
-        <button className="btn sm" onClick={() => void answer(false, 0, false, `Said no to ${r.device}`)}>Deny</button>
+        {options.map((o) => (
+          <button key={o.minutes} className={`btn sm${o.minutes === wants ? ' primary' : ''}`}
+            onClick={() => void answer(true, o.minutes, `${r.device} can open ${r.host} ${howLong(o.minutes)}`)}>{o.label}</button>
+        ))}
+        <button className="btn sm" onClick={() => void answer(false, 0, `Said no to ${r.device}`)}>Deny</button>
       </div>
     </div>
   )

@@ -69,3 +69,36 @@ func TestAWebhookCanHearOnlyOneCategory(t *testing.T) {
 		t.Fatal("another category got through")
 	}
 }
+
+func TestWhatGuestsTypeCannotPingOrPoseAsALink(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+	}))
+	defer srv.Close()
+	n := New(config.Default(), func(string, ...any) {})
+	ev := store.Event{Severity: "warning", Title: "Phone asks", Detail: "<!channel> <http://evil|Answer> [Answer](http://evil)"}
+
+	if err := n.postWebhook(t.Context(), config.Webhook{URL: srv.URL, Format: "slack"}, ev); err != nil {
+		t.Fatal(err)
+	}
+	if text := got["text"].(string); strings.Contains(text, "<") {
+		t.Errorf("slack: %s", text)
+	}
+	if err := n.postWebhook(t.Context(), config.Webhook{URL: srv.URL, Format: "discord"}, ev); err != nil {
+		t.Fatal(err)
+	}
+	if content := got["content"].(string); strings.Contains(content, "](") {
+		t.Errorf("discord: %s", content)
+	}
+	if got["allowed_mentions"] == nil {
+		t.Error("discord could ping everyone")
+	}
+}
+
+func TestAHostnameCannotAddMailHeaders(t *testing.T) {
+	got := mailSubject(store.Event{Severity: "warning", Title: "Dad's iPhone\r\nX-Injected: yes\r\n\r\nFORGED asks"})
+	if strings.ContainsAny(got, "\r\n") {
+		t.Fatalf("%q", got)
+	}
+}

@@ -258,7 +258,12 @@ func (b *Builder) AddBlockImportant(domain, source, category string, wildcard, i
 	if id, ok := set.find(h); ok {
 		old := b.idx.entries[id]
 		e.important = important || old.important
-		if old.source > source && !isLocalSource(source) {
+		keepOld := old.source > source && !isLocalSource(source)
+		// A threat list outranks the rest, or a name on both reads as an ad.
+		if oldThreat := threatCategory(old.category); oldThreat != threatCategory(category) {
+			keepOld = oldThreat
+		}
+		if keepOld {
 			e.source, e.category = old.source, old.category
 		}
 	}
@@ -433,6 +438,41 @@ func lookupIn(idx *index, d string) (Match, bool) {
 		return *block, true
 	}
 	return Match{}, false
+}
+
+// threatCategory marks lists whose names can hurt someone who opens them, or
+// would take a device out of filtering altogether.
+func threatCategory(c string) bool {
+	return c == "malware" || c == "phishing" || c == "bypass"
+}
+
+// Threat reports whether any rule puts a name on a threat list, not only the
+// rule Lookup settles on: an exact entry on an ad list hides a wildcard from a
+// malware list.
+func (m *Matcher) Threat(domain string) bool {
+	d := normalize(domain)
+	if d == "" {
+		return false
+	}
+	for _, idx := range []*index{m.overlay.Load(), m.idx.Load()} {
+		if r, ok := lookupIn(idx, d); ok && threatCategory(r.Category) {
+			return true
+		}
+		if id, ok := idx.exact.find(hashDomain(d)); ok && threatCategory(idx.entries[id].category) {
+			return true
+		}
+		for name := d; ; {
+			if id, ok := idx.wildcard.find(hashDomain(name)); ok && threatCategory(idx.entries[id].category) {
+				return true
+			}
+			dot := strings.IndexByte(name, '.')
+			if dot < 0 {
+				break
+			}
+			name = name[dot+1:]
+		}
+	}
+	return false
 }
 
 // LookupChain applies the matcher to a full CNAME chain. First-party CNAME

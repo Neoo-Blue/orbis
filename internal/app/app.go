@@ -573,6 +573,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	if a.CA != nil {
 		a.BlockPage.Leaf = a.CA.Leaf
 	}
+	a.Unblock.Threat = a.Matcher.Threat
 	a.DNS = dnsproxy.New(cfg, st, a.Matcher, dnsproxy.Hooks{
 		OnAnswer:     a.Tracker.NoteHostname,
 		OnQuery:      a.onDNSQuery,
@@ -1188,6 +1189,12 @@ func (a *App) raise(severity, category, title, detail string) {
 // emit records an event that is a detection rather than a defect: stored,
 // streamed, notified when it is a warning or worse, never filed as a problem.
 func (a *App) emit(ev store.Event) {
+	if ev.ID == "" {
+		ev.ID = uuid.NewString()
+	}
+	if ev.TS.IsZero() {
+		ev.TS = time.Now()
+	}
 	_ = a.Store.AddEvent(ev)
 	if a.Notifier != nil && store.SeverityRank(ev.Severity) >= store.SeverityRank(store.SevWarning) {
 		a.Notifier.Send(ev)

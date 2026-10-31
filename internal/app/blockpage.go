@@ -47,11 +47,11 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 		page.Device = firstNonEmpty(c.Label, c.Hostname, c.IP)
 	}
 	page.DeviceAddress = net.ParseIP(page.Device) != nil
-	if base := a.adminBase(client, host); base != "" {
+	if base := a.adminBase(client); base != "" {
 		page.AdminURL = base + "/#/dnstools/" + host
 	}
 	if a.Unblock != nil {
-		page.Trusted = clientID != "" && a.Unblock.Trusted(clientID)
+		page.Trusted = a.trustedNow(client)
 		if r := a.Unblock.Status(clientID, host, now); r != nil {
 			page.Asked = string(r.State)
 		}
@@ -85,8 +85,8 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 	}
 	if match := a.Matcher.Lookup(host); match.Category != "" {
 		page.Category = blockpage.Sentence(match.Category)
-		page.Risky = match.Category == "malware" || match.Category == "phishing"
 	}
+	page.Risky = a.Matcher.Threat(host)
 	page.Stations = append(page.Stations, blockpage.Station{Title: "The site", Detail: "Never contacted", Class: "unreached"})
 	page.Copy = strings.TrimSpace(fmt.Sprintf("%s blocked by %s, rule %s, on %s, %s", host, page.Source, page.Rule, page.Device, page.When))
 	return page

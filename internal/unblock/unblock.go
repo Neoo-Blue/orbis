@@ -86,9 +86,18 @@ type Manager struct {
 	secret  []byte
 	reqs    []*Request // newest first
 	trusted map[string]bool
-	// grants is the number of approved requests, read on every DNS lookup so a
-	// network with none pays nothing.
-	grants atomic.Int64
+	// live is every grant in force, published whole because each DNS lookup
+	// reads it, and mu is held across writes to a slow SD card.
+	live atomic.Pointer[[]grant]
+	// Threat keeps a grant from opening a threat-listed name under it. Nil in
+	// tests that do not care.
+	Threat func(name string) bool
+}
+
+type grant struct {
+	host, clientID  string
+	everyone, risky bool
+	until           time.Time
 }
 
 func New(path string) (*Manager, error) {
@@ -116,18 +125,18 @@ func New(path string) (*Manager, error) {
 			return nil, err
 		}
 	}
-	m.recount()
+	m.publish(time.Now())
 	return m, nil
 }
 
-func (m *Manager) recount() {
-	n := int64(0)
+func (m *Manager) publish(now time.Time) {
+	live := []grant{}
 	for _, r := range m.reqs {
-		if r.State == Approved {
-			n++
+		if r.active(now) {
+			live = append(live, grant{r.Host, r.ClientID, r.Everyone, r.Risky, r.Until})
 		}
 	}
-	m.grants.Store(n)
+	m.live.Store(&live)
 }
 
 func (m *Manager) save() error {
@@ -155,20 +164,28 @@ func (m *Manager) Ask(r Request, now time.Time) (*Request, bool, error) {
 	defer m.mu.Unlock()
 	r.Host = nameKey(r.Host)
 	mine, open := 0, 0
+	var oldest *Request
 	for _, x := range m.reqs {
 		if x.State != Pending || now.Sub(x.Asked) >= requestLife {
 			continue
 		}
 		open++
+		oldest = x
 		if x.ClientID == r.ClientID {
 			mine++
 			if x.Host == r.Host {
-				return x, false, nil
+				c := *x
+				return &c, false, nil
 			}
 		}
 	}
-	if mine >= maxPerDevice || open >= maxPending {
+	if mine >= maxPerDevice {
 		return nil, false, ErrTooMany
+	}
+	// The owner already heard about the oldest one, and a full queue must not
+	// shut out everyone else.
+	if open >= maxPending {
+		oldest.State, oldest.Decided, oldest.By = Denied, now, "too many waiting"
 	}
 	id := make([]byte, 9)
 	if _, err := rand.Read(id); err != nil {
@@ -179,7 +196,8 @@ func (m *Manager) Ask(r Request, now time.Time) (*Request, bool, error) {
 		r.Note = r.Note[:maxNote]
 	}
 	r.Asked, r.State = now, Pending
-	m.reqs = append([]*Request{&r}, m.reqs...)
+	stored := r
+	m.reqs = append([]*Request{&stored}, m.reqs...)
 	m.trim(now)
 	return &r, true, m.save()
 }
@@ -209,7 +227,11 @@ func (m *Manager) Decide(id string, allow bool, d time.Duration, everyone bool, 
 			continue
 		}
 		if r.State != Pending {
-			return r, nil
+			c := *r
+			return &c, nil
+		}
+		if now.Sub(r.Asked) >= requestLife {
+			return nil, ErrNotFound
 		}
 		r.Decided, r.By = now, by
 		r.State = Denied
@@ -219,8 +241,9 @@ func (m *Manager) Decide(id string, allow bool, d time.Duration, everyone bool, 
 				r.Until = now.Add(d)
 			}
 		}
-		m.recount()
-		return r, m.save()
+		m.publish(now)
+		c := *r
+		return &c, m.save()
 	}
 	return nil, ErrNotFound
 }
@@ -242,7 +265,7 @@ func (m *Manager) Revoke(id string, now time.Time) error {
 		if r.ID == id {
 			r.Until = now
 			r.State = Denied
-			m.recount()
+			m.publish(now)
 			return m.save()
 		}
 	}
@@ -251,16 +274,21 @@ func (m *Manager) Revoke(id string, now time.Time) error {
 
 // Granted reports whether a grant covers this device and name.
 func (m *Manager) Granted(clientID, name string, now time.Time) bool {
-	if m.grants.Load() == 0 {
-		return false
-	}
 	name = nameKey(name)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, r := range m.reqs {
-		if r.active(now) && (r.Everyone || r.ClientID == clientID) && covers(r.Host, name) {
+	live := m.live.Load()
+	open := false
+	for _, g := range *live {
+		if !g.until.IsZero() && !now.Before(g.until) {
+			continue
+		}
+		open = true
+		if (g.everyone || g.clientID == clientID) && covers(g.host, name) &&
+			(g.risky || g.host == name || m.Threat == nil || !m.Threat(name)) {
 			return true
 		}
+	}
+	if !open {
+		m.live.CompareAndSwap(live, &[]grant{})
 	}
 	return false
 }
@@ -353,4 +381,4 @@ func (m *Manager) ValidToken(id, token string) bool {
 }
 
 // Any reports whether any grant exists, the cheap check for the DNS path.
-func (m *Manager) Any() bool { return m.grants.Load() > 0 }
+func (m *Manager) Any() bool { return len(*m.live.Load()) > 0 }

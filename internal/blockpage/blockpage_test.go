@@ -211,6 +211,18 @@ func TestOnlyNamesTheResolverPointedHereAreClaimed(t *testing.T) {
 	}
 }
 
+func TestReachingThisNodeClaimsNothing(t *testing.T) {
+	g := guardOn("192.168.50.75/24")
+	now := time.Now()
+	addr, ok := g.Reach(netip.MustParseAddr("192.168.50.9"), now)
+	if !ok || addr.String() != "192.168.50.75" {
+		t.Fatalf("got %s %v", addr, ok)
+	}
+	if g.Pointed("192.168.50.75", now) {
+		t.Fatal("looking up an address made it a blocked site")
+	}
+}
+
 func TestAFullTableFallsBackToTheSinkhole(t *testing.T) {
 	g := guardOn("192.168.50.75/24")
 	c := netip.MustParseAddr("192.168.50.9")

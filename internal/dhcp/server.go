@@ -331,7 +331,7 @@ func (s *Server) commit(mac string, addr netip.Addr, req *dhcpv4.DHCPv4, scope c
 	lease := store.Lease{
 		MAC:         mac,
 		IP:          addr.String(),
-		Hostname:    strings.TrimSpace(req.HostName()),
+		Hostname:    strings.Join(strings.Fields(req.HostName()), " "),
 		Scope:       scope.Name,
 		Starts:      now,
 		Expires:     now.Add(time.Duration(hours) * time.Hour),

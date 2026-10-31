@@ -452,8 +452,10 @@ function ClientSettings({ client, until, onChanged }: { client: Client; until?: 
           </div>
         )}
       </div>
-      <Switch checked={(trust?.trusted ?? []).includes(client.id)} label="Trusted: can unblock sites without asking"
-        onChange={async (v) => { await api.unblock.trust(client.id, v); refreshTrust() }} />
+      {client.mac && (
+        <Switch checked={(trust?.trusted ?? []).includes(client.id)} label="Trusted: can unblock sites without asking"
+          onChange={async (v) => { await api.unblock.trust(client.id, v); refreshTrust() }} />
+      )}
       <div className="field">
         <label>Notes</label>
         <textarea className="textarea" value={notes} onChange={(e) => setNotes(e.target.value)}

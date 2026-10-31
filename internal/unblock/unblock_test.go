@@ -1,6 +1,7 @@
 package unblock
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -153,7 +154,66 @@ func TestATrustedDeviceSkipsTheQueue(t *testing.T) {
 func TestNoGrantsMeansNoLocking(t *testing.T) {
 	m := manager(t)
 	ask(t, m, "site.example", "guest", time.Now())
-	if m.grants.Load() != 0 {
+	if m.Any() {
 		t.Fatal("a pending request is not a grant")
+	}
+}
+
+func TestAnEndedGrantStopsCostingLookups(t *testing.T) {
+	m := manager(t)
+	now := time.Now()
+	if _, err := m.Decide(ask(t, m, "site.example", "guest", now).ID, true, time.Hour, false, "owner", now); err != nil {
+		t.Fatal(err)
+	}
+	m.Granted("guest", "site.example", now.Add(2*time.Hour))
+	if m.Any() {
+		t.Fatal("an ended grant still counts")
+	}
+}
+
+func TestAGrantDoesNotOpenAThreatUnderIt(t *testing.T) {
+	m := manager(t)
+	m.Threat = func(name string) bool { return name == "phish.site.example" }
+	now := time.Now()
+	if _, err := m.Decide(ask(t, m, "site.example", "guest", now).ID, true, 0, false, "owner", now); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Granted("guest", "www.site.example", now) {
+		t.Fatal("the site itself should open")
+	}
+	if m.Granted("guest", "phish.site.example", now) {
+		t.Fatal("a grant on the parent opened a threat under it")
+	}
+	r, _, err := m.Ask(Request{Host: "phish.site.example", ClientID: "guest", Risky: true}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Decide(r.ID, true, time.Hour, false, "owner", now); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Granted("guest", "phish.site.example", now) {
+		t.Fatal("the owner opened this name on purpose")
+	}
+}
+
+func TestALapsedRequestCannotBeApproved(t *testing.T) {
+	m := manager(t)
+	now := time.Now()
+	r := ask(t, m, "site.example", "guest", now)
+	if _, err := m.Decide(r.ID, true, time.Hour, false, "link", now.Add(requestLife)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAFullQueueMakesRoomForTheNextAsk(t *testing.T) {
+	m := manager(t)
+	now := time.Now()
+	first := ask(t, m, "site0.example", "c0", now)
+	for i := 1; i < maxPending; i++ {
+		ask(t, m, fmt.Sprintf("site%d.example", i), fmt.Sprintf("c%d", i), now)
+	}
+	ask(t, m, "new.example", "newcomer", now)
+	if got, _ := m.Get(first.ID); got.State != Denied {
+		t.Fatalf("the oldest request is %s", got.State)
 	}
 }

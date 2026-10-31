@@ -653,7 +653,7 @@ func (s *Server) handleDeleteList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.app.Lists.Rebuild(); err != nil {
+	if err := s.app.Lists.Rebuild(context.Background()); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1318,7 +1318,7 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	for _, key := range applied {
 		switch {
 		case strings.HasPrefix(key, "adblock."):
-			if err := s.app.Lists.Rebuild(); err != nil {
+			if err := s.app.Lists.Rebuild(context.Background()); err != nil {
 				s.app.Log("adblock: rebuild after config change: %v", err)
 			}
 			s.app.FlushDNSCache("")

@@ -344,10 +344,10 @@ func TestBackgroundBlockSourceIndex(t *testing.T) {
 
 func TestReplaceListDomainsChunked(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.ReplaceListDomains("other", "ads", ListEntries{Exact: []string{"keep.example"}}); err != nil {
+	if _, err := s.ReplaceListDomains(context.Background(), "other", "ads", ListEntries{Exact: []string{"keep.example"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ReplaceListDomains("test", "ads", ListEntries{Exact: []string{"stale.example"}}); err != nil {
+	if _, err := s.ReplaceListDomains(context.Background(), "test", "ads", ListEntries{Exact: []string{"stale.example"}}); err != nil {
 		t.Fatal(err)
 	}
 	e := ListEntries{Important: map[string]bool{}}
@@ -360,7 +360,7 @@ func TestReplaceListDomainsChunked(t *testing.T) {
 	}
 	// A duplicate in a later chunk must still be ignored.
 	e.Exact = append(e.Exact, e.Exact[0])
-	if _, err := s.ReplaceListDomains("test", "tracking", e); err != nil {
+	if _, err := s.ReplaceListDomains(context.Background(), "test", "tracking", e); err != nil {
 		t.Fatal(err)
 	}
 	for kind := EntryExact; kind <= EntryAllowRegex; kind++ {
@@ -388,16 +388,16 @@ func TestReplaceListDomainsChunked(t *testing.T) {
 func TestReplaceListDomainsWritesOnlyTheDifference(t *testing.T) {
 	s := openTestStore(t)
 	e := ListEntries{Exact: []string{"a.example", "b.example", "c.example"}, Wildcard: []string{"w.example"}}
-	if n, err := s.ReplaceListDomains("test", "ads", e); err != nil || n != 4 {
+	if n, err := s.ReplaceListDomains(context.Background(), "test", "ads", e); err != nil || n != 4 {
 		t.Fatalf("first load changed %d: %v", n, err)
 	}
-	if n, err := s.ReplaceListDomains("test", "ads", e); err != nil || n != 0 {
+	if n, err := s.ReplaceListDomains(context.Background(), "test", "ads", e); err != nil || n != 0 {
 		t.Fatalf("identical refresh changed %d: %v", n, err)
 	}
 
 	// One removed, one added, one moved from exact to wildcard.
 	next := ListEntries{Exact: []string{"a.example", "d.example"}, Wildcard: []string{"w.example", "b.example"}}
-	if n, err := s.ReplaceListDomains("test", "ads", next); err != nil || n != 4 {
+	if n, err := s.ReplaceListDomains(context.Background(), "test", "ads", next); err != nil || n != 4 {
 		t.Fatalf("diff changed %d: %v", n, err)
 	}
 	got := map[string]int{}
@@ -425,7 +425,7 @@ func TestReplaceListDomainsWritesOnlyTheDifference(t *testing.T) {
 	}
 
 	// A category change on the list rewrites its rows.
-	if n, err := s.ReplaceListDomains("test", "tracking", next); err != nil || n != 8 {
+	if n, err := s.ReplaceListDomains(context.Background(), "test", "tracking", next); err != nil || n != 8 {
 		t.Fatalf("recategorised changed %d: %v", n, err)
 	}
 }
@@ -441,7 +441,7 @@ func TestLargeListRefreshDoesNotStarveTheLogWriter(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.ReplaceListDomains("big", "ads", e)
+		_, err := s.ReplaceListDomains(context.Background(), "big", "ads", e)
 		done <- err
 	}()
 	var flushed int
@@ -503,7 +503,7 @@ func TestDeleteListRemovesEverything(t *testing.T) {
 	if err := s.UpsertListMeta(ListMeta{Name: "gone", URL: "http://x"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ReplaceListDomains("gone", "ads", e); err != nil {
+	if _, err := s.ReplaceListDomains(context.Background(), "gone", "ads", e); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteList("gone"); err != nil {

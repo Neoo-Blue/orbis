@@ -2,6 +2,8 @@ package adblock
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -315,5 +317,61 @@ func BenchmarkLookupMiss(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		m.Lookup("www.example-site.co.uk")
+	}
+}
+
+func TestSavedIndexAnswersLikeTheOriginal(t *testing.T) {
+	b := NewBuilder()
+	b.AddBlock("ads.example.com", "list-a", "ads", false)
+	b.AddBlockImportant("tracker.example.net", "list-b", "tracking", true, true)
+	b.AddAllowFrom("ok.tracker.example.net", false, false, "list-c")
+	if err := b.AddRegex(`^ad[0-9]+\.`, "list-a", "ads"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.AddAllowRegex(`^safe[0-9]+\.`, false, "list-c"); err != nil {
+		t.Fatal(err)
+	}
+	m := New()
+	m.Commit(b)
+	path := filepath.Join(t.TempDir(), "index.bin")
+	if err := m.SaveIndex(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded := New()
+	if err := loaded.LoadIndex(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ads.example.com", "x.tracker.example.net", "ok.tracker.example.net", "ad7.example.org", "safe1.tracker.example.net", "fine.example.org"} {
+		if got, want := loaded.Lookup(name), m.Lookup(name); got != want {
+			t.Errorf("%s: got %+v, want %+v", name, got, want)
+		}
+	}
+	if loaded.Count() != m.Count() {
+		t.Fatalf("count %d, want %d", loaded.Count(), m.Count())
+	}
+}
+
+func TestDamagedIndexIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.bin")
+	b := NewBuilder()
+	b.AddBlock("ads.example.com", "list-a", "ads", false)
+	m := New()
+	m.Commit(b)
+	if err := m.SaveIndex(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data[:len(data)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fresh := New()
+	if err := fresh.LoadIndex(path); err == nil {
+		t.Fatal("a truncated index must be refused")
+	}
+	if fresh.Count() != 0 {
+		t.Fatal("a refused index must leave the matcher untouched")
 	}
 }

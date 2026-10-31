@@ -3,9 +3,12 @@ package adblock
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -148,7 +151,7 @@ func (m *Manager) UpdateAll(ctx context.Context, force bool) error {
 	if changed.Load() == 0 && m.matcher.Count() > 0 {
 		return nil
 	}
-	return m.Rebuild()
+	return m.Rebuild(ctx)
 }
 
 // updateOne fetches one list; it reports whether the stored entries changed.
@@ -195,7 +198,7 @@ func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) (bool, err
 	if parsed.Total() == 0 {
 		return false, fmt.Errorf("list parsed to zero entries (format change?)")
 	}
-	changed, err := m.st.ReplaceListDomains(meta.Name, meta.Category, ToListEntries(parsed))
+	changed, err := m.st.ReplaceListDomains(ctx, meta.Name, meta.Category, ToListEntries(parsed))
 	if err != nil {
 		return false, err
 	}
@@ -259,7 +262,7 @@ func skippedSummary(sk map[string]int) string {
 // expensive path (millions of entries), so it is called only when the
 // lists themselves change; a rule change goes through RebuildLocal. Calls
 // that arrive while one is running are coalesced into a single follow-up.
-func (m *Manager) Rebuild() error {
+func (m *Manager) Rebuild(ctx context.Context) error {
 	m.mu.Lock()
 	if m.rebuilding {
 		m.rebuildAgain = true
@@ -269,7 +272,7 @@ func (m *Manager) Rebuild() error {
 	m.rebuilding = true
 	m.mu.Unlock()
 	for {
-		err := m.rebuildLists()
+		err := m.rebuildLists(ctx)
 		m.mu.Lock()
 		again := m.rebuildAgain
 		m.rebuildAgain = false
@@ -282,10 +285,10 @@ func (m *Manager) Rebuild() error {
 	}
 }
 
-func (m *Manager) rebuildLists() error {
+func (m *Manager) rebuildLists(ctx context.Context) error {
 	b := NewBuilder()
 	badRegex := 0
-	if err := m.st.AllBlockDomains(func(domain, source, category string, kind int, important bool) {
+	if err := m.st.AllBlockDomains(ctx, func(domain, source, category string, kind int, important bool) {
 		switch kind {
 		case store.EntryExact:
 			b.AddBlockImportant(domain, source, category, false, important)
@@ -329,7 +332,44 @@ func (m *Manager) rebuildLists() error {
 	m.lastCount = b.Count()
 	m.mu.Unlock()
 	m.log("adblock: index rebuilt, %d entries", b.Count())
+	if path := m.snapshotPath(); path != "" {
+		if err := m.matcher.SaveIndex(path); err != nil {
+			m.log("adblock: index not saved: %v", err)
+		}
+	}
 	return m.RebuildLocal()
+}
+
+// snapshotPath is where the built index is kept, next to the database.
+func (m *Manager) snapshotPath() string {
+	p := m.cfg.Snapshot().Store.Path
+	if p == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(p), "block-index.bin")
+}
+
+// restore brings back the index saved by the last rebuild, if there is one.
+func (m *Manager) restore() bool {
+	path := m.snapshotPath()
+	if path == "" {
+		return false
+	}
+	start := time.Now()
+	if err := m.matcher.LoadIndex(path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			m.log("adblock: saved index unusable, rebuilding: %v", err)
+		}
+		return false
+	}
+	if err := m.RebuildLocal(); err != nil {
+		m.log("adblock: rules not applied: %v", err)
+	}
+	m.mu.Lock()
+	m.lastBuild, m.lastCount = time.Now(), m.matcher.Count()
+	m.mu.Unlock()
+	m.log("adblock: index restored in %s, %d entries", time.Since(start).Round(time.Millisecond), m.matcher.Count())
+	return true
 }
 
 // RebuildLocal republishes the operator's rules and the configuration's
@@ -400,9 +440,9 @@ func (m *Manager) Run(ctx context.Context) {
 	m.mu.Lock()
 	built := !m.lastBuild.IsZero()
 	m.mu.Unlock()
-	if !built {
+	if !built && !m.restore() {
 		start := time.Now()
-		if err := m.Rebuild(); err != nil {
+		if err := m.Rebuild(ctx); err != nil {
 			m.log("adblock: initial rebuild failed: %v", err)
 		} else {
 			m.log("adblock: initial index ready after %s; lookups before this were unfiltered", time.Since(start).Round(time.Millisecond))

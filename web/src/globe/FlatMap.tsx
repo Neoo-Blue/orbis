@@ -30,17 +30,17 @@ interface Props {
 }
 
 const COLORS = {
-  inbound: '#ffc266',
-  allow: '#4ee8c0',
-  block: '#ff6b7a',
-  filtered: '#a98bff',
-  pending: '#ffc266',
-  home: '#7fd3ff',
-  land: '#1d3550',
-  border: '#152740',
-  graticule: '#0e1a2b',
+  inbound: '#f2b544',
+  allow: '#62d8b2',
+  block: '#f2643c',
+  filtered: '#b79cff',
+  pending: '#f2b544',
+  home: '#d9bc7c',
+  land: '#2a4a70',
+  border: '#1c3557',
+  graticule: '#142a46',
   // Crest of the travelling gradient: cool outbound, warm inbound.
-  flowOut: '#eafffb',
+  flowOut: '#fbf7ea',
   flowIn: '#ffd9a0',
 }
 
@@ -187,10 +187,15 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true, colorBy 
       ctx.globalAlpha = 1
     }
 
+    let drawn = 0
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw)
       const { w, h } = sizeRef.current
-      if (!w || !h) return
+      if (!w || !h || document.hidden) return
+      // A paused or historic view has nothing moving: redraw for data and
+      // panning, not sixty times a second.
+      if (!autoAnimate && !dragRef.current && now - drawn < 250) return
+      drawn = now
       const t = (now - start) / 1000
 
       ctx.clearRect(0, 0, w, h)
@@ -472,6 +477,7 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true, colorBy 
       return
     }
     const found = hitTest(x, y)
+    if (!found && !hoverRef.current) return
     hoverRef.current = found
     setHover(found ? { arc: found, x, y } : null)
   }

@@ -6,14 +6,14 @@ export type ArcKind = 'streaming' | 'social' | 'gaming' | 'web' | 'dns' | 'other
 export type ColorBy = 'kind' | 'verdict'
 
 export const KINDS: Array<{ id: ArcKind; label: string; color: string }> = [
-  { id: 'streaming', label: 'streaming', color: '#ff8fa3' },
-  { id: 'social', label: 'social & messaging', color: '#a98bff' },
-  { id: 'gaming', label: 'gaming', color: '#ffc266' },
-  { id: 'web', label: 'web', color: '#4ee8c0' },
-  { id: 'dns', label: 'DNS', color: '#63b3ff' },
+  { id: 'streaming', label: 'streaming', color: '#ff9d7f' },
+  { id: 'social', label: 'social & messaging', color: '#b79cff' },
+  { id: 'gaming', label: 'gaming', color: '#f2b544' },
+  { id: 'web', label: 'web', color: '#62d8b2' },
+  { id: 'dns', label: 'DNS', color: '#8fb7ff' },
   { id: 'other', label: 'other', color: '#8a99ae' },
 ]
-export const BLOCKED_COLOR = '#ff6b7a'
+export const BLOCKED_COLOR = '#f2643c'
 
 const STREAMING = /youtube|netflix|plex|jellyfin|emby|spotify|twitch|hulu|disney|hbo|\bmax\b|prime ?video|apple ?tv|tiktok|vimeo|pandora|tidal|peacock|paramount|crunchyroll|soundcloud|deezer/i
 const SOCIAL = /facebook|instagram|whatsapp|wechat|telegram|signal|discord|snapchat|messenger|reddit|twitter|\bx\.com|threads|imessage|facetime|slack|teams|zoom|google ?meet|viber|line\b/i

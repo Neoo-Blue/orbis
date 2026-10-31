@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -197,7 +198,7 @@ const listWriteChunk = 1024
 // few percent a day, and nothing reads the rows until the index rebuild that
 // follows, so a crash part way through leaves old and new entries side by side
 // until the next refresh repairs it.
-func (s *Store) ReplaceListDomains(list, category string, e ListEntries) (int, error) {
+func (s *Store) ReplaceListDomains(ctx context.Context, list, category string, e ListEntries) (int, error) {
 	type row struct {
 		kind      int
 		important int
@@ -216,7 +217,7 @@ func (s *Store) ReplaceListDomains(list, category string, e ListEntries) (int, e
 	}
 
 	var remove []string
-	rows, err := s.db.Query(`SELECT domain, wildcard, COALESCE(important,0), COALESCE(category,'') FROM block_domains WHERE source=?`, list)
+	rows, err := s.db.QueryContext(ctx, `SELECT domain, wildcard, COALESCE(important,0), COALESCE(category,'') FROM block_domains WHERE source=?`, list)
 	if err != nil {
 		return 0, err
 	}
@@ -240,6 +241,9 @@ func (s *Store) ReplaceListDomains(list, category string, e ListEntries) (int, e
 
 	changed := len(remove) + len(want)
 	for len(remove) > 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		n := min(listWriteChunk, len(remove))
 		if err := s.deleteListRows(list, remove[:n]); err != nil {
 			return 0, err
@@ -251,6 +255,9 @@ func (s *Store) ReplaceListDomains(list, category string, e ListEntries) (int, e
 		add = append(add, d)
 	}
 	for len(add) > 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		n := min(listWriteChunk, len(add))
 		tx, unlock, err := s.beginWrite()
 		if err != nil {
@@ -387,7 +394,7 @@ func (s *Store) DeleteList(name string) error {
 // kind is one of the Entry constants, important marks $important rules. Rows
 // arrive in table order, because reading them by list seeks across the whole
 // file for every row; the builder's result does not depend on the order.
-func (s *Store) AllBlockDomains(fn func(domain, source, category string, kind int, important bool)) error {
+func (s *Store) AllBlockDomains(ctx context.Context, fn func(domain, source, category string, kind int, important bool)) error {
 	metas, err := s.ListMetas()
 	if err != nil {
 		return err
@@ -396,7 +403,7 @@ func (s *Store) AllBlockDomains(fn func(domain, source, category string, kind in
 	for _, m := range metas {
 		enabled[m.Name] = m.Enabled
 	}
-	rows, err := s.db.Query(`SELECT domain, source, COALESCE(category,''), wildcard, COALESCE(important,0) FROM block_domains`)
+	rows, err := s.db.QueryContext(ctx, `SELECT domain, source, COALESCE(category,''), wildcard, COALESCE(important,0) FROM block_domains`)
 	if err != nil {
 		return err
 	}

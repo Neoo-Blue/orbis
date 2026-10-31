@@ -275,14 +275,27 @@ by default so YouTube falls back to TCP where the proxy can see it.
 
 ## Filtering by name
 
-**A full resolver.** LRU cache with a TTL floor, upstreams over plain, DoT and DoH (encrypted by
-default), and a DoT/DoH server for your own devices so a phone keeps using it off the LAN. Local
-authoritative records with wildcards, rewrites, conditional forwarding, rate limiting, rebinding
-protection. A name asked for in the last tenth of its TTL is refreshed in the background while
-the cached answer is served, so the names a household asks for constantly never wait on an
-upstream again. Answer latency is measured (`orbis_dns_answer_seconds` on `/metrics`), so "is
-DNS slow" is a number, not a feeling. Turn the cache up and the TTL floor to an hour and it is
-a drop-in for unbound in front of a home network.
+**A full resolver.** An LRU cache, upstreams over plain, DoT and DoH (encrypted by default, over
+connections that stay open), and a DoT/DoH server for your own devices so a phone keeps using it
+off the LAN. Local authoritative records with wildcards, rewrites, conditional forwarding, rate
+limiting, rebinding protection. Answer latency is measured (`orbis_dns_answer_seconds` on
+`/metrics`), so "is DNS slow" is a number, not a feeling.
+
+**Never stale.** An answer is kept for exactly as long as its owner said and not a second more,
+there is no minimum TTL to raise it, and an expired answer is never served. Speed comes from
+refreshing the names your devices use before they expire, so they are answered from cache and
+are always current. "This name does not exist" is believed for at most 30 seconds and needs most
+of your resolvers to agree, so a record you created a minute ago shows up even while one resolver
+is still caching the old answer. SERVFAIL from one resolver never reaches a client while another
+can answer.
+
+**A page that says why.** A browser opening a blocked site gets a page instead of an error: what
+was stopped, the rule and list that decided it, drawn as one line from the device to the decision,
+with a link straight to the place to change it. It works on every plain http site, and on https
+for devices that trust the Orbis certificate (`/setup` installs it in one tap). A device that
+does not is detected after a few refused certificates and keeps failing quietly as before, and a
+blocked ad inside someone else's page fails silently either way. Switch it off with
+`dns.block_page`.
 
 **Lists from anywhere.** Any list AdGuard Home or Pi-hole accepts works here, with the same
 meaning: hosts files, plain domains, AdGuard rules with exceptions, `$important`, `$denyallow`,
@@ -396,6 +409,15 @@ failover, CAKE shaping, NAT-PMP for consoles, Wake-on-LAN, ping, traceroute, spe
 export.
 
 ## Seeing everything: globe, services, hosted apps, storage
+
+**The orbit chart.** The Overview is a live map of this network drawn as a star chart: Orbis at the
+centre, every device a body on its orbit sized by what it is doing, connections arcing out to a
+world scale read by longitude, and blocked lookups stopping dead at the shield ring. Hover a body
+to light up its traffic; click it to open the device.
+
+**Internet health.** The gateway and three public resolvers are probed every 10 seconds, and the
+page answers the question in one sentence: is it your network, or your provider? Latency, jitter
+and loss for each, 24 hours of history with outages marked, and incidents that land in Events.
 
 **Every connection identified.** A kernel BPF prefilter hands userspace only the packets that
 carry identity, so each connection gets a hostname, an application, a network operator, a

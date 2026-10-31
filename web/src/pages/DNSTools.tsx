@@ -186,25 +186,16 @@ function Tester() {
           <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>
             How the decision was reached
           </div>
-          <div style={{ display: 'grid', gap: 7 }}>
+          <ol className="trace" aria-label="How the decision was reached">
             {result.steps.map((st, i) => (
-              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                <span className={`dot ${st.verdict === 'block' ? 'err' : st.verdict === 'allow' ? 'on' : 'off'}`}
-                  style={{ marginTop: 5 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5 }}>
-                    {st.stage}
-                    {st.rule && (
-                      <span className="mono" style={{ marginLeft: 8, fontSize: 11, color: 'var(--amber)' }}>
-                        {st.rule}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>{st.detail}</div>
+              <li key={i} className={`trace-stop ${st.verdict}`}>
+                <div className="trace-title">
+                  {st.stage}{st.rule && <code>{st.rule}</code>}
                 </div>
-              </div>
+                <div className="trace-detail">{st.detail}</div>
+              </li>
             ))}
-          </div>
+          </ol>
 
           {(result.cname_chain?.length || result.answers?.length) ? (
             <div style={{ borderTop: '1px solid var(--line-soft)', marginTop: 12, paddingTop: 11 }}>

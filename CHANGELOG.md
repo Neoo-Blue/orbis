@@ -4,6 +4,74 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.35.0
+
+The interface is new, DNS is never stale, and the whole node does far less work. On the reference
+Raspberry Pi 4: forwarded lookups fell from 79 ms to about 20 ms, cached ones from 2.5 ms to under
+1 ms, the Go heap from about 600 MB to about 170 MB, and no log rows are dropped.
+
+### Added
+- **The block page.** A browser opening a blocked site gets a page saying what stopped it: the
+  rule, the list, the device, and one line drawn from the device through each stage to the decision,
+  with a link to review it in Orbis. It works on plain http for everyone, and on https for devices
+  that trust the Orbis certificate. A device that refuses the certificate is detected after three
+  tries and goes back to failing quietly for a day, so nobody is left looking at certificate
+  warnings, and an ad inside someone else's page still fails silently. Settings, DNS, "Show a page
+  when a site is blocked".
+- **The orbit chart.** The Overview now answers "is my network safe?" in one sentence, beside a
+  live map of the network: every device on its orbit, connections arcing out to the world by
+  longitude, blocked lookups stopping at the shield ring. What needs you and what was just stopped
+  sit beside it.
+- **Internet health.** Continuous monitoring of the gateway and public resolvers, with latency,
+  jitter, loss, 24 hours of history and an outage log. It tells you in one sentence whether a
+  problem is your network or your provider.
+- **Every decision can be traced.** A blocked row in the DNS log opens the same route line the block
+  page draws.
+
+### Changed
+- **A new look across both interfaces:** a star-atlas plate, Prussian blue with brass hairlines,
+  jade for safe and vermilion for blocked, set in Geist. Destructive buttons stay outlined until you
+  mean it. The fonts are built in; the interface still makes no outside requests.
+- **Restarts are quick.** The built block index is kept on disk, so filtering is back within seconds
+  rather than after two and a half minutes, and shutdown no longer waits out its 20 second timeout.
+- **Lists refresh together, overnight.** A pass takes everything due soon, between 02:00 and 05:00
+  local time, and a list that has not changed costs nothing. Lists used to drift onto separate
+  clocks, which rebuilt the whole index about once an hour.
+- **Upstream DNS connections stay open.** Each miss used to pay seven TLS handshakes.
+- **`dns.min_ttl` is gone.** It is ignored if present. Raising a TTL is what served a 60 second record
+  for an hour.
+
+### Fixed
+- **NXDOMAIN reached clients as an empty success,** and so did SERVFAIL from an upstream. Every dead
+  name on the network looked like a live one with no address.
+- **The first upstream reply won the race even when it was SERVFAIL or a stale NXDOMAIN.** A real
+  answer now wins outright, and "does not exist" needs a majority of resolvers.
+- **A list refresh stopped all logging.** Each refresh rewrote the whole list in one transaction,
+  which held the write lock for over 30 minutes on the largest list and dropped 125,000 log rows
+  a day. Refreshes now write only what changed, in short transactions. This is also what tripped
+  the interception load guard.
+- **The write-ahead log grew past 1 GB** and is now cut back once it has been checkpointed.
+- **Cloaked trackers went upstream on every lookup,** because blocked CNAME answers were never
+  cached. They now cost one query per TTL, and a rule change reaches what is already cached.
+- **Every cached and allowed lookup scanned all 1,200 list regexes,** 2.5 ms a time on a Pi. A verdict
+  is now remembered per name.
+- **Lists answering "not modified" were fetched again every hour.**
+- **Answers larger than the client asked for were sent over UDP anyway,** the EDNS flags of cached
+  answers were being rewritten, and client cookies were forwarded to upstream resolvers.
+- **Losing a race counted as a failure,** which took slower resolvers out of the pool.
+
+### Faster
+- Live events reach only the page that wants them, so the shell no longer re-renders four times a
+  second. Opening Orbis takes one round trip instead of three, `/api/status` no longer forks
+  `tailscale` on every poll, and hidden or paused views stop fetching.
+- Flows are written every 30 seconds rather than 5, and repeat updates of one flow coalesce, which
+  cuts most of the node's writes. A redundant index on the blocklist table is gone.
+- The block list index needs about a fifth of the memory and nothing for the garbage collector to
+  scan.
+- The globe keeps its markers instead of rebuilding them on every live tick, hover is once a frame,
+  and the flat map stops drawing when hidden.
+
+
 ## v1.34.0
 
 ### Added

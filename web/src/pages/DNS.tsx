@@ -218,7 +218,7 @@ export function DNSPage() {
                       </td>
                       <td>
                         {q.blocked
-                          ? <span className="tag block" title={q.block_source}>blocked</span>
+                          ? <a className="tag block" href={`#/dnstools/${encodeURIComponent(q.name)}`} title={`${q.block_source}. See why`}>blocked</a>
                           : q.cached
                             ? <span className="tag" style={{ opacity: .65 }}>cached</span>
                             : <span className="tag" style={{ opacity: .65 }}>{q.rcode || 'ok'}</span>}

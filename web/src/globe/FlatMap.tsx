@@ -36,8 +36,8 @@ const COLORS = {
   filtered: '#b79cff',
   pending: '#f2b544',
   home: '#d9bc7c',
-  land: '#2a4a70',
-  border: '#1c3557',
+  land: '#9a8a66',
+  border: '#34506f',
   graticule: '#142a46',
   // Crest of the travelling gradient: cool outbound, warm inbound.
   flowOut: '#fbf7ea',

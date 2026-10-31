@@ -21,29 +21,14 @@
 
 .nw-verdict.good {
   border-color: color-mix(in srgb, var(--green) 32%, var(--line));
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--green) 8%, transparent),
-    transparent 68%
-  );
 }
 
 .nw-verdict.degraded {
   border-color: color-mix(in srgb, var(--amber) 42%, var(--line));
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--amber) 10%, transparent),
-    transparent 68%
-  );
 }
 
 .nw-verdict.down {
   border-color: color-mix(in srgb, var(--red) 46%, var(--line));
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--red) 12%, transparent),
-    transparent 68%
-  );
 }
 
 .nw-verdict-main {
@@ -75,7 +60,7 @@
   align-items: center;
   gap: 6px;
   padding: 2px 9px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   font-family: var(--mono);
   font-size: 11px;
   border: 1px solid var(--line);
@@ -118,7 +103,7 @@
 .nw-window-group {
   display: inline-flex;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
@@ -236,10 +221,8 @@
 .nw-role-tag {
   font-family: var(--mono);
   font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   color: var(--text-dim);
   flex: none;
@@ -270,8 +253,6 @@
 
 .nw-metric-label {
   font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
   color: var(--text-dim);
   font-weight: 600;
 }
@@ -410,10 +391,8 @@
 .nw-inc-live {
   font-family: var(--mono);
   font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   color: var(--red);
   border: 1px solid color-mix(in srgb, var(--red) 45%, var(--line));
   background: color-mix(in srgb, var(--red) 12%, transparent);
@@ -442,7 +421,7 @@
   font-family: var(--mono);
   font-size: 11px;
   padding: 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   color: var(--text-dim);
 }

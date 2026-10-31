@@ -7,7 +7,7 @@ import countryShapes from '../data/countries.json'
  * The globe renderer.
  *
  * Design intent: this should read as an instrument, not a marketing graphic.
- * The sphere is nearly black with a thin atmospheric rim; landmasses are drawn
+ * The sphere is the plate's blue with a thin atmospheric rim; landmasses are drawn
  * as hairlines rather than a texture, so the arcs stay the brightest thing on
  * screen. Every arc is one live connection, and its colour encodes the verdict
  * — that mapping is the whole point of the view.
@@ -102,8 +102,8 @@ const COLORS = {
   pending: new THREE.Color('#f2b544'),
   home: new THREE.Color('#d9bc7c'),
   inbound: new THREE.Color('#f2b544'),
-  land: new THREE.Color('#2a4a70'),
-  border: new THREE.Color('#1c3557'),
+  land: new THREE.Color('#9a8a66'),
+  border: new THREE.Color('#34506f'),
   atmosphere: new THREE.Color('#3a5f8f'),
   // The bright crest of the travelling gradient. Outbound runs cool (the
   // network reaching out), inbound runs warm (something reaching in) — so
@@ -357,7 +357,7 @@ export class GlobeScene {
     // globe reads as a wireframe ball and depth is impossible to judge.
     const body = new THREE.Mesh(
       new THREE.SphereGeometry(GLOBE_RADIUS * 0.995, 64, 48),
-      new THREE.MeshBasicMaterial({ color: 0x060a11 }),
+      new THREE.MeshBasicMaterial({ color: 0x0f2138 }),
     )
     this.globeGroup.add(body)
 

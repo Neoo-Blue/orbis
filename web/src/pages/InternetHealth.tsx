@@ -160,13 +160,6 @@ export function InternetHealthPage() {
         </Banner>
       )}
 
-      {missingGateway && (
-        <Banner tone="warn">
-          No IPv4 default gateway was found in /proc/net/route. Check the upstream Ethernet
-          cable, Wi-Fi association, or DHCP lease on this node.
-        </Banner>
-      )}
-
       <Card
         title="Targets"
         flush

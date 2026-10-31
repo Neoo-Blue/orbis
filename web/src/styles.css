@@ -575,6 +575,26 @@
   .verdict-line { font-size: 24px; }
 }
 
+.flush-banner { padding: 16px 20px 0; }
+.flush-banner:empty { display: none; }
+
+/* A decision is one line through ordered stations, in the ink kept for it. */
+.trace { list-style: none; padding: 0; margin: 0 0 14px; display: grid; }
+.trace-stop { position: relative; padding: 0 0 14px 24px; }
+.trace-stop::before {
+  content: ''; position: absolute; left: 0; top: 4px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg-1); border: 2px solid var(--violet); z-index: 1;
+}
+.trace-stop::after { content: ''; position: absolute; left: 5px; top: 14px; bottom: -6px; width: 2px; background: var(--violet); opacity: .55; }
+.trace-stop:last-child { padding-bottom: 0; }
+.trace-stop:last-child::after { display: none; }
+.trace-stop.block::before { background: var(--red); border-color: var(--red); }
+.trace-stop.allow::before { background: var(--accent); border-color: var(--accent); }
+.trace-title { font-size: 13.5px; font-weight: 520; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.trace-title code { font-size: 12.5px; font-weight: 400; color: var(--text-dim); }
+.trace-stop.block .trace-title { color: var(--red); }
+.trace-detail { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+
 /* Tables and rows carry a hover cue and nothing else. */
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .card { position: relative; }
@@ -589,16 +609,16 @@
    ============================================================ */
 .shell.simple { --nav-w: 208px; }
 .simple .page { font-size: 14.5px; }
-.simple .nav-item { padding: 10px 11px; font-size: 14px; border-radius: 10px; }
+.simple .nav-item { padding: 10px 11px; font-size: 14px; }
 .simple .nav-item svg { width: 17px; height: 17px; }
 .simple .topbar h1 { font-size: 17px; }
-.simple .card { border-radius: 14px; }
+.simple .card { border-radius: var(--radius); }
 .simple .card-head { padding: 14px 18px; }
-.simple .btn { padding: 9px 14px; font-size: 13.5px; border-radius: 9px; }
+.simple .btn { padding: 9px 14px; font-size: 13.5px; }
 .simple .btn.sm { padding: 6px 11px; font-size: 12.5px; }
 .simple .hint { font-size: 12.5px; line-height: 1.6; }
 
-.hero { border-radius: 16px; padding: 22px 24px; border: 1px solid var(--line-soft); background: var(--bg-1); display: grid; gap: 10px; position: relative; overflow: hidden; }
+.hero { border-radius: var(--radius); padding: 22px 24px; border: 1px solid var(--line-soft); background: var(--bg-1); display: grid; gap: 10px; position: relative; overflow: hidden; }
 .hero.ok { --hero-tint: var(--accent); } .hero.attention { --hero-tint: var(--amber); } .hero.problem { --hero-tint: var(--red); }
 .hero-title { display: flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 620; letter-spacing: -.01em; }
 .hero-title .orb { width: 14px; height: 14px; border-radius: 50%;  }
@@ -609,20 +629,20 @@
 .hero-points .dot { margin-top: 6px; flex: none; }
 
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
-.tile { border: 1px solid var(--line-soft); border-radius: 14px; background: var(--bg-1); padding: 16px 18px; display: grid; gap: 4px; text-align: left; color: var(--text); cursor: pointer; transition: border-color .15s, transform .15s; }
+.tile { border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--bg-1); padding: 16px 18px; display: grid; gap: 4px; text-align: left; color: var(--text); cursor: pointer; transition: border-color .15s, transform .15s; }
 .tile:hover { border-color: var(--line); transform: translateY(-1px); }
 .tile .big { font-size: 26px; font-weight: 640; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .tile .label { color: var(--text-dim); font-size: 12.5px; }
 .tile .sub { color: var(--text-faint); font-size: 12px; }
 
-.bigswitch { display: flex; align-items: center; gap: 16px; padding: 16px 18px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--bg-1); }
+.bigswitch { display: flex; align-items: center; gap: 16px; padding: 16px 18px; border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--bg-1); }
 .bigswitch .icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--bg-3); flex: none; font-size: 18px; }
 .bigswitch .text { flex: 1; min-width: 0; }
 .bigswitch .title { font-size: 15px; font-weight: 580; }
 .bigswitch .desc { color: var(--text-dim); font-size: 12.5px; line-height: 1.55; margin-top: 2px; }
 .bigswitch .switch { flex: none; }
 
-.device-card { display: grid; grid-template-columns: 44px 1fr auto; gap: 14px; align-items: center; padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--bg-1); }
+.device-card { display: grid; grid-template-columns: 44px 1fr auto; gap: 14px; align-items: center; padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--bg-1); }
 .device-card .glyph { width: 44px; height: 44px; border-radius: 12px; background: var(--bg-3); display: grid; place-items: center; font-size: 20px; }
 .device-card .name { font-size: 15px; font-weight: 580; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .device-card .meta { color: var(--text-dim); font-size: 12.5px; margin-top: 2px; }

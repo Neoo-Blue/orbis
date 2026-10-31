@@ -42,12 +42,13 @@ const LinksPage = lazy(() => import('./pages/Links').then(m => ({ default: m.Lin
 const ServicesPage = lazy(() => import('./pages/Services').then(m => ({ default: m.ServicesPage })))
 const ProfilesPage = lazy(() => import('./pages/Profiles').then(m => ({ default: m.ProfilesPage })))
 const EventsPage = lazy(() => import('./pages/Events').then(m => ({ default: m.EventsPage })))
+const InternetHealthPage = lazy(() => import('./pages/InternetHealth').then(m => ({ default: m.InternetHealthPage })))
 const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })))
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
   | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services' | 'threats' | 'hosted' | 'links'
-  | 'profiles' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
+  | 'profiles' | 'health' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
 
 type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; group?: string; short?: string }
 const ROUTES: NavRoute[] = [
@@ -58,6 +59,7 @@ const ROUTES: NavRoute[] = [
   { id: 'analytics', label: 'Analytics', icon: 'spark' },
   { id: 'clients', label: 'Devices', icon: 'devices' },
   { id: 'topology', label: 'Topology', icon: 'grid' },
+  { id: 'health', label: 'Internet health', icon: 'activity' },
   { id: 'dns', label: 'DNS', icon: 'dns', group: 'Filtering' },
   { id: 'adblock', label: 'Ad blocking', icon: 'block' },
   { id: 'profiles', label: 'Profiles', icon: 'shield' },
@@ -330,7 +332,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
         )}
         <div className={`page${shown === 'globe' || shown === 'assistant' ? ' flush' : ''}`}>
           {updated && (
-            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
+            <div className={route === 'globe' || route === 'assistant' ? 'flush-banner' : undefined}>
               <Banner tone="info" action={
                 <button className="btn sm primary" onClick={() => location.reload()}>Reload</button>
               }>
@@ -339,12 +341,12 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
             </div>
           )}
           {!updated && route !== 'settings' && route !== 's-settings' && (
-            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
+            <div className={route === 'globe' || route === 'assistant' ? 'flush-banner' : undefined}>
               <UpdateBanner onSettings={() => navigate('settings')} />
             </div>
           )}
           {setupRequired && route !== 'settings' && (
-            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
+            <div className={route === 'globe' || route === 'assistant' ? 'flush-banner' : undefined}>
               <Banner tone="warn" action={
                 <button className="btn sm" onClick={() => navigate('settings')}>Set a password</button>
               }>
@@ -361,6 +363,7 @@ function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean
               {route === 'flows' && <FlowsPage />}
               {route === 'analytics' && <AnalyticsPage />}
               {route === 'clients' && <ClientsPage />}
+              {route === 'health' && <InternetHealthPage />}
               {route === 'topology' && <TopologyPage />}
               {route === 'dns' && <DNSPage />}
               {route === 'adblock' && <AdBlockPage />}

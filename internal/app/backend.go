@@ -1000,7 +1000,16 @@ func (a *App) PolicyForClient(clientID string) *store.Policy {
 
 // DefaultGateway reports the next hop this node routes through, which the
 // topology map treats as a fact rather than an inference.
+//
+// The topology page polls this, so the answer is kept for a while rather than
+// forking ip on every request.
 func (a *App) DefaultGateway() string {
+	a.gatewayMu.Lock()
+	defer a.gatewayMu.Unlock()
+	if time.Since(a.gatewayAt) < 30*time.Second {
+		return a.gateway
+	}
+	a.gateway, a.gatewayAt = "", time.Now()
 	out, err := exec.Command("ip", "-4", "route", "show", "default").Output()
 	if err != nil {
 		return ""
@@ -1008,10 +1017,11 @@ func (a *App) DefaultGateway() string {
 	fields := strings.Fields(string(out))
 	for i, f := range fields {
 		if f == "via" && i+1 < len(fields) {
-			return fields[i+1]
+			a.gateway = fields[i+1]
+			break
 		}
 	}
-	return ""
+	return a.gateway
 }
 
 // SyncIntercept reconciles the ARP interception engine with configuration. It

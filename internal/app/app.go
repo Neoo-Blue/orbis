@@ -67,6 +67,10 @@ type App struct {
 	Smart   *adblock.SmartCapture
 
 	DNS       *dnsproxy.Server
+	gatewayMu sync.Mutex
+	gateway   string
+	gatewayAt time.Time
+
 	// BlockPage shows why a site was stopped; BlockGuard decides who can see it.
 	BlockPage  *blockpage.Server
 	BlockGuard *blockpage.Guard

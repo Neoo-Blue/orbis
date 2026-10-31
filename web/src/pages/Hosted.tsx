@@ -18,8 +18,8 @@ const KIND_LABEL: Record<string, string> = { app: 'app', admin: 'admin panel', s
 export function HostedPage() {
   const [tab, setTab] = useState<Tab>('apps')
   const { data, refresh } = usePoll(() => api.hosted.overview(), 15000)
-  const { data: storage, refresh: refreshStorage } = usePoll(() => api.hosted.storage(), 20000)
-  const { data: fwd, refresh: refreshFwd } = usePoll(() => api.hosted.forwards(), 20000)
+  const { data: storage, refresh: refreshStorage } = usePoll(() => api.hosted.storage(), tab === 'storage' ? 20000 : 120000, [tab])
+  const { data: fwd, refresh: refreshFwd } = usePoll(() => api.hosted.forwards(), tab === 'forwards' ? 20000 : 180000, [tab])
   const toast = useToast()
   const [busy, setBusy] = useState<string | null>(null)
   const [forwardFor, setForwardFor] = useState<{ host: string; port: number; name: string; sensitive: boolean } | null>(null)

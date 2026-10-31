@@ -236,13 +236,34 @@ func (s *Store) flushLoop() {
 		}
 		s.flush()
 		if time.Since(lastCheckpoint) >= time.Minute {
-			// Make progress even with pooled readers holding snapshots;
-			// PASSIVE never waits for them like a truncating checkpoint.
-			if _, err := s.db.Exec("PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
-				fmt.Fprintf(os.Stderr, "store: passive checkpoint failed: %v\n", err)
-			}
+			s.checkpoint()
 			lastCheckpoint = time.Now()
 		}
+	}
+}
+
+// walTruncateFrames is the WAL size past which it is shrunk back: 64 MB of
+// 4 KB pages, the same as journal_size_limit.
+const walTruncateFrames = 16384
+
+// checkpoint makes progress even with pooled readers holding snapshots;
+// PASSIVE never waits for them like a truncating checkpoint. A file that grew
+// is only cut back by a checkpoint that resets it, and a busy node rarely gets
+// one by chance, so once everything is copied across it is truncated
+// deliberately. A large WAL slows every read.
+func (s *Store) checkpoint() {
+	var busy, frames, copied int
+	if err := s.db.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &frames, &copied); err != nil {
+		fmt.Fprintf(os.Stderr, "store: passive checkpoint failed: %v\n", err)
+		return
+	}
+	if frames < walTruncateFrames || copied < frames {
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		fmt.Fprintf(os.Stderr, "store: truncating checkpoint failed: %v\n", err)
 	}
 }
 

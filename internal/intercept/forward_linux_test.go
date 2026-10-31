@@ -118,10 +118,10 @@ func TestRenderForwardingWebRedirectIsScopedAndBlocksQUIC(t *testing.T) {
 	if !strings.Contains(s, "set web_clients") || !strings.Contains(s, "elements = { 192.168.50.230 }") {
 		t.Fatalf("web redirect must be scoped to the clients with the certificate:\n%s", s)
 	}
-	if !strings.Contains(s, "ip saddr @web_clients tcp dport 443 redirect to :3129") {
+	if !strings.Contains(s, "ip saddr @web_clients fib daddr type != local tcp dport 443 redirect to :3129") {
 		t.Fatal("HTTPS redirect must use the narrowed set")
 	}
-	if strings.Contains(s, "ip saddr @clients tcp dport 443") {
+	if strings.Contains(s, "ip saddr @clients fib daddr type != local tcp dport 443") {
 		t.Fatal("a client without the certificate must not be redirected into the proxy")
 	}
 	if !strings.Contains(s, "ip saddr @web_clients udp dport 443 counter reject") {
@@ -139,7 +139,7 @@ func TestRenderForwardingWebRedirectIsScopedAndBlocksQUIC(t *testing.T) {
 		Clients:      []netip.Addr{netip.MustParseAddr("192.168.50.26")},
 		RedirectHTTP: true, HTTPPort: 3128, HTTPSPort: 3129,
 	})
-	if !strings.Contains(s, "ip saddr @clients tcp dport 443 redirect to :3129") || !strings.Contains(s, "ip saddr @clients udp dport 443 counter reject") {
+	if !strings.Contains(s, "ip saddr @clients fib daddr type != local tcp dport 443 redirect to :3129") || !strings.Contains(s, "ip saddr @clients udp dport 443 counter reject") {
 		t.Fatalf("unscoped web redirect should apply to the whole client set:\n%s", s)
 	}
 }

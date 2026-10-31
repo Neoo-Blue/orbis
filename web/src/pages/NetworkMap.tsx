@@ -18,11 +18,11 @@ import { bytes } from '../format'
 const ROLE_COLOR: Record<string, string> = {
   gateway: 'var(--accent)',
   access_point: 'var(--blue)',
-  hypervisor: 'var(--violet)',
+  hypervisor: 'var(--rose)',
   nas: 'var(--blue)',
   server: 'var(--accent)',
-  vm: 'var(--violet)',
-  container: 'var(--violet)',
+  vm: 'var(--rose)',
+  container: 'var(--rose)',
   workstation: 'var(--green)',
   mobile: 'var(--green)',
   printer: 'var(--text-dim)',
@@ -86,7 +86,7 @@ export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
     <div ref={wrapRef} style={{
       position: 'relative', height: 560, borderRadius: 'var(--radius)',
       border: '1px solid var(--line)', overflow: 'hidden',
-      background: 'radial-gradient(1200px 600px at 50% 20%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 60%), var(--bg)',
+      background: 'var(--bg)',
       cursor: drag.current ? 'grabbing' : 'grab',
     }}>
       <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet"
@@ -109,7 +109,7 @@ export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
             if (!a || !b) return null
             return (
               <line key={`h${i}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-                stroke="var(--violet)" strokeOpacity={0.28} strokeWidth={1.1} strokeDasharray="1 3" />
+                stroke="var(--rose)" strokeOpacity={0.28} strokeWidth={1.1} strokeDasharray="1 3" />
             )
           })}
 
@@ -168,7 +168,7 @@ export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
                     {truncate(n.label, 18)}
                   </text>
                 )}
-                {n.virtual && <circle r={n.r + 2.5} fill="none" stroke="var(--violet)"
+                {n.virtual && <circle r={n.r + 2.5} fill="none" stroke="var(--rose)"
                   strokeWidth={0.7} strokeDasharray="2 2" opacity={0.6} />}
               </g>
             )
@@ -180,7 +180,7 @@ export function NetworkMap({ graph, onSelect, selectedId, activeIPs }: {
       <div style={{
         position: 'absolute', left: 12, bottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap',
         fontSize: 10.5, color: 'var(--text-faint)', background: 'color-mix(in srgb, var(--bg) 80%, transparent)',
-        padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line-soft)', backdropFilter: 'blur(6px)',
+        padding: '6px 10px', borderRadius: 8, border: '1px solid var(--line-soft)',
       }}>
         {[['gateway', 'gateway'], ['hypervisor', 'hypervisor'], ['nas', 'storage'],
           ['server', 'server'], ['workstation', 'endpoint'], ['iot', 'iot']].map(([role, label]) => (

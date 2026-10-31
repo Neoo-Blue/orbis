@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-10-31T08:47:15.288Z",
+        "reason": "Claude and the finish reviewer: Geist is the product's workhorse face, kept on the block page below the hostname for continuity with the app"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist mono",
+        "createdAt": "2026-10-31T08:47:15.303Z",
+        "reason": "Claude: the hostname is a security read and rn/m, l/1 must stay distinct; the direction contract reserves mono for hostnames"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "geist",
+        "createdAt": "2026-10-31T08:57:03.093Z",
+        "reason": "Claude: same Geist face DESIGN.md declares; the block page self-hosts it under @font-face family Geist because it cannot load the app's bundle"
+      }
+    ]
+  }
+}

@@ -36,13 +36,20 @@ type Store struct {
 	// flowBuf batches flow upserts; drained on a ticker or when full.
 	mu      sync.Mutex
 	flowBuf []Flow
+	// flowIdx finds a flow already waiting in flowBuf, so a stalled writer
+	// holds one row per flow rather than one per checkpoint.
+	flowIdx map[string]int
 	dnsBuf  []DNSQuery
+	// listChanged runs before stored list rows change; see OnListChange.
+	listChanged func()
 
 	closed chan struct{}
 	// kick wakes flushLoop when a buffer hits maxBatch. Capacity 1 so
 	// QueueFlow/QueueDNS never block on the writer.
 	kick chan struct{}
 	wg   sync.WaitGroup
+
+	checkpointing atomic.Bool
 
 	dropped       atomic.Uint64
 	flushes       atomic.Uint64
@@ -107,8 +114,8 @@ func Open(path string) (*Store, error) {
 	go s.flushLoop()
 	go func() {
 		defer s.wg.Done()
-		// Building this index on millions of domains can take minutes;
-		// leave it out of the synchronous schema path so DNS can start.
+		// Index work on millions of domains can take minutes; leave it out of
+		// the synchronous schema path so DNS can start.
 		t := time.NewTimer(5 * time.Second)
 		defer t.Stop()
 		select {
@@ -116,53 +123,76 @@ func Open(path string) (*Store, error) {
 			return
 		case <-t.C:
 		}
-		var exists int
-		err := s.db.QueryRow("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_block_source'").Scan(&exists)
-		if err == nil {
-			return
-		}
-		if err != sql.ErrNoRows {
-			fmt.Fprintf(os.Stderr, "store: block source index check failed: %v\n", err)
-			return
-		}
-		tx, unlock, err := s.beginWrite()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "store: block source index failed: %v\n", err)
-			return
-		}
-		defer unlock()
-		defer tx.Rollback()
-		select {
-		case <-s.closed:
-			return
-		default:
-		}
-		// A shutdown mid-build must interrupt the statement: Close waits
-		// for this goroutine before its final flush, and systemd kills the
-		// daemon after 25 s, which would lose every queued row. The driver
-		// interrupts SQLite when the context is cancelled; the half-built
-		// index is rolled back and the next start tries again.
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() {
-			select {
-			case <-s.closed:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-		started := time.Now()
-		fmt.Fprintln(os.Stderr, "store: building block source index")
-		if _, err = tx.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_block_source ON block_domains(source)"); err == nil {
-			err = tx.Commit()
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "store: block source index failed: %v\n", err)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "store: block source index finished in %v\n", time.Since(started).Round(time.Millisecond))
+		s.maintainIndexes()
 	}()
 	return s, nil
+}
+
+// maintainIndexes brings the slow indexes to what the schema wants.
+func (s *Store) maintainIndexes() {
+	for _, ix := range []struct {
+		name string
+		want bool
+		ddl  string
+	}{
+		{"idx_block_source", true, "CREATE INDEX IF NOT EXISTS idx_block_source ON block_domains(source)"},
+		// The primary key (domain, source) already answers every lookup by
+		// domain; this was a third copy of the table's biggest column to
+		// keep up to date on every list change.
+		{"idx_block_domain", false, "DROP INDEX IF EXISTS idx_block_domain"},
+	} {
+		var exists int
+		err := s.db.QueryRow("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?", ix.name).Scan(&exists)
+		if err != nil && err != sql.ErrNoRows {
+			fmt.Fprintf(os.Stderr, "store: index check for %s failed: %v\n", ix.name, err)
+			return
+		}
+		if (err == nil) == ix.want {
+			continue
+		}
+		if !s.indexDDL(ix.name, ix.ddl) {
+			return
+		}
+	}
+}
+
+func (s *Store) indexDDL(name, ddl string) bool {
+	tx, unlock, err := s.beginWrite()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store: %s failed: %v\n", name, err)
+		return false
+	}
+	defer unlock()
+	defer tx.Rollback()
+	select {
+	case <-s.closed:
+		return false
+	default:
+	}
+	// A shutdown mid-build must interrupt the statement: Close waits for this
+	// goroutine before its final flush, and systemd kills the daemon after
+	// 25 s, which would lose every queued row. The driver interrupts SQLite
+	// when the context is cancelled; the half-done work is rolled back and the
+	// next start tries again.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-s.closed:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	started := time.Now()
+	if _, err = tx.ExecContext(ctx, ddl); err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store: %s failed: %v\n", name, err)
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "store: %s finished in %v\n", name, time.Since(started).Round(time.Millisecond))
+	return true
 }
 
 func (s *Store) DB() *sql.DB { return s.db }
@@ -210,13 +240,67 @@ func (s *Store) flushLoop() {
 		}
 		s.flush()
 		if time.Since(lastCheckpoint) >= time.Minute {
-			// Make progress even with pooled readers holding snapshots;
-			// PASSIVE never waits for them like a truncating checkpoint.
-			if _, err := s.db.Exec("PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
-				fmt.Fprintf(os.Stderr, "store: passive checkpoint failed: %v\n", err)
+			// Copying a backlog into the database can take minutes on an SD
+			// card, and the log writer must not wait for it.
+			if s.checkpointing.CompareAndSwap(false, true) {
+				s.wg.Add(1)
+				go func() {
+					defer s.wg.Done()
+					defer s.checkpointing.Store(false)
+					s.checkpoint()
+				}()
 			}
 			lastCheckpoint = time.Now()
 		}
+	}
+}
+
+// walTruncateFrames is the WAL size past which it is shrunk back: 64 MB of
+// 4 KB pages, the same as journal_size_limit.
+const walTruncateFrames = 16384
+
+// shouldTruncateWAL reports a WAL that has grown and is all but copied across.
+// Asking for everything copied never comes true on a live node, because a log
+// row always lands between the checkpoint and the check; the file stayed at
+// 1.4 GB with all but 0.5% of it already in the database.
+func shouldTruncateWAL(frames, copied int) bool {
+	return frames >= walTruncateFrames && frames-copied < walTruncateFrames
+}
+
+// checkpoint makes progress even with pooled readers holding snapshots;
+// PASSIVE never waits for them like a truncating checkpoint. A file that grew
+// is only cut back by a checkpoint that resets it, and a busy node rarely gets
+// one by chance, so once everything is copied across it is truncated
+// deliberately. A large WAL slows every read.
+func (s *Store) checkpoint() {
+	// A long copy must not hold up a shutdown; what it did not reach is simply
+	// copied next time.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-s.closed:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	var busy, frames, copied int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &frames, &copied); err != nil {
+		if ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "store: passive checkpoint failed: %v\n", err)
+		}
+		return
+	}
+	if !shouldTruncateWAL(frames, copied) {
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	if _, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil && ctx.Err() == nil {
+		fmt.Fprintf(os.Stderr, "store: truncating checkpoint failed: %v\n", err)
 	}
 }
 
@@ -366,11 +450,20 @@ func (s *Store) WriteStats() WriteStats {
 // never waits on disk or writeMu. A full buffer wakes flushLoop instead.
 func (s *Store) QueueFlow(f Flow) {
 	s.mu.Lock()
+	if i, ok := s.flowIdx[f.ID]; ok {
+		s.flowBuf[i] = f // the newest snapshot says everything an older one did
+		s.mu.Unlock()
+		return
+	}
 	if len(s.flowBuf) >= maxPending {
 		s.mu.Unlock()
 		s.noteDropped(1)
 		return
 	}
+	if s.flowIdx == nil {
+		s.flowIdx = make(map[string]int, 256)
+	}
+	s.flowIdx[f.ID] = len(s.flowBuf)
 	s.flowBuf = append(s.flowBuf, f)
 	n := len(s.flowBuf)
 	s.mu.Unlock()
@@ -431,6 +524,7 @@ func (s *Store) flush() {
 	flows := s.flowBuf
 	dns := s.dnsBuf
 	s.flowBuf = nil
+	s.flowIdx = nil
 	s.dnsBuf = nil
 	s.mu.Unlock()
 	s.writeMu.Unlock()
@@ -782,6 +876,48 @@ func (s *Store) countryTotals(since time.Time) ([]map[string]any, error) {
 	return out, rows.Err()
 }
 
+// FlowAddrTotal groups recent flows by endpoint pair so callers can attribute
+// traffic to zones without scanning individual rows outside the window.
+type FlowAddrTotal struct {
+	SrcIP   string
+	DstIP   string
+	Flows   int64
+	Bytes   int64
+	Blocked int64
+}
+
+// FlowAddrTotals sums flows since the given timestamp by (src_ip, dst_ip),
+// memoised for 30 s so polling the zone matrix never touches the whole table.
+func (s *Store) FlowAddrTotals(since time.Time) ([]FlowAddrTotal, error) {
+	v, err := s.aggregates.get("flowaddrs|"+window(since), 30*time.Second, func() (any, error) {
+		return s.flowAddrTotals(since)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]FlowAddrTotal), nil
+}
+
+func (s *Store) flowAddrTotals(since time.Time) ([]FlowAddrTotal, error) {
+	rows, err := s.db.Query(`SELECT src_ip, dst_ip, COUNT(*), COALESCE(SUM(bytes_in+bytes_out), 0),
+		COALESCE(SUM(CASE WHEN verdict='block' THEN 1 ELSE 0 END), 0)
+		FROM flows INDEXED BY idx_flows_started
+		WHERE started_at >= ? GROUP BY src_ip, dst_ip`, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FlowAddrTotal{}
+	for rows.Next() {
+		var t FlowAddrTotal
+		if err := rows.Scan(&t.SrcIP, &t.DstIP, &t.Flows, &t.Bytes, &t.Blocked); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // ---------- events ----------
 
 func (s *Store) AddEvent(e Event) error {
@@ -847,6 +983,7 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 }
 
 func (s *Store) AckEvent(id string) error {
+	defer s.aggregates.forget("summary|")
 	_, err := s.db.Exec("UPDATE events SET acknowledged=1 WHERE id=?", id)
 	return err
 }
@@ -896,8 +1033,8 @@ func (s *Store) Prune(ctx context.Context, flowDays, eventDays int) error {
 	if flowDays > 0 {
 		cut := now.AddDate(0, 0, -flowDays).Unix()
 		for _, q := range []string{
-			"DELETE FROM flows WHERE rowid IN (SELECT rowid FROM flows WHERE started_at < ? LIMIT 20000)",
-			"DELETE FROM dns_queries WHERE rowid IN (SELECT rowid FROM dns_queries WHERE ts < ? LIMIT 20000)",
+			"DELETE FROM flows WHERE rowid IN (SELECT rowid FROM flows WHERE started_at < ? LIMIT 2000)",
+			"DELETE FROM dns_queries WHERE rowid IN (SELECT rowid FROM dns_queries WHERE ts < ? LIMIT 2000)",
 		} {
 			for {
 				if err := ctx.Err(); err != nil {
@@ -918,7 +1055,7 @@ func (s *Store) Prune(ctx context.Context, flowDays, eventDays int) error {
 				if n == 0 {
 					break
 				}
-				t := time.NewTimer(250 * time.Millisecond)
+				t := time.NewTimer(25 * time.Millisecond)
 				select {
 				case <-ctx.Done():
 					t.Stop()

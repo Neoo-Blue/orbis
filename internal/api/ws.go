@@ -62,17 +62,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Send an immediate snapshot so the UI has something to draw before the
-	// first event arrives.
-	snapshot := app.Event{Type: "snapshot", TS: time.Now().UnixMilli(), Data: map[string]any{
-		"status":  s.app.SystemStatus(),
-		"clients": s.app.Clients(),
-		"flows":   s.app.Tracker.Active(300),
-	}}
-	if err := writeWS(ctx, conn, snapshot); err != nil {
-		return
-	}
-
 	ping := time.NewTicker(30 * time.Second)
 	defer ping.Stop()
 

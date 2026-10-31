@@ -7,7 +7,7 @@ import countryShapes from '../data/countries.json'
  * The globe renderer.
  *
  * Design intent: this should read as an instrument, not a marketing graphic.
- * The sphere is nearly black with a thin atmospheric rim; landmasses are drawn
+ * The sphere is the plate's blue; landmasses are drawn
  * as hairlines rather than a texture, so the arcs stay the brightest thing on
  * screen. Every arc is one live connection, and its colour encodes the verdict
  * — that mapping is the whole point of the view.
@@ -90,23 +90,27 @@ export interface PointSpec {
   inbound?: boolean
 }
 
+// Every marker shares these, so a thousand destinations are one upload.
+const CORE_GEOMETRY = new THREE.SphereGeometry(0.55, 8, 8)
+const RING_GEOMETRY = new THREE.RingGeometry(1, 1.15, 28)
+const PULSE_GEOMETRY = new THREE.RingGeometry(1, 1.18, 28)
+
 const COLORS = {
-  allow: new THREE.Color('#4ee8c0'),
-  block: new THREE.Color('#ff6b7a'),
-  filtered: new THREE.Color('#a98bff'),
-  pending: new THREE.Color('#ffc266'),
-  home: new THREE.Color('#7fd3ff'),
-  inbound: new THREE.Color('#ffc266'),
-  land: new THREE.Color('#1d3550'),
-  border: new THREE.Color('#152740'),
-  atmosphere: new THREE.Color('#2a6f8f'),
+  allow: new THREE.Color('#62d8b2'),
+  block: new THREE.Color('#f2643c'),
+  filtered: new THREE.Color('#e8a7c0'),
+  pending: new THREE.Color('#f2b544'),
+  home: new THREE.Color('#d9bc7c'),
+  inbound: new THREE.Color('#f2b544'),
+  land: new THREE.Color('#9a8a66'),
+  border: new THREE.Color('#34506f'),
   // The bright crest of the travelling gradient. Outbound runs cool (the
   // network reaching out), inbound runs warm (something reaching in) — so
   // direction is readable from a still frame, not only from the motion.
-  flowOut: new THREE.Color('#eafffb'),
+  flowOut: new THREE.Color('#fbf7ea'),
   flowIn: new THREE.Color('#ffd9a0'),
-  countryLit: new THREE.Color('#4ee8c0'),
-  countryBlocked: new THREE.Color('#ff6b7a'),
+  countryLit: new THREE.Color('#62d8b2'),
+  countryBlocked: new THREE.Color('#f2643c'),
 }
 
 function verdictColor(v: string): THREE.Color {
@@ -177,7 +181,7 @@ function arcFlowMaterial(spec: ArcSpec, weight: number): THREE.ShaderMaterial {
   const w = flowWeights(spec.bytesIn, spec.bytesOut, spec.direction)
   return new THREE.ShaderMaterial({
     transparent: true,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,
     depthWrite: false,
     uniforms: {
       uBase: { value: arcColor(spec) },
@@ -252,6 +256,14 @@ function arcFlowMaterial(spec: ArcSpec, weight: number): THREE.ShaderMaterial {
   })
 }
 
+interface Pulse {
+  mesh: THREE.Mesh
+  mat: THREE.MeshBasicMaterial
+  reach: number
+  inbound: boolean
+  phase: number
+}
+
 export class GlobeScene {
   readonly scene = new THREE.Scene()
   readonly camera: THREE.PerspectiveCamera
@@ -264,13 +276,11 @@ export class GlobeScene {
   private countryGroup = new THREE.Group()
 
   /** Expanding rings at destination markers, one per marker. */
-  private pulses: Array<{
-    mesh: THREE.Mesh
-    mat: THREE.MeshBasicMaterial
-    reach: number
-    inbound: boolean
-    phase: number
-  }> = []
+  private pulses: Pulse[] = []
+  private markers = new Map<string, { core: THREE.Mesh; ring: THREE.Mesh; pulse: Pulse }>()
+  private homeKey = ''
+  private homeMeshes: THREE.Mesh[] = []
+  private hoverQueued = false
 
   /** One highlight layer per ISO country code, eased toward `target`. */
   private countryLayers = new Map<string, {
@@ -346,36 +356,9 @@ export class GlobeScene {
     // globe reads as a wireframe ball and depth is impossible to judge.
     const body = new THREE.Mesh(
       new THREE.SphereGeometry(GLOBE_RADIUS * 0.995, 64, 48),
-      new THREE.MeshBasicMaterial({ color: 0x060a11 }),
+      new THREE.MeshBasicMaterial({ color: 0x06263e }),
     )
     this.globeGroup.add(body)
-
-    // Atmosphere: back-side sphere with a fresnel-ish falloff, which is what
-    // gives the silhouette its glow without any post-processing.
-    const atmosphere = new THREE.Mesh(
-      new THREE.SphereGeometry(GLOBE_RADIUS * 1.14, 64, 48),
-      new THREE.ShaderMaterial({
-        transparent: true,
-        side: THREE.BackSide,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        uniforms: { uColor: { value: COLORS.atmosphere } },
-        vertexShader: `
-          varying vec3 vNormal;
-          void main() {
-            vNormal = normalize(normalMatrix * normal);
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }`,
-        fragmentShader: `
-          uniform vec3 uColor;
-          varying vec3 vNormal;
-          void main() {
-            float intensity = pow(0.62 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 3.0);
-            gl_FragColor = vec4(uColor, 1.0) * intensity * 0.9;
-          }`,
-      }),
-    )
-    this.globeGroup.add(atmosphere)
 
     // Graticule: sparse lat/lon rings for orientation.
     this.globeGroup.add(this.buildGraticule())
@@ -437,7 +420,7 @@ export class GlobeScene {
         color: COLORS.countryLit,
         transparent: true,
         opacity: 0,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
         depthWrite: false,
       })
       const lines = new THREE.LineSegments(geom, mat)
@@ -656,38 +639,29 @@ export class GlobeScene {
    * out of the marker instead of by making it bigger.
    */
   setPoints(points: PointSpec[], home?: PointSpec) {
-    while (this.pointGroup.children.length) {
-      const child = this.pointGroup.children[0] as THREE.Mesh
-      this.pointGroup.remove(child)
-      child.geometry.dispose()
-      ;(child.material as THREE.Material).dispose()
-    }
-    this.pulses = []
-
+    const seen = new Set<string>()
     for (const p of points) {
-      const pos = latLngToVector(p.lat, p.lng, GLOBE_RADIUS * 1.004)
+      const key = `${p.lat.toFixed(2)},${p.lng.toFixed(2)},${p.inbound === true}`
+      seen.add(key)
       // Volume moves the ring from 1.6 to about 3 units. The core never grows,
       // so two adjacent destinations stay two destinations.
       const reach = 1.6 + Math.min(1.5, Math.log10(Math.max(p.weight, 1)) * 0.26)
+      const have = this.markers.get(key)
+      if (have) {
+        have.ring.scale.setScalar(reach)
+        have.pulse.reach = reach
+        have.core.userData.label = p.label
+        continue
+      }
+      const pos = latLngToVector(p.lat, p.lng, GLOBE_RADIUS * 1.004)
 
-      const core = new THREE.Mesh(
-        new THREE.SphereGeometry(0.55, 8, 8),
-        new THREE.MeshBasicMaterial({
-          color: COLORS.allow, transparent: true, opacity: 0.95,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      )
+      const core = new THREE.Mesh(CORE_GEOMETRY, CORE_MATERIAL)
       core.position.copy(pos)
       core.userData.label = p.label
       this.pointGroup.add(core)
 
-      const ring = new THREE.Mesh(
-        new THREE.RingGeometry(reach, reach + 0.28, 28),
-        new THREE.MeshBasicMaterial({
-          color: COLORS.allow, transparent: true, opacity: 0.4,
-          side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      )
+      const ring = new THREE.Mesh(RING_GEOMETRY, RING_MATERIAL)
+      ring.scale.setScalar(reach)
       ring.position.copy(pos)
       // Lay the ring flat against the sphere; facing the centre makes it a disc
       // seen edge-on from orbit, which is invisible.
@@ -697,9 +671,26 @@ export class GlobeScene {
       // One expanding pulse per destination, phase-offset so a busy map does
       // not blink in unison. Direction decides which way it travels: outward
       // for data leaving, inward for data arriving.
-      this.spawnPulse(pos, reach, p.inbound === true, hashPhase(p.label + p.lat))
+      const pulse = this.spawnPulse(pos, reach, p.inbound === true, hashPhase(p.label + p.lat))
+      this.markers.set(key, { core, ring, pulse })
+    }
+    for (const [key, m] of this.markers) {
+      if (seen.has(key)) continue
+      this.pointGroup.remove(m.core, m.ring, m.pulse.mesh)
+      m.pulse.mat.dispose()
+      this.pulses.splice(this.pulses.indexOf(m.pulse), 1)
+      this.markers.delete(key)
     }
 
+    const homeKey = home ? `${home.lat},${home.lng}` : ''
+    if (homeKey === this.homeKey) return
+    this.homeKey = homeKey
+    for (const m of this.homeMeshes) {
+      this.pointGroup.remove(m)
+      m.geometry.dispose()
+      ;(m.material as THREE.Material).dispose()
+    }
+    this.homeMeshes = []
     if (home) {
       const pos = latLngToVector(home.lat, home.lng, GLOBE_RADIUS * 1.006)
       const ring = new THREE.Mesh(
@@ -718,26 +709,29 @@ export class GlobeScene {
         new THREE.SphereGeometry(0.7, 10, 10),
         new THREE.MeshBasicMaterial({
           color: COLORS.home, transparent: true, opacity: 1,
-          blending: THREE.AdditiveBlending, depthWrite: false,
+          blending: THREE.NormalBlending, depthWrite: false,
         }),
       )
       dot.position.copy(pos)
       this.pointGroup.add(dot)
+      this.homeMeshes = [ring, dot]
     }
   }
 
   /** spawnPulse adds an expanding (or contracting) ring at a marker. */
-  private spawnPulse(pos: THREE.Vector3, reach: number, inbound: boolean, phase: number) {
+  private spawnPulse(pos: THREE.Vector3, reach: number, inbound: boolean, phase: number): Pulse {
     const mat = new THREE.MeshBasicMaterial({
       color: inbound ? COLORS.flowIn : COLORS.flowOut,
       transparent: true, opacity: 0,
-      side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+      side: THREE.DoubleSide, depthWrite: false,
     })
-    const mesh = new THREE.Mesh(new THREE.RingGeometry(1, 1.18, 28), mat)
+    const mesh = new THREE.Mesh(PULSE_GEOMETRY, mat)
     mesh.position.copy(pos)
     mesh.lookAt(0, 0, 0)
     this.pointGroup.add(mesh)
-    this.pulses.push({ mesh, mat, reach, inbound, phase })
+    const pulse = { mesh, mat, reach, inbound, phase }
+    this.pulses.push(pulse)
+    return pulse
   }
 
   /**
@@ -781,12 +775,18 @@ export class GlobeScene {
   }
 
   private onPointerMove = (e: PointerEvent) => {
+    if (!this.dragging && e.target !== this.renderer.domElement) return
     const rect = this.renderer.domElement.getBoundingClientRect()
     this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
     this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
 
     if (!this.dragging) {
-      this.updateHover(e.clientX - rect.left, e.clientY - rect.top)
+      // Raycasting up to a thousand arcs is a frame's work, not an event's.
+      const x = e.clientX - rect.left, y = e.clientY - rect.top
+      if (!this.hoverQueued) {
+        this.hoverQueued = true
+        requestAnimationFrame(() => { this.hoverQueued = false; this.updateHover(x, y) })
+      }
       return
     }
     const dx = e.clientX - this.lastPointer.x
@@ -837,11 +837,12 @@ export class GlobeScene {
         break
       }
     }
-    if (found?.id !== this.hovered?.id) {
+    const changed = found?.id !== this.hovered?.id
+    if (changed) {
       this.hovered = found
       this.renderer.domElement.style.cursor = found ? 'pointer' : 'grab'
     }
-    this.onHover?.(found, { x, y })
+    if (found || changed) this.onHover?.(found, { x, y })
   }
 
   /** focusOn animates the camera to centre a coordinate, used when the user
@@ -943,6 +944,11 @@ function clamp(v: number, lo: number, hi: number) {
 }
 
 /** hashPhase derives a stable 0..1 offset from a string. */
+const CORE_MATERIAL = new THREE.MeshBasicMaterial({ color: COLORS.allow, transparent: true, opacity: 0.95, depthWrite: false })
+const RING_MATERIAL = new THREE.MeshBasicMaterial({
+  color: COLORS.allow, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false,
+})
+
 function hashPhase(s: string): number {
   let h = 2166136261
   for (let i = 0; i < s.length; i++) {

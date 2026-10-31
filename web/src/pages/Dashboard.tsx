@@ -1,105 +1,215 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import { usePoll, type LiveEvent } from '../hooks'
-import { Banner, Card, Dot, Empty, Icons, Loading, Stat } from '../ui'
-import { ago, bits, bytes, clientName, compact, duration, num, pct, countryFlag } from '../format'
-import type { Client, EventItem, Flow, Summary, SystemStatus, NodeResources } from '../types'
+import { usePoll } from '../hooks'
+import { useLiveBatch } from '../live'
+import { OrbitChart, type OrbitDevice, type OrbitFlow, type OrbitHandle } from '../orbit/OrbitChart'
+import { Card, Dot, Empty, Icons, Loading, Sparkline } from '../ui'
+import { ago, bits, bytes, clientName, compact, duration, num, pct } from '../format'
+import type { Client, DNSQuery, EventItem, Flow, Health, Summary, SystemStatus, NodeResources } from '../types'
+
+type Nav = 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings' | 'dnstools' | 'problems' | 'health'
 
 interface Props {
   status: SystemStatus | null
   summary: Summary | null
-  events: LiveEvent[]
-  onNavigate: (r: 'globe' | 'clients' | 'flows' | 'adblock' | 'events' | 'firewall' | 'settings', sub?: string) => void
+  onNavigate: (r: Nav, sub?: string) => void
 }
 
-export function Dashboard({ status, summary, events, onNavigate }: Props) {
+/** Things that stay put go on the inner orbit, things people carry on the outer. */
+export const FIXED_TYPES = /server|storage|nas|tv|speaker|camera|iot|printer|console|appliance|router|switch|access/i
+
+export function orbitDevices(clients: Client[]): OrbitDevice[] {
+  return clients.map((c) => ({
+    id: c.id, name: clientName(c), rate: c.rate_in + c.rate_out, flows: c.active_flows, paused: c.blocked,
+    ring: FIXED_TYPES.test(c.device_type ?? '') ? 0 : 1,
+  }))
+}
+
+export function orbitFlows(flows: Flow[]): OrbitFlow[] {
+  return flows.filter((f) => f.client_id).map((f) => ({
+    client: f.client_id as string, lon: f.lat || f.lon ? f.lon : null,
+    blocked: f.verdict === 'block', bytes: f.bytes_in + f.bytes_out,
+  }))
+}
+
+interface Attention { key: string; level: 'problem' | 'attention' | 'notice'; title: string; threat?: boolean; go: () => void }
+type Tone = 'ok' | 'attention' | 'problem'
+
+/** Vermilion is for something stopped or a threat. A fault is amber, however bad. */
+const THREAT_EVENTS = new Set(['threat', 'ids'])
+
+interface Tick { rate_in: number; rate_out: number; flows_active: number }
+
+const ClientDrawer = lazy(() => import('./Clients').then((m) => ({ default: m.ClientDrawer })))
+
+export function Dashboard({ status, summary, onNavigate }: Props) {
+  const [openDevice, setOpenDevice] = useState<string | null>(null)
+  const { data: health } = usePoll<Health>(() => api.simple.health(), 15000)
   const { data: clients } = usePoll(() => api.clients.list(), 12000)
+  const { data: active } = usePoll(() => api.flows.active(160), 8000)
+  const { data: internet } = usePoll(() => api.netwatch.status(), 15000)
   const { data: recentEvents } = usePoll(() => api.events.list({ hours: 24, limit: 8 }), 20000)
   const { data: topBlocked } = usePoll(() => api.adblock.topBlocked(24, 8), 30000)
   const { data: topDest } = usePoll(() => api.flows.list({ hours: 24, order: 'bytes', limit: 8 }), 30000)
-  const { data: throughput } = usePoll(() => api.series('throughput_out', 3), 30000)
-  const { data: dnsSeries } = usePoll(() => api.series('dns_queries_total', 6), 60000)
+  const { data: blockedSeries } = usePoll(() => api.series('dns_blocked_total', 24, 48), 60000)
+  const { data: blockedLog } = usePoll(() => api.dns.log({ hours: 2, blocked_only: true, limit: 6 }), 0)
 
-  // Live counters derived from the socket, so the headline numbers move
-  // between polls instead of stepping every fifteen seconds.
-  const [liveRate, setLiveRate] = useState({ in: 0, out: 0, flows: 0 })
-  useEffect(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i].type === 'stats.tick') {
-        const d = events[i].data as { rate_in: number; rate_out: number; flows_active: number }
-        setLiveRate({ in: d.rate_in, out: d.rate_out, flows: d.flows_active })
-        break
-      }
+  const orbit = useRef<OrbitHandle>(null)
+  const [tick, setTick] = useState<Tick | null>(null)
+  const [stopped, setStopped] = useState<DNSQuery[] | null>(null)
+  useLiveBatch(['stats.tick'], (batch) => {
+    const d = batch[batch.length - 1].data as Tick
+    setTick((t) => (t && t.rate_in === d.rate_in && t.rate_out === d.rate_out && t.flows_active === d.flows_active ? t : d))
+  })
+  useLiveBatch(['dns.query'], (batch) => {
+    const fresh: DNSQuery[] = []
+    for (const ev of batch) {
+      const q = ev.data as DNSQuery
+      if (q?.blocked) { fresh.push(q); if (q.client_id) orbit.current?.strike(q.client_id, q.name) }
     }
-  }, [events])
+    if (fresh.length) setStopped((prev) => [...fresh.reverse(), ...(prev ?? blockedLog?.queries ?? [])].slice(0, 6))
+  })
+  useLiveBatch(['flow.new'], (batch) => {
+    for (const ev of batch) { const f = ev.data as Flow; if (f?.client_id) orbit.current?.arrive(f.client_id, f.lat || f.lon ? f.lon : null) }
+  })
 
-  const onlineClients = useMemo(
+  const online = useMemo(
     () => (clients?.clients ?? []).filter((c) => c.online).sort((a, b) => (b.rate_in + b.rate_out) - (a.rate_in + a.rate_out)),
     [clients],
   )
-  const throughputPoints = useMemo(() => (throughput?.points ?? []).map((p) => p.v), [throughput])
-  const dnsPoints = useMemo(() => (dnsSeries?.points ?? []).map((p) => p.v), [dnsSeries])
+  const devices = useMemo(() => orbitDevices(online), [online])
+  const flows = useMemo(() => orbitFlows(active?.flows ?? []), [active])
+  const blockedPoints = useMemo(() => (blockedSeries?.points ?? []).map((p) => p.v), [blockedSeries])
+  const names = useMemo(() => new Map((clients?.clients ?? []).map((c) => [c.id, clientName(c)])), [clients])
 
-  if (!summary) return <Loading what="dashboard" />
+  if (!summary) return <Loading what="overview" />
 
   const capture = status?.capture as Record<string, number | boolean> | undefined
-  const captureOff = capture && capture.interfaces === 0
-  const sysctlIssues = (status?.sysctl ?? []).filter((s) => s.critical && !s.ok)
+  const level = health?.level ?? 'ok'
+  const netFault = internet && internet.story !== 'ok' ? internet : null
+  const verdict = !health ? 'Checking your network'
+    : level !== 'ok' ? health.headline.replace(/\.$/, '')
+    : !health.protection_on ? 'Filtering is switched off'
+    : netFault ? 'Protected, but the internet is unwell'
+    : status?.mode === 'inline' ? 'Your network is protected' : 'Protected by DNS filtering'
+  // One tone for the sentence, its mark and the chart, so a fault can never sit
+  // on the safe colour.
+  const tone: Tone = !health ? 'attention'
+    : level !== 'ok' ? level
+    : !health.protection_on ? 'problem'
+    : netFault ? 'attention' : 'ok'
+  const quiet = (health?.points ?? []).filter((p) => p.level === 'ok').slice(0, 3)
+  const stoppedList = stopped ?? blockedLog?.queries ?? []
+
+  // Everything that needs the owner, in one place, most serious first.
+  const attention: Attention[] = []
+  for (const p of health?.points ?? []) {
+    if (p.level !== 'ok') attention.push({ key: p.text, level: p.level, title: p.text, go: () => onNavigate(p.page === 'settings' || p.page === 'firewall' ? p.page : 'events') })
+  }
+  if (netFault) attention.push({ key: 'internet', level: netFault.state === 'down' ? 'problem' : 'attention', title: netFault.headline, go: () => onNavigate('health') })
+  if (capture && capture.interfaces === 0) attention.push({ key: 'capture', level: 'attention', title: 'Packet capture opened no interfaces, so names and sites will be missing from connections.', go: () => onNavigate('settings') })
+  for (const e of (recentEvents?.events ?? []).filter((e) => !e.acknowledged && (e.severity === 'warning' || e.severity === 'critical')).slice(0, 3)) {
+    attention.push({ key: e.id, level: e.severity === 'critical' ? 'problem' : 'attention', title: e.title, threat: THREAT_EVENTS.has(e.category), go: () => onNavigate('events') })
+  }
+  if (summary.ad_candidates > 0) attention.push({ key: 'ads', level: 'notice', title: `${summary.ad_candidates} new ${summary.ad_candidates === 1 ? 'host looks' : 'hosts look'} like ads`, go: () => onNavigate('adblock') })
+  const order = { problem: 0, attention: 1, notice: 2 }
+  attention.sort((x, y) => order[x.level] - order[y.level])
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      {status?.mode === 'observe' && (
-        <Banner tone="info" action={<button className="btn sm" onClick={() => onNavigate('settings')}>Configure</button>}>
-          <strong style={{ display: 'block', marginBottom: 2 }}>Observe mode</strong>
-          Orbis is watching traffic that reaches it, but nothing is routed through this node and
-          no firewall ruleset is installed. Blocked verdicts are recorded, not enforced.
-        </Banner>
-      )}
-      {captureOff && (
-        <Banner tone="warn">
-          Packet capture opened no interfaces. Without <code>CAP_NET_RAW</code> the flow table
-          only sees what conntrack reports, so hostnames and SNI will be missing.
-        </Banner>
-      )}
-      {sysctlIssues.length > 0 && status?.mode === 'inline' && (
-        <Banner tone="err" action={<button className="btn sm" onClick={() => onNavigate('firewall')}>Fix</button>}>
-          {sysctlIssues.map((s) => s.key).join(', ')} {sysctlIssues.length === 1 ? 'is' : 'are'} not set
-          correctly, routing will not work as configured.
-        </Banner>
-      )}
+      <section className="plate">
+        <div className="plate-state">
+          <h2 className={`verdict-line ${tone}`}>{verdict}</h2>
+          <ul className="plate-points">
+            {status?.mode === 'observe' && (
+              <li>Filtering every device that uses this resolver. Firewall rules are not enforced in observe mode.</li>
+            )}
+            {quiet.map((p) => <li key={p.text}>{p.text}</li>)}
+          </ul>
+          {status && health && (
+            <dl className="plate-ledger">
+              {protectionLayers(status, health).map((l) => (
+                <div key={l.name}><dt>{l.name}</dt><dd className={l.on ? 'on' : undefined}>{l.state}</dd></div>
+              ))}
+            </dl>
+          )}
+          <div className="plate-stopped">
+            <div className="plate-caption"><b className="plate-figure">{compact(summary.dns_blocked)}</b> stopped today, {pct(summary.block_rate, 0)} of lookups</div>
+            {blockedPoints.length > 1 && (
+              <>
+                <Sparkline points={blockedPoints} tone="red" height={96} />
+                <div className="plate-axis"><span>24h ago</span><span>now</span></div>
+              </>
+            )}
+          </div>
+          <dl className="plate-facts">
+            <div><dt>Devices online</dt><dd>{clients ? online.length : summary.clients_online} of {clients?.clients.length ?? summary.clients}</dd></div>
+            <div><dt>Connections</dt><dd>{num(tick?.flows_active ?? summary.active_flows)}</dd></div>
+            <div><dt>Down</dt><dd>{bits(tick?.rate_in ?? 0)}</dd></div>
+            <div><dt>Up</dt><dd>{bits(tick?.rate_out ?? 0)}</dd></div>
+          </dl>
+        </div>
 
-      <div className="grid c4">
-        <Stat label="Throughput out" tone="accent" spark={throughputPoints}
-          value={bits(liveRate.out || 0)}
-          sub={`${bits(liveRate.in || 0)} inbound`} />
-        <Stat label="Active connections" tone="blue"
-          value={num(liveRate.flows || summary.active_flows)}
-          sub={`${compact(summary.flows)} in 24h`} />
-        <Stat label="DNS blocked" tone={summary.block_rate > 0.35 ? 'amber' : 'accent'} spark={dnsPoints}
-          value={pct(summary.block_rate, 0)}
-          sub={`${compact(summary.dns_blocked)} of ${compact(summary.dns_queries)} queries`} />
-        <Stat label="Devices online"
-          value={`${summary.clients_online}`}
-          sub={`${summary.clients} known · ${compact(summary.blocklist_entries)} block entries`} />
-      </div>
+        <div className="plate-chart">
+          <OrbitChart ref={orbit} devices={devices} flows={flows} title={status?.node} tone={tone}
+            onSelect={setOpenDevice} onStrike={(name) => onNavigate('dnstools', name)}
+            label={`${devices.length} devices online with ${flows.length} connections. Every device is listed under Devices.`} />
+        </div>
 
-      {status?.resources && <NodeResourcesRow r={status.resources} version={status.version} />}
+        <div className="plate-side">
+          <h3>Needs you</h3>
+          {attention.length === 0 ? (
+            <p className="plate-clear">Nothing right now.</p>
+          ) : (
+            <ul className="plate-list">
+              {attention.slice(0, 5).map((a) => (
+                <li key={a.key}>
+                  <button type="button" className="row-btn needs" onClick={a.go}>
+                    <span className={`issue-sev ${a.threat ? 'critical' : a.level === 'notice' ? 'notice' : 'warning'}`} />
+                    <span className="needs-title">{a.title}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <h3>Stopped just now</h3>
+          {stoppedList.length === 0 ? (
+            <p className="plate-clear">Nothing blocked in the last two hours.</p>
+          ) : (
+            <ul className="plate-list">
+              {stoppedList.map((q, i) => (
+                <li key={`${q.ts}|${q.name}|${i}`}>
+                  <button type="button" className="row-btn" title="See why" onClick={() => onNavigate('dnstools', q.name)}>
+                    <span className="plate-row-title mono"><i className="struck" />{q.name}</span>
+                    {q.client_id && names.get(q.client_id)
+                      ? <span className="plate-row-meta">{names.get(q.client_id)}</span>
+                      : <span className="plate-row-meta mono">{q.client_ip}</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      {openDevice && (
+        <Suspense fallback={null}>
+          <ClientDrawer id={openDevice} onClose={() => setOpenDevice(null)} onChanged={() => undefined} />
+        </Suspense>
+      )}
 
       <div className="grid c3">
-        <Card title="Subsystems" actions={<span className="tag">up {duration(summary.uptime_seconds)}</span>}>
-          <SubsystemList status={status} />
-        </Card>
-
         <Card title="Busiest devices"
           actions={<button className="btn sm" onClick={() => onNavigate('clients')}>All devices</button>}>
-          {onlineClients.length === 0 ? (
+          {online.length === 0 ? (
             <Empty title="No devices seen yet">
               Devices appear as soon as traffic from them reaches this node.
             </Empty>
           ) : (
             <div style={{ display: 'grid', gap: 9 }}>
-              {onlineClients.slice(0, 6).map((c) => (
-                <ClientRow key={c.id} client={c} peak={onlineClients[0]} onOpen={() => onNavigate('clients', c.id)} />
+              {online.slice(0, 6).map((c) => (
+                <ClientRow key={c.id} client={c} peak={online[0]} onOpen={() => onNavigate('clients', c.id)} />
               ))}
             </div>
           )}
@@ -116,7 +226,7 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
             <div style={{ display: 'grid', gap: 7 }}>
               {topBlocked.domains.map((d) => (
                 <button type="button" key={d.domain} className="row-btn"
-                  onClick={() => onNavigate('adblock')}
+                  onClick={() => onNavigate('dnstools', d.domain)}
                   style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 12.5, padding: '2px 4px' }}>
                   <span className="truncate mono" style={{ flex: 1 }} title={d.domain}>{d.domain}</span>
                   <span className="num" style={{ color: 'var(--red)' }}>{compact(d.count)}</span>
@@ -124,6 +234,10 @@ export function Dashboard({ status, summary, events, onNavigate }: Props) {
               ))}
             </div>
           )}
+        </Card>
+
+        <Card title="Subsystems" actions={<span className="tag">up {duration(summary.uptime_seconds)}</span>}>
+          <SubsystemList status={status} />
         </Card>
       </div>
 
@@ -149,7 +263,7 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
     {
       name: 'Packet capture',
       on: Number(status.capture?.interfaces ?? 0) > 0,
-      detail: `${status.capture?.interfaces ?? 0} interface(s) · ${compact(Number(status.capture?.packets ?? 0))} packets`,
+      detail: `${status.capture?.interfaces ?? 0} ${status.capture?.interfaces === 1 ? 'interface' : 'interfaces'} · ${compact(Number(status.capture?.packets ?? 0))} packets`,
       warn: Number(status.capture?.kernel_drops ?? 0) > 1000,
     },
     {
@@ -173,7 +287,7 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
     {
       name: 'Firewall',
       on: Boolean((status.firewall as Record<string, unknown>)?.applied),
-      detail: String((status.firewall as Record<string, unknown>)?.last_error || 'ruleset applied'),
+      detail: firewallDetail(String((status.firewall as Record<string, unknown>)?.last_error ?? '')),
     },
     {
       name: 'DHCP',
@@ -192,7 +306,7 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
         : status.tailscale.exit_node_in_use ? `via exit node ${status.tailscale.exit_node_in_use}`
         : status.tailscale.advertising_exit_node
           ? (status.tailscale.exit_node_approved ? 'exit node (approved)' : 'exit node awaiting approval')
-          : status.tailscale.backend_state,
+          : status.tailscale.backend_state || 'off',
       warn: Boolean(status.tailscale?.advertising_exit_node && !status.tailscale?.exit_node_approved),
     },
     {
@@ -202,10 +316,11 @@ function SubsystemList({ status }: { status: SystemStatus | null }) {
         ? `${(status.ai as Record<string, string>).model}${(status.ai as Record<string, boolean>).allow_write ? ' · can make changes' : ' · read-only'}`
         : 'no provider configured',
     },
+    ...(status.resources ? resourceRows(status.resources, status.version) : []),
   ]
 
   return (
-    <div style={{ display: 'grid', gap: 8 }}>
+    <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'minmax(0, 1fr)' }}>
       {rows.map((r) => (
         <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Dot state={r.warn ? 'warn' : r.on ? 'on' : 'off'} />
@@ -253,10 +368,10 @@ function TopFlows({ flows, onOpen }: { flows: Flow[]; onOpen: () => void }) {
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() }
               }}>
               <td className="truncate" title={f.hostname || f.sni || f.dst_ip}>
-                {f.country && <span style={{ marginRight: 6 }}>{countryFlag(f.country)}</span>}
+                {f.country && <span className="mono" style={{ marginRight: 6, color: 'var(--text-faint)' }}>{f.country}</span>}
                 {f.hostname || f.sni || f.dst_ip}
               </td>
-              <td style={{ color: 'var(--text-dim)' }}>{f.app || f.as_org || '—'}</td>
+              <td style={{ color: 'var(--text-dim)' }}>{f.app || f.as_org || '-'}</td>
               <td className="num">{bytes(f.bytes_in)}</td>
               <td className="num">{bytes(f.bytes_out)}</td>
             </tr>
@@ -298,26 +413,45 @@ function EventList({ events, onOpen }: { events: EventItem[]; onOpen: () => void
  * machine. A Pi's firmware throttle word is decoded when present, since
  * under-voltage is the usual reason a Pi "feels slow".
  */
-function NodeResourcesRow({ r, version }: { r: NodeResources; version?: string }) {
+function resourceRows(r: NodeResources, version?: string) {
   const gb = (b: number) => (b / (1024 ** 3)).toFixed(b >= 10 * 1024 ** 3 ? 0 : 1) + ' GB'
   const memPct = r.mem_total_bytes > 0 ? Math.round((r.rss_bytes / r.mem_total_bytes) * 100) : 0
-  const hostUsed = r.mem_total_bytes > 0 ? Math.round(((r.mem_total_bytes - r.mem_available_bytes) / r.mem_total_bytes) * 100) : 0
-  const hot = (r.temp_c ?? 0) >= 75
-  const throttledNow = (r.throttled ?? '').startsWith('now')
-  return (
-    <div className="grid c4">
-      <Stat label="Orbis CPU" tone={r.process_cpu_percent > 150 ? 'amber' : undefined}
-        value={`${Math.round(r.process_cpu_percent)}%`}
-        sub={`of one core · host ${Math.round(r.host_cpu_percent)}% of ${r.cores} · load ${r.load1.toFixed(2)}`} />
-      <Stat label="Orbis memory" tone={memPct > 60 ? 'amber' : undefined}
-        value={gb(r.rss_bytes)}
-        sub={`${memPct}% of ${gb(r.mem_total_bytes)} · host ${hostUsed}% used · heap ${gb(r.heap_bytes)}`} />
-      <Stat label="Temperature" tone={hot || throttledNow ? 'red' : (r.throttled ?? 'ok') !== 'ok' && r.throttled ? 'amber' : undefined}
-        value={r.temp_c ? `${Math.round(r.temp_c)} °C` : 'n/a'}
-        sub={r.throttled ? r.throttled : 'no throttle data on this platform'} />
-      <Stat label="Uptime"
-        value={duration(r.uptime_seconds)}
-        sub={`${version ? `Orbis ${version} · ` : ''}${num(r.goroutines)} goroutines`} />
-    </div>
-  )
+  const throttled = Boolean(r.throttled) && r.throttled !== 'ok'
+  return [
+    {
+      name: 'CPU', on: true, warn: r.process_cpu_percent > 150,
+      detail: `${Math.round(r.process_cpu_percent)}% of one core · host ${Math.round(r.host_cpu_percent)}% of ${r.cores} · load ${r.load1.toFixed(2)}`,
+    },
+    {
+      name: 'Memory', on: true, warn: memPct > 60,
+      detail: `${gb(r.rss_bytes)}, ${memPct}% of ${gb(r.mem_total_bytes)} · heap ${gb(r.heap_bytes)}`,
+    },
+    {
+      name: 'Temperature', on: Boolean(r.temp_c), warn: (r.temp_c ?? 0) >= 75 || throttled,
+      detail: `${r.temp_c ? `${Math.round(r.temp_c)} °C` : 'no sensor'}${r.throttled ? ` · ${r.throttled}` : ''}`,
+    },
+    {
+      name: 'Orbis', on: true,
+      detail: `${version ?? 'dev'} · up ${duration(r.uptime_seconds)} · ${num(r.goroutines)} goroutines`,
+    },
+  ]
+}
+
+/** What each layer of protection is doing now, in the words it would be judged by. */
+function protectionLayers(status: SystemStatus, health: Health) {
+  const inline = status.mode === 'inline'
+  const applied = Boolean((status.firewall as Record<string, unknown>)?.applied)
+  const proxy = Boolean((status.filter_proxy as Record<string, unknown>)?.running)
+  const threat = Boolean((status.threat as Record<string, unknown> | undefined)?.enabled)
+  return [
+    { name: 'DNS filtering', on: health.protection_on, state: health.protection_on ? 'On' : 'Off' },
+    { name: 'Firewall', on: inline && applied, state: !inline ? 'Not enforced' : applied ? 'Enforced' : 'Not applied' },
+    { name: 'In-stream ads', on: proxy, state: proxy ? 'Removed' : 'Off' },
+    { name: 'Threat feeds', on: threat, state: threat ? 'On' : 'Off' },
+  ]
+}
+
+function firewallDetail(error: string) {
+  if (!error) return 'ruleset applied'
+  return error.includes('executable file not found') ? 'nft not installed' : error
 }

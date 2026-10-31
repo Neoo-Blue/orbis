@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ExplainButton } from './ai/Explain'
 import { api } from '../api'
-import { usePoll, useLocalStorage, type LiveEvent } from '../hooks'
+import { useLiveBatch } from '../live'
+import { usePoll, useLocalStorage } from '../hooks'
 import { Globe } from '../globe/Globe'
 import { FlatMap } from '../globe/FlatMap'
 import { KINDS, BLOCKED_COLOR, arcKind, kindColor, kindLabel, type ColorBy } from '../globe/kind'
@@ -17,12 +18,12 @@ type Projection = 'globe' | 'flat'
  * one connection leaving (or entering) the network, coloured by verdict, and
  * the ticker underneath is the running log of what just happened.
  */
-export function GlobePage({ events }: { events: LiveEvent[] }) {
+export function GlobePage() {
   const [mode, setMode] = useLocalStorage<ViewMode>('orbis.globe.mode', 'live')
   const [hours, setHours] = useLocalStorage<number>('orbis.globe.hours', 24)
   const [clientFilter, setClientFilter] = useState<string>('')
   const [projection, setProjection] = useLocalStorage<Projection>('orbis.globe.projection', 'globe')
-  const [colorBy, setColorBy] = useLocalStorage<ColorBy>('orbis.globe.colour', 'kind')
+  const [colorBy, setColorBy] = useLocalStorage<ColorBy>('orbis.globe.colour', 'verdict')
   const [autoRotate, setAutoRotate] = useState(true)
   const [selected, setSelected] = useState<GlobeArc | null>(null)
   const [focus, setFocus] = useState<{ lat: number; lng: number } | null>(null)
@@ -44,7 +45,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
   homeRef.current = globeData?.home ?? homeRef.current
   const seenIds = useRef(new Set<string>())
 
-  useEffect(() => {
+  useLiveBatch(['flow.new', 'flow.update', 'flow.close'], (batch) => {
     if (mode !== 'live') return
     const home = homeRef.current
     if (!home) return
@@ -53,7 +54,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
     const tickerAdds: Array<{ id: string; text: string; verdict: string }> = []
     const closedIds: string[] = []
 
-    for (const ev of events.slice(-80)) {
+    for (const ev of batch) {
       if (ev.type === 'flow.close') {
         const f = ev.data as Flow
         closedIds.push(f.id)
@@ -101,7 +102,7 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
     }
     // Keep the id set from growing without bound over a long session.
     if (seenIds.current.size > 5000) seenIds.current = new Set()
-  }, [events, mode, clientFilter])
+  })
 
   useEffect(() => {
     // Switching to history clears the live overlay so the two never blend.
@@ -203,12 +204,12 @@ export function GlobePage({ events }: { events: LiveEvent[] }) {
               <>
                 <span><i style={{ background: 'var(--accent)' }} />allowed</span>
                 <span><i style={{ background: 'var(--red)' }} />blocked</span>
-                <span><i style={{ background: 'var(--violet)' }} />filtered</span>
+                <span><i style={{ background: 'var(--rose)' }} />filtered</span>
               </>
             )}
             <span><i style={{ background: 'var(--blue)' }} />this network</span>
             <span><i style={{ background: 'var(--amber)' }} />inbound connection</span>
-            <span title="Bytes leaving the network run toward the far end"><i style={{ background: '#eafffb' }} />sent</span>
+            <span title="Bytes leaving the network run toward the far end"><i style={{ background: '#fbf7ea' }} />sent</span>
             <span title="Bytes arriving run toward home"><i style={{ background: '#ffd9a0' }} />received</span>
           </div>
         </div>
@@ -301,8 +302,7 @@ function CountryPanel({ countries, onFocus }: {
   return (
     <div className="globe-country-panel">
       <div style={{
-        fontSize: 10, letterSpacing: '.11em', textTransform: 'uppercase',
-        color: 'var(--text-faint)', fontWeight: 600, marginBottom: 8,
+        fontSize: 10, color: 'var(--text-faint)', fontWeight: 600, marginBottom: 8,
       }}>
         Where traffic goes
       </div>

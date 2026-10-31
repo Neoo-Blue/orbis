@@ -1,7 +1,7 @@
 import type {
   AdCandidate, AIBrief, AIModelsStatus, AINote, AppConfig, AuditEntry, BlockList, ChatTurn, Client, DNSQuery, DNSShortcut, Health, ServiceBundle,
   Issue, IssuesResponse, Recommendation, ServiceDetail, ServiceDevice, ServicePoint, ServicesResponse, ServiceTotal,
-  EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule,
+  EventItem, Flow, GlobeData, InterfaceInfo, Lease, LocalRule, Policy, Rule, ZoneMatrixResponse,
   Summary, SysctlStatus, SystemStatus, TailscaleStatus, WGPeer,
   YouTubeStatus, DiscoveredScreen, LoungeDevice,
   NotifyConfig, Webhook, StaticRoute, WANStatus, MultiWANConfig,
@@ -12,7 +12,9 @@ import type {
   ThreatStatus, ThreatFeed, ThreatFeedConfig, ThreatDecision, ThreatHit,
   HostedResponse, StorageDevice, PortForward, RouterInfo,
   LinksResponse, LinkSuggestion, WiFiStatus, CountryStatus, IDSStatus,
- UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus } from './types'
+  UpdateStatus, IntelStatus, AIIntel, AIAction, Explanation, DomainJudgement, Preset, SafetyStatus,
+  NetwatchStatus, NetwatchHistory,
+  ConfigHistoryListResponse, ConfigHistoryPending, ConfigHistoryRestoreResult } from './types'
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -101,7 +103,7 @@ function qs(params: Record<string, string | number | boolean | undefined | null>
 
 export const api = {
   auth: {
-    status: () => get<{ setup_required: boolean; authenticated: boolean }>('/auth/status'),
+    status: () => get<{ setup_required: boolean; authenticated: boolean; onboarded: boolean; ui_mode: string }>('/auth/status'),
     login: (password: string) => post<{ token: string }>('/auth/login', { password }),
     logout: () => post<{ ok: boolean }>('/auth/logout'),
     setPassword: (current: string, password: string) =>
@@ -195,6 +197,7 @@ export const api = {
   },
 
   firewall: {
+    matrix: () => get<ZoneMatrixResponse>('/firewall/matrix'),
     rules: () => get<{ rules: Rule[] }>('/firewall/rules'),
     create: (rule: Partial<Rule>) => post<Rule>('/firewall/rules', rule),
     update: (id: string, rule: Partial<Rule>) => put<Rule>(`/firewall/rules/${id}`, rule),
@@ -577,11 +580,34 @@ export const api = {
     downloadURL: (hours: number, format: 'csv' | 'html') => `/api/report${qs({ hours, format })}`,
   },
 
+  netwatch: {
+    status: () => get<NetwatchStatus>('/netwatch/status'),
+    history: (hours: number) => get<NetwatchHistory>(`/netwatch/history${qs({ hours })}`),
+  },
+
   config: {
     get: () => get<AppConfig>('/config'),
     patch: (body: Record<string, unknown>) =>
       patch<{ applied: string[]; config: AppConfig }>('/config', body),
     interfaces: () => get<{ interfaces: InterfaceInfo[] }>('/config/interfaces'),
+  },
+
+  configHistory: {
+    list: () => get<ConfigHistoryListResponse>('/config/history'),
+    get: (id: string) => get<{ id: string; yaml: string }>(`/config/history/${encodeURIComponent(id)}`),
+    diff: (id: string) => get<{ id: string; diff: string }>(`/config/history/${encodeURIComponent(id)}/diff`),
+    restore: (id: string, confirmSeconds = 0) =>
+      post<ConfigHistoryRestoreResult>(`/config/history/${encodeURIComponent(id)}/restore`, {
+        confirm_seconds: confirmSeconds,
+      }),
+    confirm: () =>
+      post<{ ok: boolean; confirmed_id: string; pending: ConfigHistoryPending }>('/config/history/confirm', {}),
+    revert: () =>
+      post<{ ok: boolean; reverted_to_id: string; pending: ConfigHistoryPending; config: AppConfig }>(
+        '/config/history/revert',
+        {},
+      ),
+    pending: () => get<ConfigHistoryPending>('/config/history/pending'),
   },
 }
 

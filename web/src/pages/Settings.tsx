@@ -602,9 +602,6 @@ function DNSSection({ config, status, save, toast }: SectionProps) {
         <div className="grid c3">
           <NumberSetting label="Cache size" value={config.dns.cache_size} min={100} max={1000000} suffix="entries"
             onSave={(v) => save({ 'dns.cache_size': v })} />
-          <NumberSetting label="Minimum TTL" value={config.dns.min_ttl} min={0} max={86400} suffix="sec"
-            hint="Raises short TTLs to cut query volume."
-            onSave={(v) => save({ 'dns.min_ttl': v })} />
           <NumberSetting label="Maximum TTL" value={config.dns.max_ttl} min={60} max={604800} suffix="sec"
             hint="Caps long TTLs so a changed record is not stale for days."
             onSave={(v) => save({ 'dns.max_ttl': v })} />
@@ -626,6 +623,9 @@ function DNSSection({ config, status, save, toast }: SectionProps) {
             <TextSetting label="IPv6 sinkhole" value={config.dns.sinkhole_ipv6} mono placeholder="::"
               onSave={(v) => save({ 'dns.sinkhole_ipv6': v })} />
           </div>
+          <SwitchRow label="Show a page when a site is blocked" checked={config.dns.block_page}
+            hint="A browser opening a blocked site sees what stopped it and why. Works for every plain http site, and for https on devices that trust the Orbis certificate. Other devices are detected and keep failing quietly as before."
+            onChange={(v) => save({ 'dns.block_page': v })} />
           <SwitchRow label="Explain blocks to clients" checked={config.dns.block_ede}
             hint="Attaches an RFC 8914 Extended DNS Error naming the list that blocked the query. Capable clients show it instead of a generic failure."
             onChange={(v) => save({ 'dns.block_ede': v })} />
@@ -1709,12 +1709,12 @@ function FreeModelsCard({ config, save, toast }: Pick<SectionProps, 'config' | '
                             {m.id === config.ai.fast_model ? ' · pinned fast fallback' : ''}
                           </div>
                         </td>
-                        <td className="mono">{m.context ? compact(m.context) : '—'}</td>
+                        <td className="mono">{m.context ? compact(m.context) : '-'}</td>
                         <td>{m.tools ? <Verdict v={m.tool_ok} /> : <span className="verdict none">no tools</span>}</td>
                         <td><Verdict v={m.json_ok} /></td>
-                        <td className="mono">{m.latency_ms ? `${(m.latency_ms / 1000).toFixed(1)}s` : '—'}</td>
+                        <td className="mono">{m.latency_ms ? `${(m.latency_ms / 1000).toFixed(1)}s` : '-'}</td>
                         <td className="mono">
-                          {m.requests_today ? `${m.requests_today}${m.failures_today ? ` (${m.failures_today} failed)` : ''}` : '—'}
+                          {m.requests_today ? `${m.requests_today}${m.failures_today ? ` (${m.failures_today} failed)` : ''}` : '-'}
                         </td>
                         <td style={{ maxWidth: 260 }}>
                           {cooling ? (

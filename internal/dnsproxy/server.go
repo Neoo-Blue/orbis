@@ -34,6 +34,9 @@ type Hooks struct {
 	// CountryCheck refuses an answer whose addresses land in a blocked
 	// country for this client; it returns the country that decided.
 	CountryCheck func(client netip.Addr, name string, addrs []netip.Addr) (bool, string)
+	// BlockPageAddr returns the address that serves the block page to this
+	// client, or false when the client should get the plain sinkhole.
+	BlockPageAddr func(client netip.Addr, name string) (netip.Addr, bool)
 }
 
 type Server struct {
@@ -61,8 +64,24 @@ type Server struct {
 	// limiter is amplification protection, keyed per client address.
 	limiter *RateLimiter
 
+	// stop ends the refresh loop.
+	stop chan struct{}
+
 	stats Stats
 }
+
+const (
+	// doubtWindow is how long a "does not exist" waits for another resolver
+	// to say otherwise. One resolver's stale NXDOMAIN must not hide a name
+	// the others can see.
+	doubtWindow = 150 * time.Millisecond
+	// exchangeTimeout bounds one query to one upstream. Losers of a race run
+	// to it rather than being cancelled, so their connection stays usable
+	// and their latency stays measured.
+	exchangeTimeout = 4 * time.Second
+	// refreshPerSecond bounds the background refresh rate.
+	refreshPerSecond = 32
+)
 
 type Stats struct {
 	Queries     atomic.Int64
@@ -191,9 +210,16 @@ func (s *Server) ReloadUpstreams() error {
 	}
 
 	s.mu.Lock()
+	old := s.upstreams
+	for _, pool := range s.zoneUps {
+		old = append(old[:len(old):len(old)], pool...)
+	}
 	s.upstreams = ups
 	s.zoneUps = zones
 	s.mu.Unlock()
+	for _, u := range old {
+		u.Close()
+	}
 	return nil
 }
 
@@ -247,10 +273,13 @@ func (s *Server) Start() error {
 			started = append(started, srv)
 		}
 	}
+	stop := make(chan struct{})
 	s.mu.Lock()
 	s.servers = started
 	s.running = true
+	s.stop = stop
 	s.mu.Unlock()
+	go s.refreshLoop(stop)
 	s.log("dns: listening on %v with %d upstream(s)", c.DNS.Listen, len(s.upstreams))
 	return nil
 }
@@ -260,6 +289,10 @@ func (s *Server) Stop() {
 	servers := s.servers
 	s.servers = nil
 	s.running = false
+	if s.stop != nil {
+		close(s.stop)
+		s.stop = nil
+	}
 	s.mu.Unlock()
 	for _, srv := range servers {
 		_ = srv.Shutdown()
@@ -344,7 +377,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		if svc, hit := MatchBlockedService(name, policy.BlockedServices); hit {
 			m := s.blockedReply(r, q, cfg, adblock.Match{
 				Blocked: true, Source: "policy:" + policy.Name, Rule: "service:" + svc,
-			})
+			}, clientAddr)
 			logEntry.Blocked = true
 			logEntry.BlockSource = "service:" + svc
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
@@ -356,7 +389,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		if policy.BlockDoH && IsDoHBypass(name) {
 			m := s.blockedReply(r, q, cfg, adblock.Match{
 				Blocked: true, Source: "policy:" + policy.Name, Rule: "doh-bypass",
-			})
+			}, clientAddr)
 			logEntry.Blocked = true
 			logEntry.BlockSource = "doh-bypass"
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
@@ -388,7 +421,7 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	if cfg.AdBlock.Enabled && !unfiltered {
 		if match, blocked := s.evaluateBlock(name, clientAddr, cfg); blocked {
-			m := s.blockedReply(r, q, cfg, match)
+			m := s.blockedReply(r, q, cfg, match, clientAddr)
 			logEntry.Blocked = true
 			logEntry.BlockSource = match.Source
 			logEntry.RCode = dns.RcodeToString[m.Rcode]
@@ -399,87 +432,63 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	// 5. Cache.
+	// 5. Cache. Whatever comes back is inside its TTL: the cache drops
+	//    anything older, so there is no expired answer to fall back on.
 	dnssecOK := isDNSSECOK(r)
-	if cached, ok, fresh := s.cache.Get(q, dnssecOK); ok && fresh {
-		cached.SetReply(r)
-		cached.Id = r.Id
+	resp, hit := s.cache.Get(q, dnssecOK)
+	if hit {
 		logEntry.Cached = true
-		logEntry.RCode = dns.RcodeToString[cached.Rcode]
-		logEntry.LatencyMS = msSince(start)
-		logEntry.Answer = answerStrings(cached)
 		s.stats.Cached.Add(1)
-		if m, code := s.countryBlocked(r, q, cfg, clientAddr, name, cached); m != nil {
-			logEntry.Blocked, logEntry.BlockSource, logEntry.Answer = true, "country:"+code, answerStrings(m)
-			logEntry.RCode = dns.RcodeToString[m.Rcode]
-			s.stats.Blocked.Add(1)
-			s.finish(w, m, logEntry, cfg)
-			return
-		}
-		s.noteAnswers(cached, name)
-		if s.cache.Prefetchable(q, dnssecOK) {
-			go s.prefetch(r.Copy(), q, name, dnssecOK, cfg)
-		}
-		s.finish(w, cached, logEntry, cfg)
-		return
-	}
-
-	// 6. Forward, collapsing duplicate concurrent queries.
-	resp, upstream, err := s.resolve(context.Background(), r, q, name, dnssecOK)
-	if err != nil || resp == nil {
-		// Serve stale rather than failing outright: a brief upstream outage
-		// should not take the whole network offline.
-		if stale, ok, _ := s.cache.Get(q, dnssecOK); ok {
-			stale.SetReply(r)
-			stale.Id = r.Id
-			logEntry.Cached = true
-			logEntry.RCode = "STALE"
+	} else {
+		// 6. Forward, collapsing duplicate concurrent queries.
+		var err error
+		resp, logEntry.Upstream, err = s.resolve(context.Background(), r, q, name, dnssecOK)
+		if err != nil || resp == nil {
+			s.stats.Errors.Add(1)
+			logEntry.RCode = "SERVFAIL"
 			logEntry.LatencyMS = msSince(start)
-			s.finish(w, stale, logEntry, cfg)
+			s.finish(w, servfail(r), logEntry, cfg)
 			return
 		}
-		s.stats.Errors.Add(1)
-		logEntry.RCode = "SERVFAIL"
-		logEntry.LatencyMS = msSince(start)
-		s.finish(w, servfail(r), logEntry, cfg)
-		return
+		if resp.Rcode == dns.RcodeServerFailure {
+			s.stats.Errors.Add(1)
+		}
+
+		// 7. Rebinding protection, before the answer is cached so a poisoned
+		//    record never gets served twice.
+		if s.rebindStrip(resp, name, cfg) {
+			logEntry.BlockSource = "dns-rebind"
+		}
+		s.cache.Put(q, dnssecOK, resp, cfg.DNS.MaxTTL)
+	}
+	reply(resp, r)
+	if _, udp := w.RemoteAddr().(*net.UDPAddr); udp {
+		// An upstream speaks 4096 bytes or more over TLS; this client may not.
+		resp.Truncate(udpSize(r))
 	}
 
-	// 7. CNAME uncloaking. A first-party name that CNAMEs into an ad network
-	//    is invisible to step 4; this is where that gets caught.
+	// 8. CNAME uncloaking. A first-party name that CNAMEs into an ad network
+	//    is invisible to step 4; this is where that gets caught. It runs on
+	//    cached answers too, so a cloaked name costs one upstream query per
+	//    TTL instead of one for every lookup, and a rule change applies to
+	//    what is already in the cache.
 	if cfg.AdBlock.Enabled && cfg.AdBlock.CNAMEUncloak && !unfiltered {
-		chain := cnameChain(resp)
-		if len(chain) > 0 {
+		if chain := cnameChain(resp); len(chain) > 0 {
+			logEntry.CNAMEChain = chain
 			if match := s.matcher.LookupChain(chain); match.Blocked {
-				m := s.blockedReply(r, q, cfg, match)
+				m := s.blockedReply(r, q, cfg, match, netip.Addr{})
 				logEntry.Blocked = true
 				logEntry.BlockSource = match.Source
-				logEntry.CNAMEChain = chain
 				logEntry.RCode = dns.RcodeToString[m.Rcode]
 				logEntry.LatencyMS = msSince(start)
 				s.stats.Blocked.Add(1)
 				s.finish(w, m, logEntry, cfg)
 				return
 			}
-			logEntry.CNAMEChain = chain
 		}
 	}
 
-	// 8. Rebinding protection, before the answer is cached so a poisoned
-	//    record never gets served twice.
-	if cfg.DNS.RebindProtection && !RebindAllowed(name, cfg.DNS.LocalDomain, cfg.DNS.RebindAllowlist) {
-		if n := StripRebind(resp); n > 0 {
-			s.stats.Rebind.Add(1)
-			logEntry.BlockSource = "dns-rebind"
-			s.log("dns: stripped %d private answer(s) for %s (rebinding protection)", n, name)
-		}
-	}
-
-	s.cache.Put(q, dnssecOK, resp, cfg.DNS.MinTTL, cfg.DNS.MaxTTL)
-	resp.SetReply(r)
-	resp.Id = r.Id
 	logEntry.RCode = dns.RcodeToString[resp.Rcode]
-	logEntry.Upstream = upstream
 	logEntry.LatencyMS = msSince(start)
 	logEntry.Answer = answerStrings(resp)
 	if m, code := s.countryBlocked(r, q, cfg, clientAddr, name, resp); m != nil {
@@ -493,28 +502,81 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 	s.finish(w, resp, logEntry, cfg)
 }
 
-// prefetch refreshes a cached answer that is about to expire, off the query
-// path. The new answer gets the same rebinding strip as a foreground lookup.
-// Block, policy and country rules are applied per query on the way out, as
-// they are for every cached answer, so only a CNAME chain that the global
-// lists block is left uncached: the next real query forwards and judges it
-// for that client.
-func (s *Server) prefetch(r *dns.Msg, q dns.Question, name string, dnssecOK bool, cfg config.Config) {
+// reply addresses an upstream or cached answer to this client. SetReply
+// resets the rcode to NOERROR, which would turn every NXDOMAIN into an empty
+// success, so it is put back.
+//
+// The stored OPT belongs to the conversation with the upstream, so the client
+// gets its own, and none at all if it did not offer EDNS (RFC 6891).
+func reply(m, r *dns.Msg) {
+	rcode := m.Rcode
+	m.SetReply(r)
+	m.Rcode = rcode
+	extra := m.Extra[:0]
+	for _, rr := range m.Extra {
+		if rr.Header().Rrtype != dns.TypeOPT {
+			extra = append(extra, rr)
+		}
+	}
+	m.Extra = extra
+	if opt := r.IsEdns0(); opt != nil {
+		m.SetEdns0(4096, opt.Do())
+	}
+}
+
+// udpSize is the largest UDP answer this client said it can take.
+func udpSize(r *dns.Msg) int {
+	if opt := r.IsEdns0(); opt != nil && opt.UDPSize() >= dns.MinMsgSize {
+		return int(opt.UDPSize())
+	}
+	return dns.MinMsgSize
+}
+
+func (s *Server) rebindStrip(resp *dns.Msg, name string, cfg config.Config) bool {
+	if !cfg.DNS.RebindProtection || RebindAllowed(name, cfg.DNS.LocalDomain, cfg.DNS.RebindAllowlist) {
+		return false
+	}
+	n := StripRebind(resp)
+	if n > 0 {
+		s.stats.Rebind.Add(1)
+		s.log("dns: stripped %d private answer(s) for %s (rebinding protection)", n, name)
+	}
+	return n > 0
+}
+
+// refreshLoop fetches answers clients are using before they expire.
+func (s *Server) refreshLoop(stop <-chan struct{}) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case now := <-t.C:
+			for _, job := range s.cache.DueRefresh(now, refreshPerSecond) {
+				go s.refresh(job)
+			}
+		}
+	}
+}
+
+// refresh replaces a cached answer that is about to expire, off the query
+// path. Block, policy, CNAME and country rules are applied per query on the
+// way out, as they are for every cached answer, so only the rebinding strip
+// happens here. A failed refresh changes nothing: the old answer stays until
+// its TTL and then the next query forwards.
+func (s *Server) refresh(job refreshJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, _, err := s.resolve(ctx, r, q, name, dnssecOK)
+	r := upstreamQuery(job.q, job.dnssecOK)
+	name := strings.ToLower(strings.TrimSuffix(job.q.Name, "."))
+	resp, _, err := s.resolve(ctx, r, job.q, name, job.dnssecOK)
 	if err != nil || resp == nil {
 		return
 	}
-	if cfg.AdBlock.Enabled && cfg.AdBlock.CNAMEUncloak {
-		if chain := cnameChain(resp); len(chain) > 0 && s.matcher.LookupChain(chain).Blocked {
-			return
-		}
-	}
-	if cfg.DNS.RebindProtection && !RebindAllowed(name, cfg.DNS.LocalDomain, cfg.DNS.RebindAllowlist) {
-		StripRebind(resp)
-	}
-	s.cache.Put(q, dnssecOK, resp, cfg.DNS.MinTTL, cfg.DNS.MaxTTL)
+	cfg := s.cfg.Snapshot()
+	s.rebindStrip(resp, name, cfg)
+	s.cache.Put(job.q, job.dnssecOK, resp, cfg.DNS.MaxTTL)
 }
 
 // countryBlocked applies the country rules to an answer. The upstream reply
@@ -544,7 +606,7 @@ func (s *Server) countryBlocked(r *dns.Msg, q dns.Question, cfg config.Config, c
 	if !blocked {
 		return nil, ""
 	}
-	return s.blockedReply(r, q, cfg, adblock.Match{Blocked: true, Source: "country:" + code, Rule: code}), code
+	return s.blockedReply(r, q, cfg, adblock.Match{Blocked: true, Source: "country:" + code, Rule: code}, netip.Addr{}), code
 }
 
 // evaluateBlock applies the global matcher and then any per-client policy.
@@ -602,7 +664,7 @@ func domainMatches(name, pattern string) bool {
 // blockedReply builds the sinkhole answer. Returning 0.0.0.0 makes the block
 // obvious in a client's own network log; NXDOMAIN is quieter but confuses
 // some apps into retrying forever. Both are offered.
-func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, match adblock.Match) *dns.Msg {
+func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, match adblock.Match, client netip.Addr) *dns.Msg {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -612,6 +674,17 @@ func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, mat
 	}
 
 	sink4, sink6 := cfg.DNS.SinkholeIPv4, cfg.DNS.SinkholeIPv6
+	// The page is only offered for a name blocked in its own right, passed
+	// here with the client. A CNAME or country verdict is about where a name
+	// leads, and the name still belongs to whoever runs it: answering it with
+	// this node would be DNS rebinding, putting their page on our origin.
+	if cfg.DNS.BlockPage && s.hooks.BlockPageAddr != nil && client.IsValid() {
+		if page, ok := s.hooks.BlockPageAddr(client, q.Name); ok {
+			// With no AAAA a browser goes straight to the A answer. The
+			// sinkhole's :: would make it try that first and fail.
+			sink4, sink6 = page.String(), ""
+		}
+	}
 	if sink4 == "" && sink6 == "" {
 		m.Rcode = dns.RcodeNameError
 	} else {
@@ -726,58 +799,135 @@ func (s *Server) forward(ctx context.Context, r *dns.Msg, name string) (*dns.Msg
 		healthy = ups
 	}
 
-	query := r.Copy()
-	query.Id = dns.Id()
+	if len(r.Question) == 0 {
+		return nil, "", fmt.Errorf("no question")
+	}
+	query := upstreamQuery(r.Question[0], isDNSSECOK(r))
 
 	if strategy == "sequential" {
+		var last *dns.Msg
+		var lastFrom string
 		var lastErr error
 		for _, u := range healthy {
 			cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			resp, err := u.Exchange(cctx, query)
 			cancel()
-			if err == nil && resp != nil {
+			if err != nil || resp == nil {
+				lastErr = err
+				continue
+			}
+			if settled(resp) {
 				return resp, u.Spec, nil
 			}
-			lastErr = err
+			last, lastFrom = resp, u.Spec
+		}
+		if last != nil {
+			return last, lastFrom, nil
 		}
 		return nil, "", lastErr
 	}
+	return s.race(ctx, healthy, query)
+}
 
-	// Parallel: race every healthy upstream, take the first good answer.
-	// The cost is extra upstream queries; the benefit is that one slow
-	// resolver never sets the latency floor for the whole network.
+// upstreamQuery builds the question sent upstream from scratch. A client's
+// cookies, padding and subnet are not a resolver's business, CD would cache an
+// answer validation rejected for clients that did not ask for that, and the
+// answer is shared with every client that collapses onto this query.
+func upstreamQuery(q dns.Question, dnssecOK bool) *dns.Msg {
+	m := new(dns.Msg)
+	m.SetQuestion(q.Name, q.Qtype)
+	m.Question[0].Qclass = q.Qclass
+	m.SetEdns0(4096, dnssecOK)
+	return m
+}
+
+// settled reports whether a resolver gave a whole answer rather than giving
+// up. SERVFAIL and REFUSED only speak for that resolver.
+func settled(m *dns.Msg) bool {
+	return !m.Truncated && (m.Rcode == dns.RcodeSuccess || m.Rcode == dns.RcodeNameError)
+}
+
+// agreementNeeded is how many resolvers must say a name has no answer before
+// that is believed. Resolvers cache "does not exist" for as long as the zone
+// asks, so a record created after one of them looked stays invisible there
+// while others see it: an NXDOMAIN or a missing A takes a majority. Waiting
+// for all of them would let the slowest set the price of every dead name.
+// Missing AAAA or HTTPS data is normal, does not take a name off the network,
+// and is on the path of nearly every first page load, so two will do.
+func agreementNeeded(q dns.Question, m *dns.Msg, upstreams int) int {
+	if m.Rcode == dns.RcodeNameError || q.Qtype == dns.TypeA {
+		return upstreams/2 + 1
+	}
+	return 2
+}
+
+// race asks every upstream at once. Any real answer wins immediately; a
+// negative one needs agreement, for at most doubtWindow;
+// SERVFAIL, REFUSED and errors never win while anyone can still answer.
+//
+// Asking everyone is cheap at a home network's query rate, keeps every
+// connection warm, and means a second opinion costs no extra round trip.
+func (s *Server) race(ctx context.Context, ups []*Upstream, query *dns.Msg) (*dns.Msg, string, error) {
 	type result struct {
 		msg  *dns.Msg
 		from string
 		err  error
 	}
-	cctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-	defer cancel()
-	ch := make(chan result, len(healthy))
-	for _, u := range healthy {
-		go func(u *Upstream) {
-			resp, err := u.Exchange(cctx, query)
+	q := query.Question[0]
+	ch := make(chan result, len(ups))
+	for _, u := range ups {
+		m := query.Copy() // packing writes to the OPT record
+		go func() {
+			ectx, cancel := context.WithTimeout(context.Background(), exchangeTimeout)
+			defer cancel()
+			resp, err := u.Exchange(ectx, m)
 			ch <- result{msg: resp, from: u.Spec, err: err}
-		}(u)
+		}()
 	}
+
+	var negative, failed *result
+	var doubt <-chan time.Time
 	var lastErr error
-	for i := 0; i < len(healthy); i++ {
+	agreed := 0
+	for done := 0; done < len(ups); done++ {
 		select {
 		case res := <-ch:
-			if res.err == nil && res.msg != nil {
-				return res.msg, res.from, nil
-			}
-			if res.err != nil {
+			switch {
+			case res.err != nil || res.msg == nil:
 				lastErr = res.err
+			case !settled(res.msg):
+				if failed == nil {
+					failed = &res
+				}
+			case hasData(q, res.msg):
+				return res.msg, res.from, nil
+			default:
+				if negative == nil {
+					negative = &res
+					doubt = time.After(doubtWindow)
+				}
+				if agreed++; agreed >= agreementNeeded(q, negative.msg, len(ups)) {
+					return negative.msg, negative.from, nil
+				}
 			}
-		case <-cctx.Done():
-			return nil, "", cctx.Err()
+		case <-doubt:
+			return negative.msg, negative.from, nil
+		case <-ctx.Done():
+			if negative != nil {
+				return negative.msg, negative.from, nil
+			}
+			return nil, "", ctx.Err()
 		}
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("all upstreams returned no answer")
+	switch {
+	case negative != nil:
+		return negative.msg, negative.from, nil
+	case failed != nil:
+		return failed.msg, failed.from, nil
+	case lastErr != nil:
+		return nil, "", lastErr
 	}
-	return nil, "", lastErr
+	return nil, "", fmt.Errorf("all upstreams returned no answer")
 }
 
 // noteAnswers feeds resolved addresses back to the flow tracker so future

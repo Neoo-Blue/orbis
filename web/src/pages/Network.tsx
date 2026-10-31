@@ -77,8 +77,8 @@ function LeasesTab({ status }: { status: SystemStatus | null }) {
                     <dt>Interface</dt><dd>{s.interface}</dd>
                     <dt>Subnet</dt><dd>{s.subnet}</dd>
                     <dt>Range</dt><dd>{s.range_start} – {s.range_end}</dd>
-                    <dt>Gateway</dt><dd>{s.gateway || '—'}</dd>
-                    <dt>DNS</dt><dd>{s.dns.join(', ') || '—'}</dd>
+                    <dt>Gateway</dt><dd>{s.gateway || '-'}</dd>
+                    <dt>DNS</dt><dd>{s.dns.join(', ') || '-'}</dd>
                     <dt>Lease</dt><dd>{s.lease_hours}h</dd>
                   </dl>
                 </div>
@@ -101,7 +101,7 @@ function LeasesTab({ status }: { status: SystemStatus | null }) {
                         {i.virtual && <span className="tag" style={{ marginLeft: 6 }}>virtual</span>}
                       </td>
                       <td className="mono truncate" style={{ fontSize: 11, color: 'var(--text-dim)', maxWidth: 220 }}>
-                        {i.addresses.join(', ') || '—'}
+                        {i.addresses.join(', ') || '-'}
                       </td>
                       <td className="num">{i.mtu}</td>
                     </tr>
@@ -138,14 +138,14 @@ function LeasesTab({ status }: { status: SystemStatus | null }) {
                   <tr key={l.mac}>
                     <td className="mono">{l.ip}</td>
                     <td className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>{l.mac}</td>
-                    <td className="truncate" style={{ maxWidth: 180 }}>{l.hostname || '—'}</td>
+                    <td className="truncate" style={{ maxWidth: 180 }}>{l.hostname || '-'}</td>
                     <td>
                       {l.static
                         ? <span className="tag allow">reserved</span>
                         : <span className="tag">{l.scope || 'dynamic'}</span>}
                     </td>
                     <td className="truncate" style={{ maxWidth: 200, fontSize: 11.5, color: 'var(--text-faint)' }}
-                      title={l.fingerprint}>{l.vendor_class || '—'}</td>
+                      title={l.fingerprint}>{l.vendor_class || '-'}</td>
                     <td style={{ fontSize: 11.5, color: 'var(--text-faint)' }}
                       title={dateTime(l.expires)}>{ago(l.expires)}</td>
                     <td>

@@ -42,11 +42,11 @@ export function Login({ onSuccess }: { onSuccess: () => void }) {
       <div className="login-card">
         <div style={{ textAlign: 'center', marginBottom: 22 }}>
           <svg width="42" height="42" viewBox="0 0 32 32" fill="none" style={{ margin: '0 auto 10px' }}>
-            <circle cx="16" cy="16" r="11" stroke="var(--accent)" strokeWidth="1.6" />
-            <ellipse cx="16" cy="16" rx="11" ry="4.4" stroke="var(--accent)" strokeWidth="1.1" opacity=".55" />
-            <circle cx="16" cy="16" r="2.6" fill="var(--accent)" />
+            <circle cx="16" cy="16" r="11" stroke="var(--brass)" strokeWidth="1.6" />
+            <ellipse cx="16" cy="16" rx="11" ry="4.4" stroke="var(--brass)" strokeWidth="1.1" opacity=".55" />
+            <circle cx="16" cy="16" r="2.6" fill="var(--brass)" />
           </svg>
-          <div style={{ fontSize: 15, letterSpacing: '.16em', textTransform: 'uppercase', fontWeight: 620 }}>
+          <div style={{ fontSize: 17, fontWeight: 600 }}>
             Orbis
           </div>
           <div style={{ color: 'var(--text-faint)', fontSize: 12, marginTop: 3 }}>

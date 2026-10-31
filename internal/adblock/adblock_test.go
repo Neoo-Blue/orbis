@@ -1,8 +1,18 @@
 package adblock
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/store"
 )
 
 func TestParseListFormats(t *testing.T) {
@@ -227,5 +237,214 @@ func TestOperatorCanStillBlockATLD(t *testing.T) {
 	m.Commit(b)
 	if r := m.Lookup("download.zip"); !r.Blocked {
 		t.Error("a locally-authored TLD rule should still apply")
+	}
+}
+
+func TestDomainSetSurvivesGrowth(t *testing.T) {
+	var s domainSet
+	const n = 50000
+	for i := 0; i < n; i++ {
+		s.set(hashDomain(fmt.Sprintf("host-%d.example.com", i)), uint32(i))
+	}
+	if s.n != n {
+		t.Fatalf("n = %d", s.n)
+	}
+	for i := 0; i < n; i++ {
+		if v, ok := s.find(hashDomain(fmt.Sprintf("host-%d.example.com", i))); !ok || v != uint32(i) {
+			t.Fatalf("entry %d: %d %v", i, v, ok)
+		}
+	}
+	if _, ok := s.find(hashDomain("absent.example.com")); ok {
+		t.Fatal("found a name that was never added")
+	}
+	s.set(hashDomain("host-7.example.com"), 99)
+	if v, _ := s.find(hashDomain("host-7.example.com")); v != 99 || s.n != n {
+		t.Fatalf("replacing an entry: v=%d n=%d", v, s.n)
+	}
+}
+
+func TestAttributionDoesNotDependOnRowOrder(t *testing.T) {
+	build := func(order []string) Match {
+		b := NewBuilder()
+		for _, src := range order {
+			b.AddBlockImportant("ads.example.com", src, "cat-"+src, false, src == "a-list")
+		}
+		m := New()
+		m.Commit(b)
+		return m.Lookup("ads.example.com")
+	}
+	x, y := build([]string{"a-list", "b-list"}), build([]string{"b-list", "a-list"})
+	if x != y || x.Source != "b-list" || x.Category != "cat-b-list" || !x.Important {
+		t.Fatalf("got %+v and %+v", x, y)
+	}
+}
+
+func TestBuiltinRuleKeepsItsAttributionOverAList(t *testing.T) {
+	b := NewBuilder()
+	b.AddBlock("dns.google", "zzz-list", "ads", true)
+	b.AddBlock("dns.google", "builtin:doh-bypass", "bypass", true)
+	m := New()
+	m.Commit(b)
+	if got := m.Lookup("dns.google"); got.Source != "builtin:doh-bypass" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestRegexVerdictIsRememberedPerIndex(t *testing.T) {
+	b := NewBuilder()
+	if err := b.AddRegex(`^ad[0-9]+\.`, "local:manual", "ads"); err != nil {
+		t.Fatal(err)
+	}
+	m := New()
+	m.Commit(b)
+	for i := 0; i < 3; i++ {
+		if got := m.Lookup("ad7.example.com"); !got.Blocked {
+			t.Fatalf("lookup %d: %+v", i, got)
+		}
+	}
+	// A new index must not inherit the old one's answers.
+	m.Commit(NewBuilder())
+	if got := m.Lookup("ad7.example.com"); got.Blocked {
+		t.Fatalf("stale verdict: %+v", got)
+	}
+}
+
+func BenchmarkLookupMiss(b *testing.B) {
+	bd := NewBuilder()
+	for i := 0; i < 1_000_000; i++ {
+		bd.AddBlock(fmt.Sprintf("host-%d.ads.example.net", i), "list", "ads", i%2 == 0)
+	}
+	for i := 0; i < 1200; i++ {
+		if err := bd.AddRegex(fmt.Sprintf(`^ad%d[0-9]+\.tracker`, i), "list", "ads"); err != nil {
+			b.Fatal(err)
+		}
+	}
+	m := New()
+	m.Commit(bd)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		m.Lookup("www.example-site.co.uk")
+	}
+}
+
+func TestSavedIndexAnswersLikeTheOriginal(t *testing.T) {
+	b := NewBuilder()
+	b.AddBlock("ads.example.com", "list-a", "ads", false)
+	b.AddBlockImportant("tracker.example.net", "list-b", "tracking", true, true)
+	b.AddAllowFrom("ok.tracker.example.net", false, false, "list-c")
+	if err := b.AddRegex(`^ad[0-9]+\.`, "list-a", "ads"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.AddAllowRegex(`^safe[0-9]+\.`, false, "list-c"); err != nil {
+		t.Fatal(err)
+	}
+	m := New()
+	m.Commit(b)
+	path := filepath.Join(t.TempDir(), "index.bin")
+	if err := m.SaveIndex(path, "lists"); err != nil {
+		t.Fatal(err)
+	}
+	loaded := New()
+	if err := loaded.LoadIndex(path, "lists"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ads.example.com", "x.tracker.example.net", "ok.tracker.example.net", "ad7.example.org", "safe1.tracker.example.net", "fine.example.org"} {
+		if got, want := loaded.Lookup(name), m.Lookup(name); got != want {
+			t.Errorf("%s: got %+v, want %+v", name, got, want)
+		}
+	}
+	if loaded.Count() != m.Count() {
+		t.Fatalf("count %d, want %d", loaded.Count(), m.Count())
+	}
+}
+
+func TestDamagedIndexIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.bin")
+	b := NewBuilder()
+	b.AddBlock("ads.example.com", "list-a", "ads", false)
+	m := New()
+	m.Commit(b)
+	if err := m.SaveIndex(path, "lists"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data[:len(data)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fresh := New()
+	if err := fresh.LoadIndex(path, "lists"); err == nil {
+		t.Fatal("a truncated index must be refused")
+	}
+	if fresh.Count() != 0 {
+		t.Fatal("a refused index must leave the matcher untouched")
+	}
+}
+
+func TestAnIndexBuiltFromOtherListsIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.bin")
+	b := NewBuilder()
+	b.AddBlock("ads.example.com", "list-a", "ads", false)
+	m := New()
+	m.Commit(b)
+	if err := m.SaveIndex(path, "lists"); err != nil {
+		t.Fatal(err)
+	}
+	if err := New().LoadIndex(path, "other lists"); err == nil {
+		t.Fatal("a list switched off in the YAML must not come back from the snapshot")
+	}
+}
+
+func TestImpossibleTablesAreRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		head [2]uint64
+		keys []uint64
+	}{
+		{"no empty slot, so a lookup would spin", [2]uint64{4, 4}, []uint64{1, 2, 3, 4}},
+		{"count disagrees with the keys", [2]uint64{3, 4}, []uint64{1, 0, 0, 0}},
+		{"larger than the file", [2]uint64{0, 1 << 40}, nil},
+		{"size that overflows", [2]uint64{0, 1 << 62}, nil},
+	} {
+		var buf bytes.Buffer
+		_ = binary.Write(&buf, binary.LittleEndian, tc.head)
+		_ = binary.Write(&buf, binary.LittleEndian, tc.keys)
+		_ = binary.Write(&buf, binary.LittleEndian, make([]uint32, len(tc.keys)))
+		var s domainSet
+		if err := s.read(bufio.NewReader(&buf), int64(buf.Len())); err == nil {
+			t.Errorf("%s: accepted", tc.name)
+		}
+	}
+}
+
+func TestListRowsChangingForcesARebuildAtBoot(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "orbis.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Default()
+	cfg.Store.Path = filepath.Join(dir, "orbis.db")
+	mgr := NewManager(st, New(), cfg, func(string, ...any) {})
+	if err := mgr.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !mgr.restore() {
+		t.Fatal("a saved index should load")
+	}
+	if _, err := st.ReplaceListDomains(context.Background(), "some-list", "ads", store.ListEntries{Exact: []string{"ads.example.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if mgr.restore() {
+		t.Fatal("the rows moved on, so the saved index is stale")
+	}
+	if err := mgr.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !mgr.restore() {
+		t.Fatal("a rebuild should clear the marker")
 	}
 }

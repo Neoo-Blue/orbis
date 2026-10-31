@@ -42,6 +42,21 @@ export const Icons = {
   chevron: svg(<path d="M9 6l6 6-6 6" />),
   route: svg(<><circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M6 9v4a5 5 0 0 0 5 5h4" /></>),
   spark: svg(<path d="M13 2L4.5 13H11l-1 9 8.5-11H12z" />),
+  orbit: svg(<><circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="9" ry="3.4" /><circle cx="12" cy="12" r="1.6" /></>),
+  stack: svg(<><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" /></>),
+  chart: svg(<path d="M4 20V10M10 20V4M16 20v-7M21 20H3" />),
+  nodes: svg(<><circle cx="12" cy="5" r="2.4" /><circle cx="5" cy="19" r="2.4" /><circle cx="19" cy="19" r="2.4" /><path d="M11 7.2L6.2 17M13 7.2L17.8 17M7.4 19h9.2" /></>),
+  pulse: svg(<><path d="M2 13h4l2-5 4 10 2.5-7 1.5 2h6" /></>),
+  user: svg(<><circle cx="12" cy="8" r="4" /><path d="M4 21c1.2-4.4 4.2-6.5 8-6.5s6.8 2.1 8 6.5" /></>),
+  question: svg(<><circle cx="12" cy="12" r="9" /><path d="M9.4 9.3a2.7 2.7 0 1 1 3.9 2.4c-.9.5-1.3 1-1.3 2M12 17v.01" /></>),
+  target: svg(<><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" /><path d="M12 1.5V6M12 18v4.5M1.5 12H6M18 12h4.5" /></>),
+  server: svg(<><rect x="3" y="4" width="18" height="7" rx="1.6" /><rect x="3" y="13" width="18" height="7" rx="1.6" /><path d="M7 7.5v.01M7 16.5v.01" /></>),
+  cable: svg(<path d="M5 3v5a3 3 0 0 0 3 3h8a3 3 0 0 1 3 3v7M3 3h4M17 21h4" />),
+  door: svg(<><path d="M5 21V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v17M3 21h18" /><path d="M15 12v.01" /></>),
+  split: svg(<><path d="M3 12h7l4-6h7M10 12l4 6h7" /></>),
+  flag: svg(<><path d="M5 21V4M5 4c5-3 9 3 14 0v10c-5 3-9-3-14 0" /></>),
+  doc: svg(<><path d="M6 3h8l5 5v13H6z" /><path d="M14 3v5h5M9 13h7M9 17h7" /></>),
+  history: svg(<><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5M12 7v5l3 2" /></>),
   tv: svg(<><rect x="2.5" y="4" width="19" height="13" rx="1.8" /><path d="M8 21h8M12 17v4" /><path d="M10.5 8.5l4 2.5-4 2.5z" /></>),
 }
 
@@ -291,7 +306,7 @@ export function Drawer({ title, onClose, children, actions }: {
 
 export function Bar({ value, max, tone }: { value: number; max: number; tone?: string }) {
   const w = max > 0 ? Math.min(100, (value / max) * 100) : 0
-  return <div className="bar"><i className={tone} style={{ width: `${w}%` }} /></div>
+  return <div className="bar"><i className={tone} style={{ transform: `scaleX(${w / 100})` }} /></div>
 }
 
 export function Dot({ state, label }: { state: 'on' | 'off' | 'warn' | 'err'; label?: string }) {

@@ -242,3 +242,37 @@ func TestParseCounters(t *testing.T) {
 		t.Error("a comment without an id separator should be ignored")
 	}
 }
+
+func TestBlockedNamesFailFastOnEveryOtherPort(t *testing.T) {
+	cfg := testConfig()
+	cfg.DNS.BlockPage = true
+	out, _ := renderRuleset(cfg, nil, renderExtras{})
+	if !strings.Contains(out, "iifname @zone_lan meta l4proto tcp reject with tcp reset") {
+		t.Fatalf("lan clients would wait for a timeout:\n%s", out)
+	}
+	if !strings.Contains(out, "iifname @zone_iot meta l4proto tcp reject with tcp reset") {
+		t.Fatalf("a zone the page is closed to would hang instead:\n%s", out)
+	}
+	if strings.Contains(out, "iifname @zone_iot tcp dport { 80, 443 } accept") {
+		t.Fatal("port 80 is the interface too, and iot must not reach it")
+	}
+	if strings.Contains(out, "iifname @zone_wan meta l4proto tcp reject") {
+		t.Fatal("the WAN stays silent")
+	}
+	if strings.Index(out, "tcp dport { 80, 443 }") > strings.Index(out, "tcp reset") {
+		t.Fatal("the reset would shadow the page itself")
+	}
+	cfg.DNS.BlockPage = false
+	if out, _ = renderRuleset(cfg, nil, renderExtras{}); strings.Contains(out, "tcp reset") {
+		t.Fatal("with the page off there is nothing to fail fast for")
+	}
+}
+
+func TestTrafficToThisNodeStaysOutOfTheProxy(t *testing.T) {
+	cfg := testConfig()
+	cfg.MITM.Enabled = true
+	out, _ := renderRuleset(cfg, nil, renderExtras{})
+	if strings.Contains(out, "tcp dport 443 redirect") && !strings.Contains(out, "fib daddr type != local tcp dport 443 redirect") {
+		t.Fatalf("the block page would see the proxy, not the device:\n%s", out)
+	}
+}

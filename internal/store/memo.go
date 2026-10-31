@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,6 +20,18 @@ type memo struct {
 type memoEntry struct {
 	at  time.Time
 	val any
+}
+
+// forget drops entries whose key starts with prefix, for a change the next
+// poll should show rather than one the TTL would hide for half a minute.
+func (m *memo) forget(prefix string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k := range m.entries {
+		if strings.HasPrefix(k, prefix) {
+			delete(m.entries, k)
+		}
+	}
 }
 
 func (m *memo) get(key string, ttl time.Duration, compute func() (any, error)) (any, error) {

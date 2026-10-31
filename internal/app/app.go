@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
+	"github.com/Neoo-Blue/orbis/internal/blockpage"
 	"github.com/Neoo-Blue/orbis/internal/ai"
 	"github.com/Neoo-Blue/orbis/internal/alerts"
 	"github.com/Neoo-Blue/orbis/internal/config"
+	"github.com/Neoo-Blue/orbis/internal/confighistory"
 	"github.com/Neoo-Blue/orbis/internal/consent"
 	"github.com/Neoo-Blue/orbis/internal/country"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
@@ -35,6 +37,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/lounge"
 	"github.com/Neoo-Blue/orbis/internal/mitm"
 	"github.com/Neoo-Blue/orbis/internal/netconf"
+	"github.com/Neoo-Blue/orbis/internal/netwatch"
 	"github.com/Neoo-Blue/orbis/internal/notify"
 	"github.com/Neoo-Blue/orbis/internal/portmap"
 	"github.com/Neoo-Blue/orbis/internal/safety"
@@ -50,10 +53,11 @@ import (
 )
 
 type App struct {
-	Cfg   *config.Config
-	Store *store.Store
-	Geo   *geoip.Resolver
-	Self  *geoip.SelfLocator
+	Cfg     *config.Config
+	Store   *store.Store
+	History *confighistory.Manager
+	Geo     *geoip.Resolver
+	Self    *geoip.SelfLocator
 
 	Tracker   *flows.Tracker
 	Registry  *flows.ClientRegistry
@@ -65,6 +69,13 @@ type App struct {
 	Smart   *adblock.SmartCapture
 
 	DNS       *dnsproxy.Server
+	gatewayMu sync.Mutex
+	gateway   string
+	gatewayAt time.Time
+
+	// BlockPage shows why a site was stopped; BlockGuard decides who can see it.
+	BlockPage  *blockpage.Server
+	BlockGuard *blockpage.Guard
 	DNSCrypt  *dnsproxy.EncryptedServer
 	DHCP      *dhcp.Server
 	Firewall  *firewall.Engine
@@ -103,6 +114,8 @@ type App struct {
 	Country *country.Manager
 	// IDS is the built-in intrusion detection: logs and flows into bans.
 	IDS *ids.Manager
+	// Netwatch probes the gateway and public targets to separate LAN from ISP faults.
+	Netwatch *netwatch.Manager
 	// res samples what the node is spending.
 	res *resourceSampler
 	// Update notices new releases and installs them where it can.
@@ -157,6 +170,11 @@ type App struct {
 	startedAt time.Time
 }
 
+// blockPageHandshakes is per client per second. Past it a blocked name fails
+// quietly, which is all an ad deserved anyway, and a page looping through random
+// names cannot keep the CA signing.
+const blockPageHandshakes = 10
+
 func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	if logf == nil {
 		logf = func(format string, args ...any) {
@@ -194,6 +212,32 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		startedAt:     time.Now(),
 		logRing:       ring,
 		interceptKick: make(chan struct{}, 1),
+	}
+
+	// The systemd unit runs with ProtectSystem=strict and only /var/lib/orbis
+	// writable, so configuration history must live under the store's directory.
+	historyDir := filepath.Join(filepath.Dir(cfg.Store.Path), "config-history")
+	cfg.SetHistoryDir(historyDir)
+	a.History = confighistory.New(historyDir, cfg, confighistory.Hooks{
+		OnApply: a.applyRestored,
+		OnEditsLost: func(restoredID string) {
+			logf("confighistory: rolling back %s also undid changes saved while it was waiting", restoredID)
+			st.Audit("timer", "config.history.edits_lost", restoredID, "", "", "ok")
+		},
+		OnAutoRevert: func(restoredID, revertToID string, err error) {
+			if err != nil {
+				logf("confighistory: auto-revert from %s to %s failed: %v", restoredID, revertToID, err)
+				st.Audit("timer", "config.history.autorevert", restoredID, restoredID, revertToID, "error: "+err.Error())
+				return
+			}
+			logf("confighistory: unconfirmed restore %s reverted to %s", restoredID, revertToID)
+			st.Audit("timer", "config.history.autorevert", restoredID, restoredID, revertToID, "ok")
+		},
+	})
+	// Before the subsystems below read the configuration: if the node went down
+	// with a restore unconfirmed, it has to come up on the one that was safe.
+	if err := a.History.Resume(); err != nil {
+		logf("confighistory: %v", err)
 	}
 
 	// Flow tracking.
@@ -510,6 +554,13 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	}
 
 	// DNS.
+	a.BlockGuard = blockpage.NewGuard()
+	handshakes := dnsproxy.NewRateLimiter(blockPageHandshakes)
+	a.BlockPage = &blockpage.Server{Explain: a.explainBlock, Claims: a.ClaimsBlockedHost, Guard: a.BlockGuard, Log: logf,
+		Allow: func(client netip.Addr) bool { return handshakes.Allow(client, time.Now()) }}
+	if a.CA != nil {
+		a.BlockPage.Leaf = a.CA.Leaf
+	}
 	a.DNS = dnsproxy.New(cfg, st, a.Matcher, dnsproxy.Hooks{
 		OnAnswer:     a.Tracker.NoteHostname,
 		OnQuery:      a.onDNSQuery,
@@ -518,6 +569,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		LocalRecords: a.localRecords,
 		Publish: func(q store.DNSQuery) {
 			a.Bus.Publish(Event{Type: "dns.query", Data: q})
+		},
+		BlockPageAddr: func(client netip.Addr, name string) (netip.Addr, bool) {
+			return a.BlockGuard.AddrFor(client, name, time.Now())
 		},
 		CountryCheck: func(client netip.Addr, name string, addrs []netip.Addr) (bool, string) {
 			if a.Country == nil {
@@ -587,6 +641,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	// Per-service usage accounting.
 	a.Usage = usage.NewMeter()
 
+	// Continuous internet and gateway health probing.
+	a.Netwatch = netwatch.NewManager(cfg, st, logf)
+
 	if err := a.reloadPolicies(); err != nil {
 		logf("policies: load failed: %v", err)
 	}
@@ -599,6 +656,8 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 // explains the problem.
 func (a *App) Start() {
 	cfg := a.Cfg.Snapshot()
+
+	a.SyncBlockPage()
 
 	// VLANs come first: zones, DHCP scopes and capture all refer to
 	// interfaces that have to exist before anything else looks for them.
@@ -678,6 +737,8 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.Country.Run(a.ctx) }()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.IDS.Run(a.ctx) }()
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.Netwatch.Run(a.ctx) }()
 	a.res = newResourceSampler()
 	a.wg.Add(1)
 	go func() { defer a.wg.Done(); a.sampleResources(a.ctx) }()
@@ -788,7 +849,7 @@ func (a *App) Start() {
 	go func() { defer a.wg.Done(); a.Unblocker.Run(a.ctx) }()
 
 	// Installing a GeoIP database should fix the history too, not just new
-	// traffic, so reconcile stored rows once at startup.
+	// traffic, so reconcile stored rows after a new one appears.
 	if cfg.GeoIP.CityDB != "" || cfg.GeoIP.ASNDB != "" {
 		a.wg.Add(1)
 		go func() {
@@ -798,9 +859,7 @@ func (a *App) Start() {
 				return
 			case <-time.After(15 * time.Second):
 			}
-			if _, err := a.BackfillGeo(a.ctx, 20000); err != nil && a.ctx.Err() == nil {
-				a.log("geoip: backfill failed: %v", err)
-			}
+			a.backfillGeoOnce(cfg)
 		}()
 	}
 
@@ -841,6 +900,9 @@ func (a *App) Start() {
 
 func (a *App) Stop() {
 	a.log("orbis: shutting down")
+	if a.History != nil {
+		a.History.Stop()
+	}
 	a.stop()
 	if a.MITM != nil {
 		a.MITM.Stop()

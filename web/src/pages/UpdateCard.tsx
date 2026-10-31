@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
-import { Banner, Spinner, useToast } from '../ui'
+import { Banner, Spinner, useToast, Icons } from '../ui'
 import { ago } from '../format'
 import type { UpdateStatus } from '../types'
 
@@ -103,7 +103,7 @@ export function UpdateBanner({ onSettings }: { onSettings?: () => void }) {
           ? <button className="btn sm primary" disabled={busy} onClick={apply}>Update now</button>
           : <a className="btn sm primary" href={status.latest.url} target="_blank" rel="noreferrer">Release notes</a>}
         {onSettings && <button className="btn sm" onClick={onSettings}>Details</button>}
-        <button className="btn sm ghost" onClick={dismiss} aria-label="Dismiss">✕</button>
+        <button className="btn sm ghost" onClick={dismiss} aria-label="Dismiss"><Icons.close size={14} /></button>
       </span>
     }>
       Orbis {status.latest.version} is available. You are on {status.current}.

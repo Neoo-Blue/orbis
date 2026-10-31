@@ -173,9 +173,9 @@ export function ClientsPage() {
                     </td>
                     <td className="mono" style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>{c.ip}</td>
                     <td className="truncate" style={{ maxWidth: 180, color: 'var(--text-dim)', fontSize: 12 }}>
-                      {[c.vendor, c.os_guess].filter(Boolean).join(' · ') || '—'}
+                      {[c.vendor, c.os_guess].filter(Boolean).join(' · ') || '-'}
                     </td>
-                    <td className="num">{c.active_flows || '—'}</td>
+                    <td className="num">{c.active_flows || '-'}</td>
                     <td>
                       <Bar value={c.rate_in + c.rate_out} max={peak} />
                       <div className="num" style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 2 }}>
@@ -210,7 +210,7 @@ export function ClientsPage() {
   )
 }
 
-function ClientDrawer({ id, until, onClose, onChanged }: { id: string; until?: string; onClose: () => void; onChanged: () => void }) {
+export function ClientDrawer({ id, until, onClose, onChanged }: { id: string; until?: string; onClose: () => void; onChanged: () => void }) {
   const [tab, setTab] = useState<'activity' | 'dns' | 'settings'>('activity')
   const { data: client } = usePoll(() => api.clients.get(id), 8000, [id])
   const { data: flows } = usePoll(

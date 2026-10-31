@@ -392,8 +392,7 @@ export function AssistantPage({ initialQuestion, onConsumed }: { initialQuestion
             {convs && convs.conversations.length > 0 && (
               <div style={{ marginTop: 34 }}>
                 <div style={{
-                  fontSize: 10.5, letterSpacing: '.11em', textTransform: 'uppercase',
-                  color: 'var(--text-faint)', fontWeight: 600, marginBottom: 9,
+                  fontSize: 10.5, color: 'var(--text-faint)', fontWeight: 600, marginBottom: 9,
                 }}>Earlier conversations</div>
                 <div style={{ display: 'grid', gap: 5 }}>
                   {convs.conversations.slice(0, 8).map((c) => (

@@ -114,6 +114,18 @@ func (s *Server) shortcuts(next http.Handler) http.Handler {
 	})
 }
 
+// blockHost serves the block page to a browser that came here because the
+// resolver answered a blocked name with this node.
+func (s *Server) blockHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.app.ClaimsBlockedHost(r.Host) {
+			s.app.BlockPage.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // startShortcutListener serves shortcuts on port 80 when the UI itself is
 // on another port, so http://name works without typing one. Best effort: a
 // busy port 80 is logged, not fatal.
@@ -127,9 +139,9 @@ func (s *Server) startShortcutListener(mainListen string) {
 		return
 	}
 	srv := &http.Server{
-		Handler: s.shortcuts(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Handler: s.blockHost(s.shortcuts(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "http://"+strings.Split(r.Host, ":")[0]+portSuffix(mainListen)+r.URL.RequestURI(), http.StatusFound)
-		})),
+		}))),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}

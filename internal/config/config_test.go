@@ -203,3 +203,39 @@ func TestSnapshotIsReadOnly(t *testing.T) {
 		t.Error("taking a snapshot broke the live configuration")
 	}
 }
+
+func TestListsThatMovedFollowOrSwitchOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orbis.yaml")
+	raw := `adblock:
+  lists:
+    - name: URLhaus malware
+      url: https://urlhaus.abuse.ch/downloads/hostfile/
+      enabled: true
+    - name: 1Hosts (mini)
+      url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_38.txt
+      enabled: true
+    - name: Mine
+      url: https://example.com/list.txt
+      enabled: true
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]BlockList{}
+	for _, l := range c.AdBlock.Lists {
+		got[l.Name] = l
+	}
+	if u := got["URLhaus malware"]; !strings.Contains(u.URL, "filter_11") || !u.Enabled {
+		t.Fatalf("urlhaus: %+v", u)
+	}
+	if got["1Hosts (mini)"].Enabled {
+		t.Fatal("an empty list should be off")
+	}
+	if m := got["Mine"]; m.URL != "https://example.com/list.txt" || !m.Enabled {
+		t.Fatalf("an untouched list changed: %+v", m)
+	}
+}

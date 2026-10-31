@@ -31,7 +31,8 @@ type Upstream struct {
 	client   *dns.Client
 	httpc    *http.Client
 	mu       sync.Mutex
-	conn     *dns.Conn
+	idle     []idleConn
+	closed   bool
 	lastErr  error
 	failures int
 	// coolUntil suppresses an upstream that keeps failing so a dead resolver
@@ -42,6 +43,26 @@ type Upstream struct {
 	Queries int64
 	Errors  int64
 }
+
+// idleConn is an open DoT or TCP connection waiting for its next query.
+type idleConn struct {
+	conn  *dns.Conn
+	since time.Time
+}
+
+const (
+	// maxIdleConns bounds the connections kept per upstream; a burst past it
+	// dials and the extras close when they finish.
+	maxIdleConns = 4
+	// idleConnTTL is well past when resolvers hang up on an idle client, but
+	// finding that out costs one failed read and a redial, while a handshake
+	// on every query cost about 60 ms on all of them.
+	idleConnTTL = 60 * time.Second
+	// reusedConnTimeout gives up on a reused connection early: one that died
+	// without a word, after a NAT flap say, would otherwise cost the whole
+	// exchange timeout before the fresh dial that fixes it.
+	reusedConnTimeout = 1500 * time.Millisecond
+)
 
 // ParseUpstream accepts the forms an operator would reasonably type:
 //
@@ -202,6 +223,8 @@ func (u *Upstream) Exchange(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
 	switch u.Kind {
 	case "https":
 		resp, err = u.exchangeDoH(ctx, m)
+	case "tls", "tcp":
+		resp, err = u.exchangeStream(ctx, m)
 	default:
 		resp, _, err = u.client.ExchangeContext(ctx, m, u.Addr)
 		// A truncated UDP answer must be retried over TCP or the client gets
@@ -215,6 +238,91 @@ func (u *Upstream) Exchange(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
 	}
 	u.noteResult(err, time.Since(start))
 	return resp, err
+}
+
+// exchangeStream runs one query over a reused connection, one query at a time
+// per connection. A connection that fails after sitting idle is replaced once,
+// invisibly, and the rest of the pool goes with it: what killed one, a NAT flap
+// say, killed them all, and trying each in turn would use up the whole timeout
+// without dialling. Anything that fails on a fresh dial is real.
+func (u *Upstream) exchangeStream(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {
+	for {
+		conn, reused := u.takeConn(), true
+		if conn == nil {
+			var err error
+			if conn, err = u.client.DialContext(ctx, u.Addr); err != nil {
+				return nil, err
+			}
+			reused = false
+		}
+		attempt, cancel := ctx, context.CancelFunc(func() {})
+		if reused {
+			attempt, cancel = context.WithTimeout(ctx, reusedConnTimeout)
+		}
+		resp, _, err := u.client.ExchangeWithConnContext(attempt, m, conn)
+		cancel()
+		if err == nil {
+			u.putConn(conn)
+			return resp, nil
+		}
+		// Any error leaves the stream's framing unknown: never reuse it.
+		conn.Close()
+		if !reused || ctx.Err() != nil {
+			return nil, err
+		}
+		u.dropIdle()
+	}
+}
+
+// takeConn returns the most recently used connection still worth trying.
+func (u *Upstream) takeConn() *dns.Conn {
+	now := time.Now()
+	var expired []*dns.Conn
+	var conn *dns.Conn
+	u.mu.Lock()
+	for conn == nil && len(u.idle) > 0 {
+		last := u.idle[len(u.idle)-1]
+		u.idle = u.idle[:len(u.idle)-1]
+		if now.Sub(last.since) < idleConnTTL {
+			conn = last.conn
+		} else {
+			expired = append(expired, last.conn)
+		}
+	}
+	u.mu.Unlock()
+	for _, c := range expired {
+		c.Close()
+	}
+	return conn
+}
+
+func (u *Upstream) putConn(conn *dns.Conn) {
+	u.mu.Lock()
+	if u.closed || len(u.idle) >= maxIdleConns {
+		u.mu.Unlock()
+		conn.Close()
+		return
+	}
+	u.idle = append(u.idle, idleConn{conn: conn, since: time.Now()})
+	u.mu.Unlock()
+}
+
+// Close retires the upstream when it leaves the pool.
+func (u *Upstream) Close() {
+	u.mu.Lock()
+	u.closed = true
+	u.mu.Unlock()
+	u.dropIdle()
+}
+
+func (u *Upstream) dropIdle() {
+	u.mu.Lock()
+	idle := u.idle
+	u.idle = nil
+	u.mu.Unlock()
+	for _, c := range idle {
+		c.conn.Close()
+	}
 }
 
 func (u *Upstream) exchangeDoH(ctx context.Context, m *dns.Msg) (*dns.Msg, error) {

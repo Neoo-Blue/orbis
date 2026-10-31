@@ -16,7 +16,7 @@ const RANGES = [
   { value: '1', label: '1h' }, { value: '24', label: '24h' }, { value: '168', label: '7d' }, { value: '720', label: '30d' },
 ]
 
-const PALETTE = ['#4ee8c0', '#63b3ff', '#c39bff', '#ff8fa3', '#ffc266', '#5ce39a', '#8fd3ff', '#e8b04e']
+const PALETTE = ['#62d8b2', '#8fb7ff', '#e8a7c0', '#ff9d7f', '#f2b544', '#d9bc7c', '#a8c9e8', '#c9b98f']
 
 export function ServicesPage({ onNavigate }: { onNavigate: (r: 'clients' | 'intercept') => void }) {
   const [hours, setHours] = useState(24)
@@ -87,10 +87,10 @@ export function ServicesPage({ onNavigate }: { onNavigate: (r: 'clients' | 'inte
                       </td>
                       <td className="mono">{s.devices}</td>
                       <td className="mono">{num(s.conns)}</td>
-                      <td className="mono">{s.bytes_in ? bytes(s.bytes_in) : <span className="hint">—</span>}</td>
-                      <td className="mono">{s.bytes_out ? bytes(s.bytes_out) : <span className="hint">—</span>}</td>
+                      <td className="mono">{s.bytes_in ? bytes(s.bytes_in) : <span className="hint">-</span>}</td>
+                      <td className="mono">{s.bytes_out ? bytes(s.bytes_out) : <span className="hint">-</span>}</td>
                       <td className="mono">{num(s.lookups)}</td>
-                      <td className="mono" style={{ color: s.blocked ? 'var(--red)' : undefined }}>{s.blocked ? num(s.blocked) : '—'}</td>
+                      <td className="mono" style={{ color: s.blocked ? 'var(--red)' : undefined }}>{s.blocked ? num(s.blocked) : '-'}</td>
                       <td><Sparkline points={s.spark ?? []} height={26} /></td>
                     </tr>
                   ))}
@@ -198,7 +198,7 @@ function ServiceDrawer({ service, hours, onClose }: { service: string; hours: nu
         <div style={{ display: 'grid', gap: 16 }}>
           <HourBars series={data.series} />
           <div>
-            <div className="hint" style={{ marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.08em', fontSize: 10.5 }}>By device</div>
+            <div className="hint" style={{ marginBottom: 6, fontSize: 10.5 }}>By device</div>
             <div style={{ display: 'grid', gap: 8 }}>
               {data.devices.map((d) => (
                 <div key={d.client_id}>
@@ -215,7 +215,7 @@ function ServiceDrawer({ service, hours, onClose }: { service: string; hours: nu
           </div>
           {data.hosts.length > 0 && (
             <div>
-              <div className="hint" style={{ marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.08em', fontSize: 10.5 }}>Hosts behind it</div>
+              <div className="hint" style={{ marginBottom: 6, fontSize: 10.5 }}>Hosts behind it</div>
               <table className="t">
                 <tbody>
                   {data.hosts.map((h) => (
@@ -256,7 +256,7 @@ function DeviceDrawer({ clientID, hours, onClose, onNavigate }: {
                     <td><span style={{ fontWeight: 560 }}>{s.service}</span> <span className={`cat ${s.category}`}>{s.category}</span></td>
                     <td className="mono">{num(s.conns)}</td>
                     <td className="mono">{totalBytes > 0 ? bytes(s.bytes_in + s.bytes_out) : num(s.lookups)}</td>
-                    <td className="mono" style={{ color: s.blocked ? 'var(--red)' : undefined }}>{s.blocked ? num(s.blocked) : '—'}</td>
+                    <td className="mono" style={{ color: s.blocked ? 'var(--red)' : undefined }}>{s.blocked ? num(s.blocked) : '-'}</td>
                     <td><Sparkline points={s.spark ?? []} height={22} /></td>
                   </tr>
                 ))}

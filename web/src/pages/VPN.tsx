@@ -73,7 +73,7 @@ function WireGuard() {
 
       <div className="grid c4">
         <Stat label="Server" value={running ? 'Running' : 'Stopped'} tone={running ? 'accent' : undefined}
-          sub={`port ${s.server_port ?? '—'}`} />
+          sub={`port ${s.server_port ?? '-'}`} />
         <Stat label="Peers" value={String(peers?.peers.length ?? 0)}
           sub={`${(peers?.peers ?? []).filter((p) => p.last_handshake &&
             Date.now() - new Date(p.last_handshake).getTime() < 180000).length} connected`} />
@@ -123,7 +123,7 @@ function WireGuard() {
                       </td>
                       <td className="mono" style={{ fontSize: 11.5 }}>{p.address}</td>
                       <td className="mono truncate" style={{ fontSize: 11, color: 'var(--text-faint)', maxWidth: 160 }}>
-                        {p.endpoint || '—'}
+                        {p.endpoint || '-'}
                       </td>
                       <td style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{ago(p.last_handshake)}</td>
                       <td className="num">{bytes(p.rx_bytes)}</td>
@@ -302,7 +302,7 @@ function Tailscale() {
       <div className="grid c4">
         <Stat label="State" value={st.running ? 'Connected' : st.backend_state || 'Stopped'}
           tone={st.running ? 'accent' : undefined}
-          sub={st.tailnet_name || (st.version ? `v${st.version.split('-')[0]}` : '—')} />
+          sub={st.tailnet_name || (st.version ? `v${st.version.split('-')[0]}` : '-')} />
         <Stat label="Peers" value={String(st.peers?.length ?? 0)}
           sub={`${(st.peers ?? []).filter((p) => p.online).length} online`} />
         <Stat label="Exit node offered"
@@ -481,8 +481,8 @@ function Tailscale() {
                       <span className={`dot ${p.online ? 'on' : 'off'}`} style={{ marginRight: 8 }} />
                       {p.name}
                     </td>
-                    <td className="mono" style={{ fontSize: 11.5 }}>{p.addresses[0] ?? '—'}</td>
-                    <td style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{p.os || '—'}</td>
+                    <td className="mono" style={{ fontSize: 11.5 }}>{p.addresses[0] ?? '-'}</td>
+                    <td style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{p.os || '-'}</td>
                     <td>
                       {p.is_exit_node && <span className="tag live">in use as exit</span>}
                       {!p.is_exit_node && p.exit_node_option && <span className="tag info">exit available</span>}

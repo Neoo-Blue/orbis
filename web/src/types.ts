@@ -100,6 +100,43 @@ export interface Rule {
   updated_at: string
 }
 
+export type MatrixVerdict = 'allow' | 'block' | 'mixed'
+
+export interface MatrixZone {
+  name: string
+  trust: string
+  interfaces: string[]
+  subnets: string[]
+  implicit: boolean
+}
+
+export interface MatrixCell {
+  src: string
+  dst: string
+  chain: string
+  default_action: 'allow' | 'block'
+  default_reason: string
+  verdict: MatrixVerdict
+  rule_count: number
+  counter_pkts: number
+  counter_bytes: number
+  has_block: boolean
+  rule_ids: string[]
+  rules: Rule[]
+  flows: number
+  flow_bytes: number
+  flows_blocked: number
+}
+
+export interface ZoneMatrixResponse {
+  mode: Mode
+  enforced: boolean
+  default_forward: string
+  window_seconds: number
+  zones: MatrixZone[]
+  cells: MatrixCell[]
+}
+
 export interface EventItem {
   id: string
   ts: string
@@ -239,7 +276,7 @@ export interface Health {
   resources?: NodeResources
   level: 'ok' | 'attention' | 'problem'
   headline: string
-  points: Array<{ level: 'ok' | 'attention' | 'problem'; text: string }>
+  points: Array<{ level: 'ok' | 'attention' | 'problem'; text: string; page?: string }>
   devices_online: number
   devices_total: number
   devices_paused: number
@@ -348,6 +385,7 @@ export interface SystemStatus {
   self?: Record<string, unknown>
   filter_proxy: Record<string, unknown>
   ca?: Record<string, unknown>
+  threat?: Record<string, unknown>
   ai: Record<string, unknown>
 }
 
@@ -617,9 +655,9 @@ export interface AppConfig {
   }
   dns: {
     enabled: boolean; listen: string[]; upstreams: string[]; strategy: string
-    cache_size: number; min_ttl: number; max_ttl: number; block_ttl: number
+    cache_size: number; max_ttl: number; block_ttl: number
     sinkhole_ipv4: string; sinkhole_ipv6: string; log_queries: boolean
-    local_domain: string; block_ede: boolean
+    local_domain: string; block_ede: boolean; block_page: boolean
   }
   adblock: {
     enabled: boolean; lists: BlockList[]; update_interval_hours: number
@@ -1470,4 +1508,104 @@ export interface SafetyStatus {
   has_hardware_watchdog: boolean
   config: { fallback_dns: string; lifeboat: boolean; hardware_watchdog: boolean; liveness_probe: boolean }
   last_episode?: { started: string; last_seen: string; reason: string; retries: number }
+}
+
+// ---- internet health (netwatch) ----
+
+export type NetwatchState = 'good' | 'degraded' | 'down'
+export type NetwatchStory = 'ok' | 'network' | 'isp'
+
+export interface NetwatchTarget {
+  id: string
+  name: string
+  address: string
+  interface?: string
+  role: 'gateway' | 'public'
+  state: NetwatchState
+  current_ms: number
+  last_ok: boolean
+  p50_ms: number
+  jitter_ms: number
+  loss_percent: number
+  median_24h_ms: number
+  samples_5m: number
+  samples_24h: number
+  consecutive_failures: number
+}
+
+export interface NetwatchIncident {
+  id: string
+  started_at: string
+  ended_at?: string
+  ongoing: boolean
+  duration_seconds: number
+  cause: NetwatchStory
+  summary: string
+  failed: string[]
+}
+
+export interface NetwatchStatus {
+  state: NetwatchState
+  story: NetwatchStory
+  blame: string
+  headline: string
+  detail: string
+  interval_seconds: number
+  rounds: number
+  updated_at?: string
+  targets: NetwatchTarget[]
+  incidents: NetwatchIncident[]
+}
+
+export interface NetwatchPoint {
+  t: number
+  ms: number
+  loss?: boolean
+}
+
+export interface NetwatchTargetSeries {
+  id: string
+  points: NetwatchPoint[]
+}
+
+export interface NetwatchHistory {
+  hours: number
+  from: number
+  to: number
+  targets: NetwatchTargetSeries[]
+  incidents: NetwatchIncident[]
+}
+
+export interface ConfigHistoryEntry {
+  id: string
+  time: string
+  size: number
+  summary: string
+  keys: string[]
+  touches_network: boolean
+}
+
+export interface ConfigHistoryPending {
+  pending: boolean
+  id?: string
+  revert_to_id?: string
+  summary?: string
+  started_at?: string
+  expires_at?: string
+  remaining_seconds: number
+}
+
+export interface ConfigHistoryListResponse {
+  entries: ConfigHistoryEntry[]
+  pending: ConfigHistoryPending
+}
+
+export interface ConfigHistoryRestoreResult {
+  restored_id: string
+  backup_id: string
+  keys: string[]
+  summary: string
+  pending: ConfigHistoryPending
+  config: AppConfig
+  restart_required: string[]
 }

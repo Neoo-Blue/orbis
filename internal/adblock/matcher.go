@@ -6,6 +6,7 @@ package adblock
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,25 +46,37 @@ type Matcher struct {
 
 type index struct {
 	// exact holds full-domain entries: "ads.example.com".
-	exact map[string]entry
+	exact domainSet
 	// wildcard holds suffix entries: an entry for "doubleclick.net" matches
 	// that name and every subdomain of it.
-	wildcard map[string]entry
+	wildcard domainSet
 	// allowExact / allowWildcard win over a block, except that an exception
 	// that came from a list yields to a block marked important, which is
 	// AdGuard's rule and what its lists are written against.
-	allowExact    map[string]allowEntry
-	allowWildcard map[string]allowEntry
+	allowExact    domainSet
+	allowWildcard domainSet
 	allowRegexes  []allowRegex
 	// regexes are the escape hatch for patterns a suffix cannot express.
 	regexes []regexEntry
 	count   int
+
+	// entries holds each distinct attribution once; the sets store its index.
+	// ids is only used while building.
+	entries []entry
+	ids     map[entry]uint32
+
+	// memo remembers what the regexes said about a name; see regexVerdict.
+	memoMu sync.RWMutex
+	memo   map[string]regexVerdict
 }
 
+// entry says where a rule came from. local marks the operator's own
+// exceptions, as opposed to ones from a subscribed list.
 type entry struct {
 	source    string
 	category  string
 	important bool
+	local     bool
 }
 
 type regexEntry struct {
@@ -73,17 +86,124 @@ type regexEntry struct {
 	important bool
 }
 
-// allowEntry records whether the exception is the operator's own (local)
-// or came from a subscribed list.
-type allowEntry struct {
-	local  bool
-	source string // the list the exception came from; empty for the operator's own
-}
-
 type allowRegex struct {
 	re     *compiledRegex
 	local  bool
 	source string
+}
+
+// regexVerdict holds the index of the first block and allow pattern to match
+// a name, or -1.
+type regexVerdict struct{ block, allow int32 }
+
+// regexMemoSize bounds the memo; a flood of random names just clears it.
+const regexMemoSize = 1 << 16
+
+// regexVerdict runs a name past the patterns once per index. There is no way
+// to index a regex, so a linear scan of about 1,200 list patterns took 2.5 ms
+// of every lookup on a Raspberry Pi, on what is otherwise a microsecond path.
+// A home network asks for the same few thousand names all day.
+func (idx *index) regexVerdict(d string) regexVerdict {
+	if len(idx.regexes)+len(idx.allowRegexes) == 0 {
+		return regexVerdict{-1, -1}
+	}
+	idx.memoMu.RLock()
+	v, ok := idx.memo[d]
+	idx.memoMu.RUnlock()
+	if ok {
+		return v
+	}
+	v = regexVerdict{-1, -1}
+	for i, r := range idx.regexes {
+		if r.re.MatchString(d) {
+			v.block = int32(i)
+			break
+		}
+	}
+	for i, r := range idx.allowRegexes {
+		if r.re.MatchString(d) {
+			v.allow = int32(i)
+			break
+		}
+	}
+	idx.memoMu.Lock()
+	if idx.memo == nil || len(idx.memo) >= regexMemoSize {
+		idx.memo = make(map[string]regexVerdict, 256)
+	}
+	idx.memo[d] = v
+	idx.memoMu.Unlock()
+	return v
+}
+
+// domainSet is an open-addressing table from a domain's 64-bit hash to an
+// entry. It keeps no strings and no pointers: millions of list entries cost
+// about 25 bytes each rather than about 120 in Go maps, and the garbage
+// collector never has to walk them, which is what made rebuilds freeze a
+// Raspberry Pi.
+//
+// ponytail: a query matches a listed name it isn't only on a 64-bit hash
+// collision, about one lookup in 4 trillion at 4 million entries.
+type domainSet struct {
+	keys []uint64 // 0 is an empty slot
+	vals []uint32
+	n    int
+}
+
+func hashDomain(d string) uint64 {
+	h := uint64(14695981039346656037)
+	for i := 0; i < len(d); i++ {
+		h ^= uint64(d[i])
+		h *= 1099511628211
+	}
+	h ^= h >> 32 // the table indexes by the low bits, FNV's weakest
+	if h == 0 {
+		return 1
+	}
+	return h
+}
+
+func (s *domainSet) find(h uint64) (uint32, bool) {
+	if len(s.keys) == 0 {
+		return 0, false
+	}
+	mask := uint64(len(s.keys) - 1)
+	for i := h & mask; ; i = (i + 1) & mask {
+		switch s.keys[i] {
+		case h:
+			return s.vals[i], true
+		case 0:
+			return 0, false
+		}
+	}
+}
+
+func (s *domainSet) set(h uint64, v uint32) {
+	if (s.n+1)*3 >= len(s.keys)*2 {
+		s.grow()
+	}
+	mask := uint64(len(s.keys) - 1)
+	for i := h & mask; ; i = (i + 1) & mask {
+		switch s.keys[i] {
+		case 0:
+			s.keys[i], s.vals[i] = h, v
+			s.n++
+			return
+		case h:
+			s.vals[i] = v
+			return
+		}
+	}
+}
+
+func (s *domainSet) grow() {
+	old := *s
+	size := max(16, len(old.keys)*2)
+	*s = domainSet{keys: make([]uint64, size), vals: make([]uint32, size)}
+	for i, k := range old.keys {
+		if k != 0 {
+			s.set(k, old.vals[i])
+		}
+	}
 }
 
 func New() *Matcher {
@@ -94,12 +214,7 @@ func New() *Matcher {
 }
 
 func newIndex() *index {
-	return &index{
-		exact:         map[string]entry{},
-		wildcard:      map[string]entry{},
-		allowExact:    map[string]allowEntry{},
-		allowWildcard: map[string]allowEntry{},
-	}
+	return &index{ids: map[entry]uint32{}}
 }
 
 // Builder accumulates entries for a new index.
@@ -111,28 +226,43 @@ func NewBuilder() *Builder {
 	return &Builder{idx: newIndex()}
 }
 
+func (b *Builder) intern(e entry) uint32 {
+	id, ok := b.idx.ids[e]
+	if !ok {
+		id = uint32(len(b.idx.entries))
+		b.idx.entries = append(b.idx.entries, e)
+		b.idx.ids[e] = id
+	}
+	return id
+}
+
 func (b *Builder) AddBlock(domain, source, category string, wildcard bool) {
 	b.AddBlockImportant(domain, source, category, wildcard, false)
 }
 
-// AddBlockImportant adds a block that also beats exceptions from lists.
+// AddBlockImportant adds a block that also beats exceptions from lists. When
+// several lists carry a name the highest list name gets the credit, so the
+// result does not depend on the order rows were read in; the operator's own
+// and built-in rules always do.
 func (b *Builder) AddBlockImportant(domain, source, category string, wildcard, important bool) {
 	d := normalize(domain)
 	if d == "" {
 		return
 	}
-	e := entry{source: source, category: category, important: important}
+	set := &b.idx.exact
 	if wildcard {
-		if old, ok := b.idx.wildcard[d]; ok && old.important {
-			e.important = true
-		}
-		b.idx.wildcard[d] = e
-	} else {
-		if old, ok := b.idx.exact[d]; ok && old.important {
-			e.important = true
-		}
-		b.idx.exact[d] = e
+		set = &b.idx.wildcard
 	}
+	h := hashDomain(d)
+	e := entry{source: source, category: category, important: important}
+	if id, ok := set.find(h); ok {
+		old := b.idx.entries[id]
+		e.important = important || old.important
+		if old.source > source && !isLocalSource(source) {
+			e.source, e.category = old.source, old.category
+		}
+	}
+	set.set(h, b.intern(e))
 	b.idx.count++
 }
 
@@ -148,15 +278,17 @@ func (b *Builder) AddAllowFrom(domain string, wildcard, local bool, source strin
 	if d == "" {
 		return
 	}
+	set := &b.idx.allowExact
 	if wildcard {
-		if old, ok := b.idx.allowWildcard[d]; !ok || !old.local {
-			b.idx.allowWildcard[d] = allowEntry{local: local, source: source}
-		}
-	} else {
-		if old, ok := b.idx.allowExact[d]; !ok || !old.local {
-			b.idx.allowExact[d] = allowEntry{local: local, source: source}
+		set = &b.idx.allowWildcard
+	}
+	h := hashDomain(d)
+	if id, ok := set.find(h); ok {
+		if old := b.idx.entries[id]; old.local || (!local && old.source > source) {
+			return
 		}
 	}
+	set.set(h, b.intern(entry{source: source, local: local}))
 }
 
 func (b *Builder) AddRegex(pattern, source, category string) error {
@@ -194,6 +326,9 @@ func (b *Builder) Count() int { return b.idx.count }
 // Commit publishes the built index. Old readers finish against the previous
 // index; there is never a window where the matcher is empty.
 func (m *Matcher) Commit(b *Builder) {
+	sort.SliceStable(b.idx.regexes, func(i, j int) bool { return b.idx.regexes[i].source < b.idx.regexes[j].source })
+	sort.SliceStable(b.idx.allowRegexes, func(i, j int) bool { return b.idx.allowRegexes[i].source < b.idx.allowRegexes[j].source })
+	b.idx.ids = nil
 	m.buildMu.Lock()
 	m.idx.Store(b.idx)
 	m.buildMu.Unlock()
@@ -202,6 +337,7 @@ func (m *Matcher) Commit(b *Builder) {
 // CommitOverlay publishes the operator's rules. Anything here is checked
 // before the lists and is authoritative either way.
 func (m *Matcher) CommitOverlay(b *Builder) {
+	b.idx.ids = nil
 	m.buildMu.Lock()
 	m.overlay.Store(b.idx)
 	m.buildMu.Unlock()
@@ -235,7 +371,9 @@ func (m *Matcher) Lookup(domain string) Match {
 func lookupIn(idx *index, d string) (Match, bool) {
 	var allow *Match
 	var allowLocal bool
-	if a, ok := idx.allowExact[d]; ok {
+	h := hashDomain(d)
+	if id, ok := idx.allowExact.find(h); ok {
+		a := idx.entries[id]
 		allow, allowLocal = &Match{Allowed: true, Source: allowSource(a.local, a.source), Rule: d}, a.local
 	}
 
@@ -244,17 +382,20 @@ func lookupIn(idx *index, d string) (Match, bool) {
 	first := true
 	for {
 		if allow == nil {
-			if a, ok := idx.allowWildcard[name]; ok {
+			if id, ok := idx.allowWildcard.find(h); ok {
+				a := idx.entries[id]
 				allow, allowLocal = &Match{Allowed: true, Source: allowSource(a.local, a.source), Rule: "*." + name}, a.local
 			}
 		}
 		if block == nil && first {
-			if e, ok := idx.exact[name]; ok {
+			if id, ok := idx.exact.find(h); ok {
+				e := idx.entries[id]
 				block = &Match{Blocked: true, Source: e.source, Category: e.category, Rule: name, Important: e.important}
 			}
 		}
 		if block == nil {
-			if e, ok := idx.wildcard[name]; ok {
+			if id, ok := idx.wildcard.find(h); ok {
+				e := idx.entries[id]
 				// A wildcard on a single label is a whole-TLD block. That is
 				// occasionally what an operator wants (*.zip), but from a
 				// subscribed list it is almost always a parse artefact, and
@@ -271,21 +412,17 @@ func lookupIn(idx *index, d string) (Match, bool) {
 			break
 		}
 		name = name[dot+1:]
+		h = hashDomain(name)
 	}
-	if block == nil {
-		for _, r := range idx.regexes {
-			if r.re.MatchString(d) {
-				block = &Match{Blocked: true, Source: r.source, Category: r.category, Rule: r.re.pattern, Important: r.important}
-				break
-			}
+	if block == nil || allow == nil {
+		v := idx.regexVerdict(d)
+		if block == nil && v.block >= 0 {
+			r := idx.regexes[v.block]
+			block = &Match{Blocked: true, Source: r.source, Category: r.category, Rule: r.re.pattern, Important: r.important}
 		}
-	}
-	if allow == nil {
-		for _, r := range idx.allowRegexes {
-			if r.re.MatchString(d) {
-				allow, allowLocal = &Match{Allowed: true, Source: allowSource(r.local, r.source), Rule: "/" + r.re.pattern + "/"}, r.local
-				break
-			}
+		if allow == nil && v.allow >= 0 {
+			r := idx.allowRegexes[v.allow]
+			allow, allowLocal = &Match{Allowed: true, Source: allowSource(r.local, r.source), Rule: "/" + r.re.pattern + "/"}, r.local
 		}
 	}
 

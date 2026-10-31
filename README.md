@@ -2,7 +2,7 @@
 
 # Orbis
 
-<img width="1280" height="698" alt="image" src="https://github.com/user-attachments/assets/ccb87f2c-92fa-41fd-b3ff-2407d330959b" />
+<img width="1280" alt="The Orbis overview: a sentence saying the network is protected, beside a live orbit chart of every device and connection. Demo data." src="docs/img/overview.png" />
 
 **The firewall that follows the ad into the stream, and knows what your network is doing.**
 
@@ -33,6 +33,7 @@ it. Runs on a Raspberry Pi, an LXC, a VM, or in Docker.
 - [The network: cables, Wi-Fi, firewall, VPN](#the-network-cables-wi-fi-firewall-vpn)
 - [Seeing everything: globe, services, hosted apps, storage](#seeing-everything-globe-services-hosted-apps-storage)
 - [Operating it: two interfaces and the assistant](#operating-it-two-interfaces-and-the-assistant)
+- [Change timeline](#change-timeline)
 - [Problem reports](#problem-reports)
 - [Modes and placement](#modes-and-placement)
 - [Architecture](#architecture)
@@ -131,7 +132,7 @@ A Pi 4 runs the resolver for a household with room to spare. What maps to what:
 | Filter list subscriptions | Ad blocking, Lists (hosts, domain, dnsmasq and AdBlock syntax) |
 | Custom rules, `\|\|host^` and `@@` | Ad blocking, My rules, or a profile's deny and allow lists |
 | Clients with filtering disabled | The **Unfiltered** profile, assigned per device |
-| unbound or another DoT forwarder | `dns.upstreams` entries such as `tls://1.1.1.1:853`; `cache_size` and `min_ttl` are settings |
+| unbound or another DoT forwarder | `dns.upstreams` entries such as `tls://1.1.1.1:853`; `cache_size` and `max_ttl` are settings |
 | Port 53, admin UI on 80 | `dns.listen` and `api.listen`; the UI moves with `api.listen` |
 
 Stop the old resolver first: two services cannot share port 53, and the DNS page says so rather
@@ -275,14 +276,29 @@ by default so YouTube falls back to TCP where the proxy can see it.
 
 ## Filtering by name
 
-**A full resolver.** LRU cache with a TTL floor, upstreams over plain, DoT and DoH (encrypted by
-default), and a DoT/DoH server for your own devices so a phone keeps using it off the LAN. Local
-authoritative records with wildcards, rewrites, conditional forwarding, rate limiting, rebinding
-protection. A name asked for in the last tenth of its TTL is refreshed in the background while
-the cached answer is served, so the names a household asks for constantly never wait on an
-upstream again. Answer latency is measured (`orbis_dns_answer_seconds` on `/metrics`), so "is
-DNS slow" is a number, not a feeling. Turn the cache up and the TTL floor to an hour and it is
-a drop-in for unbound in front of a home network.
+**A full resolver.** An LRU cache, upstreams over plain, DoT and DoH (encrypted by default, over
+connections that stay open), and a DoT/DoH server for your own devices so a phone keeps using it
+off the LAN. Local authoritative records with wildcards, rewrites, conditional forwarding, rate
+limiting, rebinding protection. Answer latency is measured (`orbis_dns_answer_seconds` on
+`/metrics`), so "is DNS slow" is a number, not a feeling.
+
+**Never stale.** An answer is kept for exactly as long as its owner said and not a second more,
+there is no minimum TTL to raise it, and an expired answer is never served. Speed comes from
+refreshing the names your devices use before they expire, so they are answered from cache and
+are always current. "This name does not exist" is believed for at most 30 seconds and needs most
+of your resolvers to agree, so a record you created a minute ago shows up even while one resolver
+is still caching the old answer. SERVFAIL from one resolver never reaches a client while another
+can answer.
+
+**A page that says why.** A browser opening a blocked site gets a page instead of an error: what
+was stopped, the rule and list that decided it, drawn as one line from the device to the decision,
+with a link straight to the place to change it. It works on every plain http site, and on https
+for devices that trust the Orbis certificate (`/setup` installs it in one tap). A device that
+does not is detected after a few refused certificates and keeps failing quietly as before, and a
+blocked ad inside someone else's page fails silently either way. Switch it off with
+`dns.block_page`.
+
+<img width="900" alt="The block page: the blocked name, why it was stopped, and the route from the device to the rule that decided. Demo data." src="docs/img/blockpage.png" />
 
 **Lists from anywhere.** Any list AdGuard Home or Pi-hole accepts works here, with the same
 meaning: hosts files, plain domains, AdGuard rules with exceptions, `$important`, `$denyallow`,
@@ -378,7 +394,7 @@ filtered at every layer even while the node it runs on is not the network's rout
 is generated when you do not set one, shown with a QR code to join behind the admin login, and
 replaceable with your own. Bridge mode hands the adapter to an existing bridge instead.
 
-**A real firewall.** Zones with trust levels, an ordered rule table with live hit counters, NAT
+**A real firewall.** Zones with trust levels, a zone matrix showing what happens between every pair of them with the last hour of traffic, an ordered rule table with live hit counters, NAT
 and port forwarding, time-based rules, IPv6, flow offload, an anti-lockout rule, all compiled
 into one nftables ruleset and loaded atomically after `nft -c` validation. Guest and IoT zones
 are isolated from the rest by default.
@@ -396,6 +412,16 @@ failover, CAKE shaping, NAT-PMP for consoles, Wake-on-LAN, ping, traceroute, spe
 export.
 
 ## Seeing everything: globe, services, hosted apps, storage
+
+**The orbit chart.** The Overview is a live map of this network drawn as a star chart: Orbis at the
+centre, devices on their orbits by what they are and sized by what they are doing, each reaching the
+world through the gateway, and traffic running round the rim in one line per region as thick as the
+bytes on it. A blocked lookup stops dead at the shield and leaves a mark that opens the reason. Hover
+a body to light up its traffic; click it to open the device.
+
+**Internet health.** The gateway and three public resolvers are probed every 10 seconds, and the
+page answers the question in one sentence: is it your network, or your provider? Latency, jitter
+and loss for each, 24 hours of history with outages marked, and incidents that land in Events.
 
 **Every connection identified.** A kernel BPF prefilter hands userspace only the packets that
 carry identity, so each connection gets a hostname, an application, a network operator, a
@@ -528,6 +554,13 @@ For the failure no software covers, the box itself dying, the same page holds a 
 for the node's placement. Placement is the strongest layer of all: in intercept mode the router
 stays the gateway and devices fall back to it on their own; a node that is the gateway needs the
 runbook.
+
+## Change timeline
+
+Every saved configuration is kept, the last 200 of them, with what changed and a line-by-line
+comparison, secrets hidden. Restore any version in one click. A change that touches the network
+asks you to confirm within 60 seconds and rolls itself back if you cannot, so a mistake that cuts
+you off undoes itself. Restores keep the current admin password and sessions.
 
 ## Modes and placement
 

@@ -85,7 +85,7 @@ func (s *Server) Start() error {
 
 	s.http = &http.Server{
 		Addr:              cfg.API.Listen,
-		Handler:           s.shortcuts(r),
+		Handler:           s.blockHost(s.shortcuts(r)),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: the WebSocket and the chat stream are long-lived.
 		IdleTimeout: 120 * time.Second,

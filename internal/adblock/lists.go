@@ -3,9 +3,12 @@ package adblock
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -38,7 +41,7 @@ func NewManager(st *store.Store, m *Matcher, cfg *config.Config, log func(string
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Manager{
+	mgr := &Manager{
 		st:      st,
 		matcher: m,
 		cfg:     cfg,
@@ -55,6 +58,8 @@ func NewManager(st *store.Store, m *Matcher, cfg *config.Config, log func(string
 			},
 		},
 	}
+	st.OnListChange(mgr.markDirty)
+	return mgr
 }
 
 // SyncConfig reconciles the configured list set with what is in the database,
@@ -108,10 +113,12 @@ func (m *Manager) UpdateAll(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
-	interval := time.Duration(m.cfg.Snapshot().AdBlock.UpdateIntervalHours) * time.Hour
-	if interval <= 0 {
-		interval = 24 * time.Hour
-	}
+	interval := m.updateInterval()
+	// A pass takes every list due within the next quarter of the interval.
+	// Lists left to their own clocks drift apart and a list somewhere is due
+	// nearly every hour, each one costing a full index rebuild; this pulls
+	// them into one wave and one rebuild.
+	due := interval * 3 / 4
 
 	// Lists are independent; fetching them in parallel turns a 9-list refresh
 	// from minutes into seconds. Four at a time is polite to the mirrors.
@@ -122,7 +129,7 @@ func (m *Manager) UpdateAll(ctx context.Context, force bool) error {
 		if !meta.Enabled {
 			continue
 		}
-		if !force && meta.LastUpdated != nil && time.Since(*meta.LastUpdated) < interval {
+		if !force && meta.LastUpdated != nil && time.Since(*meta.LastUpdated) < due {
 			continue
 		}
 		wg.Add(1)
@@ -131,7 +138,8 @@ func (m *Manager) UpdateAll(ctx context.Context, force bool) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			did, err := m.updateOne(ctx, meta)
-			if err != nil {
+			// Being stopped part way says nothing about the list.
+			if err != nil && ctx.Err() == nil {
 				m.log("adblock: list %q failed: %v", meta.Name, err)
 				_ = m.st.SetListError(meta.Name, err.Error())
 			}
@@ -146,7 +154,7 @@ func (m *Manager) UpdateAll(ctx context.Context, force bool) error {
 	if changed.Load() == 0 && m.matcher.Count() > 0 {
 		return nil
 	}
-	return m.Rebuild()
+	return m.Rebuild(ctx)
 }
 
 // updateOne fetches one list; it reports whether the stored entries changed.
@@ -170,7 +178,7 @@ func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) (bool, err
 
 	if resp.StatusCode == http.StatusNotModified {
 		m.log("adblock: %s unchanged", meta.Name)
-		return false, nil
+		return false, m.st.TouchList(meta.Name)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("HTTP %d", resp.StatusCode)
@@ -193,7 +201,8 @@ func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) (bool, err
 	if parsed.Total() == 0 {
 		return false, fmt.Errorf("list parsed to zero entries (format change?)")
 	}
-	if err := m.st.ReplaceListDomains(meta.Name, meta.Category, ToListEntries(parsed)); err != nil {
+	changed, err := m.st.ReplaceListDomains(ctx, meta.Name, meta.Category, ToListEntries(parsed))
+	if err != nil {
 		return false, err
 	}
 	meta.ETag = resp.Header.Get("ETag")
@@ -202,11 +211,26 @@ func (m *Manager) updateOne(ctx context.Context, meta store.ListMeta) (bool, err
 	meta.Entries = parsed.Total()
 	_ = m.st.UpsertListMeta(meta)
 	if len(parsed.Skipped) > 0 {
-		m.log("adblock: %s -> %d entries (%d blocks, %d exceptions), skipped %s", meta.Name, meta.Entries, parsed.Blocks(), parsed.Allows(), skippedSummary(parsed.Skipped))
+		m.log("adblock: %s -> %d entries (%d changed, %d blocks, %d exceptions), skipped %s", meta.Name, meta.Entries, changed, parsed.Blocks(), parsed.Allows(), skippedSummary(parsed.Skipped))
 	} else {
-		m.log("adblock: %s -> %d entries (%d blocks, %d exceptions)", meta.Name, meta.Entries, parsed.Blocks(), parsed.Allows())
+		m.log("adblock: %s -> %d entries (%d changed, %d blocks, %d exceptions)", meta.Name, meta.Entries, changed, parsed.Blocks(), parsed.Allows())
 	}
-	return true, nil
+	return changed > 0, nil
+}
+
+func (m *Manager) updateInterval() time.Duration {
+	if h := m.cfg.Snapshot().AdBlock.UpdateIntervalHours; h > 0 {
+		return time.Duration(h) * time.Hour
+	}
+	return 24 * time.Hour
+}
+
+// quietHours is when a daily refresh runs. List downloads, parsing and the
+// index rebuild are the heaviest work this node does; on a Raspberry Pi they
+// used to land at 06:00-08:30, just as the household logged in for work.
+func quietHours(t time.Time) bool {
+	h := t.Hour()
+	return h >= 2 && h < 5
 }
 
 // parseOptions reads a list's action and format from the configuration.
@@ -241,7 +265,7 @@ func skippedSummary(sk map[string]int) string {
 // expensive path (millions of entries), so it is called only when the
 // lists themselves change; a rule change goes through RebuildLocal. Calls
 // that arrive while one is running are coalesced into a single follow-up.
-func (m *Manager) Rebuild() error {
+func (m *Manager) Rebuild(ctx context.Context) error {
 	m.mu.Lock()
 	if m.rebuilding {
 		m.rebuildAgain = true
@@ -251,7 +275,7 @@ func (m *Manager) Rebuild() error {
 	m.rebuilding = true
 	m.mu.Unlock()
 	for {
-		err := m.rebuildLists()
+		err := m.rebuildLists(ctx)
 		m.mu.Lock()
 		again := m.rebuildAgain
 		m.rebuildAgain = false
@@ -264,10 +288,13 @@ func (m *Manager) Rebuild() error {
 	}
 }
 
-func (m *Manager) rebuildLists() error {
+func (m *Manager) rebuildLists(ctx context.Context) error {
+	if err := m.SyncConfig(); err != nil {
+		return err
+	}
 	b := NewBuilder()
 	badRegex := 0
-	if err := m.st.AllBlockDomains(func(domain, source, category string, kind int, important bool) {
+	if err := m.st.AllBlockDomains(ctx, func(domain, source, category string, kind int, important bool) {
 		switch kind {
 		case store.EntryExact:
 			b.AddBlockImportant(domain, source, category, false, important)
@@ -311,7 +338,86 @@ func (m *Manager) rebuildLists() error {
 	m.lastCount = b.Count()
 	m.mu.Unlock()
 	m.log("adblock: index rebuilt, %d entries", b.Count())
+	if path := m.snapshotPath(); path != "" {
+		if err := m.matcher.SaveIndex(path, m.fingerprint()); err != nil {
+			m.log("adblock: index not saved: %v", err)
+		} else {
+			_ = os.Remove(path + dirtySuffix)
+		}
+	}
 	return m.RebuildLocal()
+}
+
+// dirtySuffix names the marker left while the stored rows are ahead of the
+// saved index. It goes down before the first row changes and comes up only once
+// a new index is on disk, so a power cut in between means a rebuild at boot
+// rather than serving the old index until some list next changes.
+const dirtySuffix = ".dirty"
+
+func (m *Manager) markDirty() {
+	if path := m.snapshotPath(); path != "" {
+		_ = os.WriteFile(path+dirtySuffix, nil, 0o600)
+	}
+}
+
+// fingerprint is what the index is built from besides list contents: which
+// lists are on and the built-in sets. Editing any of them in the YAML and
+// restarting must not bring back an index built without that edit.
+func (m *Manager) fingerprint() string {
+	metas, err := m.st.ListMetas()
+	if err != nil {
+		return ""
+	}
+	cfg := m.cfg.Snapshot()
+	var b strings.Builder
+	fmt.Fprintf(&b, "bypass=%t streaming=%t", cfg.AdBlock.BlockDNSBypass, cfg.AdBlock.StreamingAds)
+	for _, l := range metas {
+		if l.Enabled {
+			b.WriteByte('\n')
+			b.WriteString(l.Name)
+		}
+	}
+	return b.String()
+}
+
+// snapshotPath is where the built index is kept, next to the database.
+func (m *Manager) snapshotPath() string {
+	p := m.cfg.Snapshot().Store.Path
+	if p == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(p), "block-index.bin")
+}
+
+// restore brings back the index saved by the last rebuild, if there is one.
+func (m *Manager) restore() bool {
+	path := m.snapshotPath()
+	if path == "" {
+		return false
+	}
+	start := time.Now()
+	if err := m.SyncConfig(); err != nil {
+		m.log("adblock: %v", err)
+		return false
+	}
+	if _, err := os.Stat(path + dirtySuffix); err == nil {
+		m.log("adblock: lists changed after the saved index was built, rebuilding")
+		return false
+	}
+	if err := m.matcher.LoadIndex(path, m.fingerprint()); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			m.log("adblock: saved index unusable, rebuilding: %v", err)
+		}
+		return false
+	}
+	if err := m.RebuildLocal(); err != nil {
+		m.log("adblock: rules not applied: %v", err)
+	}
+	m.mu.Lock()
+	m.lastBuild, m.lastCount = time.Now(), m.matcher.Count()
+	m.mu.Unlock()
+	m.log("adblock: index restored in %s, %d entries", time.Since(start).Round(time.Millisecond), m.matcher.Count())
+	return true
 }
 
 // RebuildLocal republishes the operator's rules and the configuration's
@@ -382,9 +488,9 @@ func (m *Manager) Run(ctx context.Context) {
 	m.mu.Lock()
 	built := !m.lastBuild.IsZero()
 	m.mu.Unlock()
-	if !built {
+	if !built && !m.restore() {
 		start := time.Now()
-		if err := m.Rebuild(); err != nil {
+		if err := m.Rebuild(ctx); err != nil {
 			m.log("adblock: initial rebuild failed: %v", err)
 		} else {
 			m.log("adblock: initial index ready after %s; lookups before this were unfiltered", time.Since(start).Round(time.Millisecond))
@@ -401,7 +507,10 @@ func (m *Manager) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case now := <-t.C:
+			if m.updateInterval() >= 24*time.Hour && !quietHours(now) {
+				continue
+			}
 			if err := m.UpdateAll(ctx, false); err != nil {
 				m.log("adblock: scheduled update: %v", err)
 			}

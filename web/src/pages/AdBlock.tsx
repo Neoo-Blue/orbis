@@ -331,7 +331,7 @@ function LocalRules() {
                     <td><span className={`tag ${r.action === 'block' ? 'block' : 'allow'}`}>{r.action}</span></td>
                     <td style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{r.origin}</td>
                     <td className="truncate" style={{ maxWidth: 260, color: 'var(--text-dim)', fontSize: 11.5 }}
-                      title={r.note}>{r.note || '—'}</td>
+                      title={r.note}>{r.note || '-'}</td>
                     <td style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{ago(r.created_at)}</td>
                     <td>
                       <button className="btn icon" title="Delete" onClick={async () => {
@@ -512,7 +512,7 @@ function Lists() {
                       <div className="truncate mono" style={{ fontSize: 10.5, color: 'var(--text-faint)', maxWidth: 380 }}
                         title={l.url}>{l.url}</div>
                     </td>
-                    <td><span className="tag">{l.category || '—'}</span>{l.action === 'allow' && <span className="tag allow" style={{ marginLeft: 4 }}>allowlist</span>}{l.format === 'regex' && <span className="tag" style={{ marginLeft: 4 }}>regex</span>}</td>
+                    <td><span className="tag">{l.category || '-'}</span>{l.action === 'allow' && <span className="tag allow" style={{ marginLeft: 4 }}>allowlist</span>}{l.format === 'regex' && <span className="tag" style={{ marginLeft: 4 }}>regex</span>}</td>
                     <td className="num">{compact(l.entries)}</td>
                     <td style={{ color: 'var(--text-faint)', fontSize: 11.5 }}>{ago(l.last_updated)}</td>
                     <td>

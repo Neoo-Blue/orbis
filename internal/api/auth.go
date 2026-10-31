@@ -87,7 +87,17 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{
 		"setup_required": cfg.API.AdminHash == "",
 		"authenticated":  cfg.API.AdminHash == "" || validSession(cfg.API.SessionKey, token),
+		// Enough for the shell to draw its first screen in this one round trip.
+		"onboarded": cfg.Node.Onboarded,
+		"ui_mode":   firstSet(cfg.Node.UIMode, cfg.Node.OnboardedMode),
 	})
+}
+
+func firstSet(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

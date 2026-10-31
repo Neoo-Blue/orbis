@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import { usePoll, useDebounced, useLocalStorage, type LiveEvent } from '../hooks'
+import { useLiveBatch } from '../live'
+import { usePoll, useDebounced, useLocalStorage } from '../hooks'
 import { Card, Empty, Icons, Loading, Search, Segmented, useToast } from '../ui'
 import { ago, bytes, clientName, clock, countryFlag, flowTarget, riskColor } from '../format'
 import type { Client, Flow } from '../types'
@@ -9,7 +10,7 @@ type View = 'live' | 'history'
 
 /** The connection log. Little Snitch's list view, but for the whole network:
  *  every row is one connection with who asked for it and where it went. */
-export function FlowsPage({ events }: { events: LiveEvent[] }) {
+export function FlowsPage() {
   const [view, setView] = useLocalStorage<View>('orbis.flows.view', 'live')
   const [query, setQuery] = useState('')
   const [verdict, setVerdict] = useLocalStorage<string>('orbis.flows.verdict', '')
@@ -23,42 +24,30 @@ export function FlowsPage({ events }: { events: LiveEvent[] }) {
   const { data: clients } = usePoll(() => api.clients.list(), 20000)
   const { data: historyData, refresh } = usePoll(
     () => api.flows.list({ hours, q: debounced || undefined, verdict: verdict || undefined, client_id: clientId || undefined, limit: 400 }),
-    view === 'history' ? 15000 : 0,
+    view === 'history' ? 15000 : null,
     [hours, debounced, verdict, clientId, view],
   )
   const { data: activeData } = usePoll(
     () => api.flows.active(600),
-    view === 'live' && !paused ? 3000 : 0,
+    view === 'live' && !paused ? 3000 : null,
     [view, paused],
   )
 
   // Live rows arriving over the socket are merged in so the list updates
   // between polls; pausing freezes it so a row can actually be read.
   const [liveFlows, setLiveFlows] = useState<Map<string, Flow>>(new Map())
-  useEffect(() => {
+  useLiveBatch(['flow.new', 'flow.update', 'flow.close'], (batch) => {
     if (view !== 'live' || paused) return
-    let changed = false
-    const next = new Map(liveFlows)
-    for (const ev of events.slice(-120)) {
-      if (ev.type === 'flow.new' || ev.type === 'flow.update') {
+    setLiveFlows((prev) => {
+      const next = new Map(prev)
+      for (const ev of batch) {
         const f = ev.data as Flow
-        if (f?.id) { next.set(f.id, f); changed = true }
-      } else if (ev.type === 'flow.close') {
-        const f = ev.data as Flow
-        if (f?.id && next.has(f.id)) { next.set(f.id, f); changed = true }
+        if (f?.id && (ev.type !== 'flow.close' || next.has(f.id))) next.set(f.id, f)
       }
-    }
-    if (changed) {
       // Bound the map so a long session does not accumulate every flow ever.
-      if (next.size > 1500) {
-        const trimmed = [...next.entries()].slice(-1000)
-        setLiveFlows(new Map(trimmed))
-      } else {
-        setLiveFlows(next)
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, view, paused])
+      return next.size > 1500 ? new Map([...next.entries()].slice(-1000)) : next
+    })
+  })
 
   const rows = useMemo(() => {
     if (view === 'history') return historyData?.flows ?? []
@@ -73,7 +62,8 @@ export function FlowsPage({ events }: { events: LiveEvent[] }) {
     }
     if (verdict) list = list.filter((f) => f.verdict === verdict)
     if (clientId) list = list.filter((f) => f.client_id === clientId)
-    return list.sort((a, b) => new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime()).slice(0, 500)
+    return list.map((f) => [Date.parse(f.last_seen), f] as const)
+      .sort((a, b) => b[0] - a[0]).slice(0, 300).map((e) => e[1])
   }, [view, historyData, activeData, liveFlows, debounced, verdict, clientId])
 
   const clientMap = useMemo(() => {
@@ -164,7 +154,7 @@ export function FlowsPage({ events }: { events: LiveEvent[] }) {
                         )}
                       </td>
                       <td className="truncate" style={{ maxWidth: 130, color: 'var(--text-dim)' }}>
-                        {f.app || f.as_org || '—'}
+                        {f.app || f.as_org || '-'}
                       </td>
                       <td className="num" style={{ color: 'var(--text-faint)' }}>{f.dst_port}</td>
                       <td className="num">{bytes(f.bytes_in)}</td>

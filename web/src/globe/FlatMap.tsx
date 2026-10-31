@@ -30,17 +30,17 @@ interface Props {
 }
 
 const COLORS = {
-  inbound: '#ffc266',
-  allow: '#4ee8c0',
-  block: '#ff6b7a',
-  filtered: '#a98bff',
-  pending: '#ffc266',
-  home: '#7fd3ff',
-  land: '#1d3550',
-  border: '#152740',
-  graticule: '#0e1a2b',
+  inbound: '#f2b544',
+  allow: '#62d8b2',
+  block: '#f2643c',
+  filtered: '#e8a7c0',
+  pending: '#f2b544',
+  home: '#d9bc7c',
+  land: '#9a8a66',
+  border: '#34506f',
+  graticule: '#0a3150',
   // Crest of the travelling gradient: cool outbound, warm inbound.
-  flowOut: '#eafffb',
+  flowOut: '#fbf7ea',
   flowIn: '#ffd9a0',
 }
 
@@ -74,7 +74,8 @@ interface View {
   offsetY: number
 }
 
-export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true, colorBy = 'kind' }: Props) {
+export function FlatMap({ data, liveArcs, onSelect, autoAnimate: wantsMotion = true, colorBy = 'kind' }: Props) {
+  const autoAnimate = wantsMotion && !matchMedia('(prefers-reduced-motion: reduce)').matches
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Read from the draw loop without re-creating it when the choice changes.
   const colorByRef = useRef<ColorBy>(colorBy)
@@ -187,10 +188,15 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true, colorBy 
       ctx.globalAlpha = 1
     }
 
+    let drawn = 0
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw)
       const { w, h } = sizeRef.current
-      if (!w || !h) return
+      if (!w || !h || document.hidden) return
+      // A paused or historic view has nothing moving: redraw for data and
+      // panning, not sixty times a second.
+      if (!autoAnimate && !dragRef.current && now - drawn < 250) return
+      drawn = now
       const t = (now - start) / 1000
 
       ctx.clearRect(0, 0, w, h)
@@ -472,6 +478,7 @@ export function FlatMap({ data, liveArcs, onSelect, autoAnimate = true, colorBy 
       return
     }
     const found = hitTest(x, y)
+    if (!found && !hoverRef.current) return
     hoverRef.current = found
     setHover(found ? { arc: found, x, y } : null)
   }

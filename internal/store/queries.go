@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -186,51 +187,168 @@ func (s *Store) DeletePolicy(id string) error {
 
 // ---------- blocklists ----------
 
-// ReplaceListDomains swaps a list's contents atomically so a partially
-// downloaded refresh never leaves the resolver with half a list.
-func (s *Store) ReplaceListDomains(list, category string, e ListEntries) error {
+// listWriteChunk is how many rows change per transaction while a list is
+// refreshed. The log writer gets the lock between chunks.
+const listWriteChunk = 1024
+
+// ReplaceListDomains makes a list's stored rows match e and reports how many
+// changed. Only the difference is written, in short transactions: rewriting
+// whole lists in one transaction held the write lock for 7 minutes per large
+// list on a Raspberry Pi, every refresh, and stopped all logging. Lists churn a
+// few percent a day, and nothing reads the rows until the index rebuild that
+// follows, so a crash part way through leaves old and new entries side by side
+// until the next refresh repairs it.
+func (s *Store) ReplaceListDomains(ctx context.Context, list, category string, e ListEntries) (int, error) {
+	type row struct {
+		kind      int
+		important int
+	}
+	want := make(map[string]row, e.Count())
+	for _, g := range []struct {
+		items []string
+		kind  int
+	}{{e.Exact, EntryExact}, {e.Wildcard, EntryWildcard}, {e.Regex, EntryRegex},
+		{e.AllowExact, EntryAllowExact}, {e.AllowWildcard, EntryAllowWildcard}, {e.AllowRegex, EntryAllowRegex}} {
+		for _, d := range g.items {
+			if _, dup := want[d]; !dup {
+				want[d] = row{g.kind, b2i(e.Important[d])}
+			}
+		}
+	}
+
+	var remove []string
+	rows, err := s.db.QueryContext(ctx, `SELECT domain, wildcard, COALESCE(important,0), COALESCE(category,'') FROM block_domains WHERE source=?`, list)
+	if err != nil {
+		return 0, err
+	}
+	for rows.Next() {
+		var d, cat string
+		var r row
+		if err := rows.Scan(&d, &r.kind, &r.important, &cat); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if have, ok := want[d]; ok && have == r && cat == category {
+			delete(want, d)
+		} else {
+			remove = append(remove, d)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	changed := len(remove) + len(want)
+	if changed > 0 {
+		s.noteListChange()
+		// Until this finishes the rows are a mix of old and new, so a stale
+		// mirror answering "not modified" must not be able to bless them.
+		s.writeMu.Lock()
+		_, err := s.db.ExecContext(ctx, "UPDATE list_meta SET etag='' WHERE name=?", list)
+		s.writeMu.Unlock()
+		if err != nil {
+			return 0, err
+		}
+	}
+	for len(remove) > 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		n := min(listWriteChunk, len(remove))
+		if err := s.deleteListRows(list, remove[:n]); err != nil {
+			return 0, err
+		}
+		remove = remove[n:]
+	}
+	add := make([]string, 0, len(want))
+	for d := range want {
+		add = append(add, d)
+	}
+	for len(add) > 0 {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		n := min(listWriteChunk, len(add))
+		tx, unlock, err := s.beginWrite()
+		if err != nil {
+			return 0, err
+		}
+		const domainCols = 5
+		for i := 0; i < n; i += insertChunk {
+			c := min(insertChunk, n-i)
+			args := make([]any, 0, c*domainCols)
+			for _, d := range add[i : i+c] {
+				r := want[d]
+				args = append(args, d, list, category, r.kind, r.important)
+			}
+			q := "INSERT OR IGNORE INTO block_domains (domain, source, category, wildcard, important) VALUES " + sqlValues(c, domainCols)
+			if _, err := tx.Exec(q, args...); err != nil {
+				tx.Rollback()
+				unlock()
+				return 0, err
+			}
+		}
+		err = tx.Commit()
+		unlock()
+		if err != nil {
+			return 0, err
+		}
+		add = add[n:]
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.db.Exec(`UPDATE list_meta SET entries=?, last_updated=?, last_error='' WHERE name=?`,
+		e.Count(), time.Now().Unix(), list); err != nil {
+		return 0, err
+	}
+	return changed, nil
+}
+
+func (s *Store) deleteListRows(list string, domains []string) error {
 	tx, unlock, err := s.beginWrite()
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM block_domains WHERE source=?", list); err != nil {
-		return err
-	}
-	put := func(items []string, kind int) error {
-		const domainCols = 5
-		for i := 0; i < len(items); {
-			n := insertChunk
-			if len(items)-i < n {
-				n = len(items) - i
-			}
-			args := make([]any, 0, n*domainCols)
-			for _, d := range items[i : i+n] {
-				args = append(args, d, list, category, kind, b2i(e.Important[d]))
-			}
-			q := "INSERT OR IGNORE INTO block_domains (domain, source, category, wildcard, important) VALUES " + sqlValues(n, domainCols)
-			if _, err := tx.Exec(q, args...); err != nil {
-				return err
-			}
-			i += n
+	for i := 0; i < len(domains); i += insertChunk {
+		c := min(insertChunk, len(domains)-i)
+		args := make([]any, 0, c+1)
+		args = append(args, list)
+		for _, d := range domains[i : i+c] {
+			args = append(args, d)
 		}
-		return nil
-	}
-	for _, g := range []struct {
-		items []string
-		kind  int
-	}{{e.Exact, EntryExact}, {e.Wildcard, EntryWildcard}, {e.Regex, EntryRegex},
-		{e.AllowExact, EntryAllowExact}, {e.AllowWildcard, EntryAllowWildcard}, {e.AllowRegex, EntryAllowRegex}} {
-		if err := put(g.items, g.kind); err != nil {
+		if _, err := tx.Exec("DELETE FROM block_domains WHERE source=? AND domain IN (?"+strings.Repeat(",?", c-1)+")", args...); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE list_meta SET entries=?, last_updated=?, last_error='' WHERE name=?`,
-		e.Count(), time.Now().Unix(), list); err != nil {
-		return err
-	}
 	return tx.Commit()
+}
+
+// OnListChange registers fn to run before any stored list row changes.
+func (s *Store) OnListChange(fn func()) {
+	s.mu.Lock()
+	s.listChanged = fn
+	s.mu.Unlock()
+}
+
+func (s *Store) noteListChange() {
+	s.mu.Lock()
+	fn := s.listChanged
+	s.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// TouchList records that a list was checked and has not changed, so it is not
+// fetched again until it is next due.
+func (s *Store) TouchList(name string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, err := s.db.Exec(`UPDATE list_meta SET last_updated=?, last_error='' WHERE name=?`, time.Now().Unix(), name)
+	return err
 }
 
 func (s *Store) UpsertListMeta(m ListMeta) error {
@@ -276,44 +394,57 @@ func (s *Store) ListMetas() ([]ListMeta, error) {
 	return out, rows.Err()
 }
 
+// DeleteList drops a list a chunk at a time, like ReplaceListDomains and for
+// the same reason.
 func (s *Store) DeleteList(name string) error {
-	tx, unlock, err := s.beginWrite()
-	if err != nil {
-		return err
+	s.noteListChange()
+	for {
+		s.writeMu.Lock()
+		res, err := s.db.Exec(`DELETE FROM block_domains WHERE rowid IN
+			(SELECT rowid FROM block_domains WHERE source=? LIMIT ?)`, name, listWriteChunk)
+		s.writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			break
+		}
 	}
-	defer unlock()
-	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM block_domains WHERE source=?", name); err != nil {
-		return err
-	}
-	if _, err := tx.Exec("DELETE FROM list_meta WHERE name=?", name); err != nil {
-		return err
-	}
-	return tx.Commit()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, err := s.db.Exec("DELETE FROM list_meta WHERE name=?", name)
+	return err
 }
 
 // AllBlockDomains streams every enabled list's entries for index rebuilds:
-// kind is one of the Entry constants, important marks $important rules.
-func (s *Store) AllBlockDomains(fn func(domain, source, category string, kind int, important bool)) error {
-	rows, err := s.db.Query(`SELECT b.domain, b.source, COALESCE(b.category,''), b.wildcard, COALESCE(b.important,0)
-		FROM block_domains b JOIN list_meta m ON m.name = b.source WHERE m.enabled = 1 ORDER BY b.source`)
+// kind is one of the Entry constants, important marks $important rules. Rows
+// arrive in table order, because reading them by list seeks across the whole
+// file for every row; the builder's result does not depend on the order.
+func (s *Store) AllBlockDomains(ctx context.Context, fn func(domain, source, category string, kind int, important bool)) error {
+	metas, err := s.ListMetas()
+	if err != nil {
+		return err
+	}
+	enabled := make(map[string]bool, len(metas))
+	for _, m := range metas {
+		enabled[m.Name] = m.Enabled
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT domain, source, COALESCE(category,''), wildcard, COALESCE(important,0) FROM block_domains`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	// One string per list, not one per row: six million copies of a name
-	// would be most of the index.
-	var lastSrc, src string
 	for rows.Next() {
-		var d, c string
+		var d, src, c string
 		var k, imp int
 		if err := rows.Scan(&d, &src, &c, &k, &imp); err != nil {
 			return err
 		}
-		if src != lastSrc {
-			lastSrc = src
+		if enabled[src] {
+			fn(d, src, c, k, imp != 0)
 		}
-		fn(d, lastSrc, c, k, imp != 0)
 	}
 	return rows.Err()
 }
@@ -426,6 +557,7 @@ func (s *Store) ScoreCandidate(domain string, heuristic float64, ai *float64, ai
 }
 
 func (s *Store) SetCandidateStatus(domain, status, by string) error {
+	defer s.aggregates.forget("summary|")
 	_, err := s.db.Exec(`UPDATE ad_candidates SET status=?, decided_by=?, decided_at=? WHERE domain=?`,
 		status, by, time.Now().Unix(), domain)
 	return err
@@ -816,6 +948,15 @@ func (s *Store) summary(since time.Time) (map[string]any, error) {
 
 // TopBlocked lists the domains being blocked most, for the ad-block page.
 func (s *Store) TopBlocked(since time.Time, limit int) ([]map[string]any, error) {
+	key := fmt.Sprintf("topblocked|%s|%d", window(since), limit)
+	v, err := s.aggregates.get(key, 45*time.Second, func() (any, error) { return s.topBlocked(since, limit) })
+	if err != nil {
+		return nil, err
+	}
+	return v.([]map[string]any), nil
+}
+
+func (s *Store) topBlocked(since time.Time, limit int) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT name, COALESCE(block_source,''), COUNT(*) n
 		FROM dns_queries WHERE blocked=1 AND ts >= ? GROUP BY name ORDER BY n DESC LIMIT ?`,
 		since.Unix(), clampInt(limit, 1, 500))
@@ -897,8 +1038,8 @@ type GeoBackfillTarget struct {
 // no location, or only a coarse region-level one. Rows written before a GeoIP
 // database was installed keep whatever the fallback guessed — often the wrong
 // continent — and nothing else would ever correct them.
-func (s *Store) FlowsNeedingGeo(limit int) ([]GeoBackfillTarget, error) {
-	rows, err := s.db.Query(`
+func (s *Store) FlowsNeedingGeo(ctx context.Context, limit int) ([]GeoBackfillTarget, error) {
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT dst_ip, COUNT(*) n FROM flows
 		WHERE (country IS NULL OR country = '' OR as_org IS NULL OR as_org = '')
 		  AND dst_ip NOT LIKE '10.%'
@@ -939,95 +1080,144 @@ type GeoUpdate struct {
 	ASOrg   string
 }
 
-// ApplyGeoUpdates writes resolved locations onto every matching flow row.
-func (s *Store) ApplyGeoUpdates(updates []GeoUpdate) (int64, error) {
-	if len(updates) == 0 {
-		return 0, nil
-	}
-	tx, unlock, err := s.beginWrite()
-	if err != nil {
-		return 0, err
-	}
-	defer unlock()
-	defer tx.Rollback()
+// geoBatch is how many updates share a transaction. One destination can be tens
+// of thousands of rows, so even this many is a noticeable hold on the write lock.
+const geoBatch = 32
 
-	stmt, err := tx.Prepare(`UPDATE flows SET country=?, city=?, lat=?, lon=?, asn=?, as_org=?
-		WHERE dst_ip=?`)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-
+// updateInBatches runs one statement n times in short transactions, letting the
+// log writer in between them and stopping as soon as ctx ends. A backfill spans
+// the whole flow history, and in one transaction it stopped all logging and
+// outlasted the daemon's shutdown.
+func (s *Store) updateInBatches(ctx context.Context, n int, query string, args func(i int) []any) (int64, error) {
 	var total int64
-	for _, u := range updates {
-		res, err := stmt.Exec(u.Country, u.City, u.Lat, u.Lon, u.ASN, u.ASOrg, u.IP)
+	for start := 0; start < n; start += geoBatch {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		changed, err := s.updateBatch(ctx, start, min(start+geoBatch, n), query, args)
 		if err != nil {
 			return total, err
 		}
-		n, _ := res.RowsAffected()
-		total += n
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
+		total += changed
 	}
 	return total, nil
 }
 
-// ClearFlowGeo strips the location from the rows named. Used for local flows
-// and for bogon destinations that an earlier, coarser fallback placed on a
-// continent — an arc from the living room to Asia is worse than no arc.
-func (s *Store) ClearFlowGeo(dstIPs []string) (int64, error) {
+func (s *Store) updateBatch(ctx context.Context, from, to int, query string, args func(i int) []any) (int64, error) {
 	tx, unlock, err := s.beginWrite()
 	if err != nil {
 		return 0, err
 	}
 	defer unlock()
 	defer tx.Rollback()
-
-	res, err := tx.Exec(`UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''
-		WHERE direction = 'local' AND (country != '' OR lat != 0 OR lon != 0)`)
+	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
 		return 0, err
 	}
-	total, _ := res.RowsAffected()
-
-	if len(dstIPs) > 0 {
-		stmt, err := tx.Prepare(`UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''
-			WHERE dst_ip = ? AND (country != '' OR lat != 0 OR lon != 0 OR city != '')`)
+	defer stmt.Close()
+	var total int64
+	for i := from; i < to; i++ {
+		res, err := stmt.ExecContext(ctx, args(i)...)
 		if err != nil {
-			return total, err
+			return 0, err
 		}
-		defer stmt.Close()
-		for _, ip := range dstIPs {
-			r, err := stmt.Exec(ip)
-			if err != nil {
-				return total, err
-			}
-			n, _ := r.RowsAffected()
-			total += n
-		}
+		n, _ := res.RowsAffected()
+		total += n
 	}
 	return total, tx.Commit()
 }
 
+// ApplyGeoUpdates writes resolved locations onto every matching flow row.
+func (s *Store) ApplyGeoUpdates(ctx context.Context, updates []GeoUpdate) (int64, error) {
+	return s.updateInBatches(ctx, len(updates), `UPDATE flows SET country=?, city=?, lat=?, lon=?, asn=?, as_org=?
+		WHERE dst_ip=?`, func(i int) []any {
+		u := updates[i]
+		return []any{u.Country, u.City, u.Lat, u.Lon, u.ASN, u.ASOrg, u.IP}
+	})
+}
+
+// ClearFlowGeo strips the location from local flows and the rows named. Used
+// for bogon destinations that an earlier, coarser fallback placed on a
+// continent: an arc from the living room to Asia is worse than no arc.
+func (s *Store) ClearFlowGeo(ctx context.Context, dstIPs []string) (int64, error) {
+	const clear = `UPDATE flows SET country='', city='', lat=0, lon=0, asn=0, as_org=''`
+	// No index covers this search, so it reads the table. It does that outside
+	// the write lock, and only the rows it finds pay for one.
+	var local []int64
+	err := s.scanFlows(ctx, `SELECT rowid FROM flows NOT INDEXED
+		WHERE direction = 'local' AND (country != '' OR lat != 0 OR lon != 0)
+		AND rowid > ? AND rowid <= ?`, func(rows *sql.Rows) error {
+		var id int64
+		err := rows.Scan(&id)
+		local = append(local, id)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	total, err := s.updateInBatches(ctx, len(local), clear+` WHERE rowid = ?`, func(i int) []any { return []any{local[i]} })
+	if err != nil {
+		return total, err
+	}
+	n, err := s.updateInBatches(ctx, len(dstIPs), clear+` WHERE dst_ip = ? AND (country != '' OR lat != 0 OR lon != 0 OR city != '')`,
+		func(i int) []any { return []any{dstIPs[i]} })
+	return total + n, err
+}
+
 // AllFlowDestinations lists every distinct destination in history, so the
 // backfill can decide which are bogons that should never have a position.
-func (s *Store) AllFlowDestinations(limit int) ([]string, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT dst_ip FROM flows
-		WHERE country != '' OR lat != 0 OR lon != 0 OR city != '' LIMIT ?`, clampInt(limit, 1, 100000))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+func (s *Store) AllFlowDestinations(ctx context.Context, limit int) ([]string, error) {
+	limit = clampInt(limit, 1, 100000)
+	seen := map[string]bool{}
 	out := []string{}
-	for rows.Next() {
+	err := s.scanFlows(ctx, `SELECT DISTINCT dst_ip FROM flows NOT INDEXED
+		WHERE (country != '' OR lat != 0 OR lon != 0 OR city != '')
+		AND rowid > ? AND rowid <= ?`, func(rows *sql.Rows) error {
 		var ip string
 		if err := rows.Scan(&ip); err != nil {
-			return nil, err
+			return err
 		}
-		out = append(out, ip)
+		if !seen[ip] && len(out) < limit {
+			seen[ip] = true
+			out = append(out, ip)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// flowWindow is how many rows of the flow table one read spans. sqlite honours
+// cancellation only up to a query's first row, so a single read of the whole
+// table cannot be stopped between matches and would hold up shutdown.
+const flowWindow = 100_000
+
+// scanFlows runs a query over the flow table one window of rowids at a time.
+// The query ends in rowid bounds, and NOT INDEXED keeps sqlite on them.
+func (s *Store) scanFlows(ctx context.Context, query string, each func(*sql.Rows) error) error {
+	var top int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(rowid), 0) FROM flows`).Scan(&top); err != nil {
+		return err
 	}
-	return out, rows.Err()
+	for from := int64(0); from < top; from += flowWindow {
+		if err := s.scanWindow(ctx, query, from, each); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) scanWindow(ctx context.Context, query string, from int64, each func(*sql.Rows) error) error {
+	rows, err := s.db.QueryContext(ctx, query, from, from+flowWindow)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := each(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // ---------- ask-on-first-connection ----------

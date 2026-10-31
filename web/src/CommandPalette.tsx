@@ -111,7 +111,7 @@ export function CommandPalette({ pages, onNavigate }: {
     <div onClick={() => setOpen(false)} style={{
       position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', justifyContent: 'center',
       alignItems: 'flex-start', paddingTop: '14vh',
-      background: 'rgba(3,6,11,.6)', backdropFilter: 'blur(4px)',
+      background: 'rgba(2,14,24,.66)',
     }}>
       <div onClick={(e) => e.stopPropagation()} style={{
         width: 'min(620px, 92vw)', background: 'var(--bg-1)', border: '1px solid var(--line)',
@@ -145,8 +145,7 @@ export function CommandPalette({ pages, onNavigate }: {
           )}
           {Object.entries(groups).map(([group, items]) => (
             <div key={group}>
-              <div style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase',
-                color: 'var(--text-faint)', padding: '8px 10px 4px' }}>{group}</div>
+              <div style={{ fontSize: 10, color: 'var(--text-faint)', padding: '8px 10px 4px' }}>{group}</div>
               {items.map((c) => {
                 const idx = flat.indexOf(c)
                 const Icon = c.icon ? Icons[c.icon] : Icons.chevron

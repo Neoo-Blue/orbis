@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from 'react'
 import { api, setUnauthorizedHandler } from './api'
-import { usePoll, useLive, useLocalStorage, useMediaQuery, type LiveEvent } from './hooks'
+import { usePoll, useLocalStorage, useMediaQuery } from './hooks'
+import { useLiveConnected } from './live'
 import { Icons, ToastProvider, Banner, Spinner, Segmented, useToast, Drawer } from './ui'
 import type { AppConfig, SystemStatus, Summary } from './types'
 import { Dashboard } from './pages/Dashboard'
@@ -41,50 +42,54 @@ const LinksPage = lazy(() => import('./pages/Links').then(m => ({ default: m.Lin
 const ServicesPage = lazy(() => import('./pages/Services').then(m => ({ default: m.ServicesPage })))
 const ProfilesPage = lazy(() => import('./pages/Profiles').then(m => ({ default: m.ProfilesPage })))
 const EventsPage = lazy(() => import('./pages/Events').then(m => ({ default: m.EventsPage })))
+const InternetHealthPage = lazy(() => import('./pages/InternetHealth').then(m => ({ default: m.InternetHealthPage })))
+const ChangeTimelinePage = lazy(() => import('./pages/ChangeTimeline').then(m => ({ default: m.ChangeTimelinePage })))
 const SettingsPage = lazy(() => import('./pages/Settings').then(m => ({ default: m.SettingsPage })))
 
 type Route =
   | 'dashboard' | 'globe' | 'clients' | 'flows' | 'dns' | 'adblock'
   | 'firewall' | 'network' | 'vpn' | 'assistant' | 'events' | 'settings' | 'youtube' | 'gateway' | 'consent' | 'dnstools' | 'topology' | 'intercept' | 'analytics' | 'alerts' | 'reports' | 'problems' | 'services' | 'threats' | 'hosted' | 'links'
-  | 'profiles' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
+  | 'profiles' | 'health' | 'changes' | 's-home' | 's-devices' | 's-protection' | 's-usage' | 's-alerts' | 's-settings'
 
 type NavRoute = { id: Route; label: string; icon: keyof typeof Icons; group?: string; short?: string }
 const ROUTES: NavRoute[] = [
-  { id: 'dashboard', label: 'Overview', icon: 'grid' },
+  { id: 'dashboard', label: 'Overview', icon: 'orbit', group: 'Observe' },
   { id: 'globe', label: 'Globe', icon: 'globe' },
   { id: 'flows', label: 'Connections', icon: 'activity' },
-  { id: 'services', label: 'Services', icon: 'tv' },
-  { id: 'analytics', label: 'Analytics', icon: 'spark' },
+  { id: 'services', label: 'Services', icon: 'stack' },
+  { id: 'analytics', label: 'Analytics', icon: 'chart' },
   { id: 'clients', label: 'Devices', icon: 'devices' },
-  { id: 'topology', label: 'Topology', icon: 'grid' },
+  { id: 'topology', label: 'Topology', icon: 'nodes' },
+  { id: 'health', label: 'Internet health', icon: 'pulse' },
   { id: 'dns', label: 'DNS', icon: 'dns', group: 'Filtering' },
   { id: 'adblock', label: 'Ad blocking', icon: 'block' },
-  { id: 'profiles', label: 'Profiles', icon: 'shield' },
+  { id: 'profiles', label: 'Profiles', icon: 'user' },
   { id: 'dnstools', label: 'Domain tester', icon: 'search' },
   { id: 'youtube', label: 'YouTube', icon: 'tv' },
-  { id: 'consent', label: 'Ask first', icon: 'shield' },
+  { id: 'consent', label: 'Ask first', icon: 'question' },
   { id: 'firewall', label: 'Firewall', icon: 'shield', group: 'Network' },
-  { id: 'threats', label: 'Threats', icon: 'alert' },
-  { id: 'hosted', label: 'Hosted apps', icon: 'spark' },
-  { id: 'links', label: 'Cables & Wi-Fi', icon: 'route' },
+  { id: 'threats', label: 'Threats', icon: 'target' },
+  { id: 'hosted', label: 'Hosted apps', icon: 'server' },
+  { id: 'links', label: 'Cables & Wi-Fi', icon: 'cable' },
   { id: 'network', label: 'DHCP & LAN', icon: 'route' },
-  { id: 'gateway', label: 'Gateway', icon: 'activity' },
-  { id: 'intercept', label: 'Interception', icon: 'route' },
+  { id: 'gateway', label: 'Gateway', icon: 'door' },
+  { id: 'intercept', label: 'Interception', icon: 'split' },
   { id: 'vpn', label: 'VPN', icon: 'key' },
   { id: 'assistant', label: 'Assistant', icon: 'chat', group: 'Operate' },
   { id: 'problems', label: 'Problems', icon: 'alert', group: 'Operate' },
   { id: 'events', label: 'Events', icon: 'bell' },
-  { id: 'alerts', label: 'Alerts', icon: 'alert' },
-  { id: 'reports', label: 'Reports', icon: 'grid' },
+  { id: 'alerts', label: 'Alerts', icon: 'flag' },
+  { id: 'reports', label: 'Reports', icon: 'doc' },
+  { id: 'changes', label: 'Change timeline', icon: 'history' },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]
 
 /** The simple interface: seven plain words, one screen each. */
 const SIMPLE_ROUTES: NavRoute[] = [
-  { id: 's-home', label: 'Home', icon: 'grid' },
+  { id: 's-home', label: 'Home', icon: 'orbit' },
   { id: 's-devices', label: 'Devices', icon: 'devices' },
   { id: 's-protection', label: 'Protection', icon: 'shield', short: 'Protect' },
-  { id: 's-usage', label: 'Usage', icon: 'tv' },
+  { id: 's-usage', label: 'Usage', icon: 'chart' },
   { id: 'assistant', label: 'Ask', icon: 'chat' },
   { id: 's-alerts', label: 'Alerts', icon: 'bell' },
   { id: 's-settings', label: 'Settings', icon: 'gear' },
@@ -101,12 +106,16 @@ function routeFromHash(): Route {
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [setupRequired, setSetupRequired] = useState(false)
+  const [onboarded, setOnboarded] = useState(true)
+  const [nodeUI, setNodeUI] = useState('')
 
   const checkAuth = useCallback(async () => {
     try {
       const st = await api.auth.status()
       setAuthed(st.authenticated)
       setSetupRequired(st.setup_required)
+      setOnboarded(st.onboarded)
+      setNodeUI(st.ui_mode)
     } catch {
       setAuthed(false)
     }
@@ -129,35 +138,14 @@ export default function App() {
   }
   return (
     <ToastProvider>
-      <Gate setupRequired={setupRequired} onAuthChange={checkAuth} />
+      {onboarded
+        ? <Shell setupRequired={setupRequired} onAuthChange={checkAuth} nodeUI={nodeUI} />
+        : <Onboarding onDone={() => setOnboarded(true)} />}
     </ToastProvider>
   )
 }
 
-/** Gate shows the first-run wizard until it has been completed or skipped.
- *  It sits inside ToastProvider because the wizard reports failures that way. */
-function Gate({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuthChange: () => void }) {
-  const [onboarded, setOnboarded] = useState<boolean | null>(null)
-
-  const check = useCallback(async () => {
-    try {
-      const s = await api.onboarding.get()
-      setOnboarded(s.onboarded)
-    } catch {
-      // A node whose onboarding endpoint is unavailable should still be usable;
-      // failing open here beats locking the operator out of their own UI.
-      setOnboarded(true)
-    }
-  }, [])
-
-  useEffect(() => { check() }, [check])
-
-  if (onboarded === null) return <div className="login"><Spinner /></div>
-  if (!onboarded) return <Onboarding onDone={() => setOnboarded(true)} />
-  return <Shell setupRequired={setupRequired} onAuthChange={onAuthChange} />
-}
-
-function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuthChange: () => void }) {
+function Shell({ setupRequired, onAuthChange, nodeUI }: { setupRequired: boolean; onAuthChange: () => void; nodeUI: string }) {
   const [route, setRoute] = useState<Route>(routeFromHash)
 
   useEffect(() => {
@@ -174,16 +162,15 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
     setRoute(r)
   }, [])
 
+  // Simple or advanced. The browser's own choice wins, otherwise the node's.
+  const [uiPref, setUIPref] = useLocalStorage<'simple' | 'advanced' | ''>('orbis.ui', '')
+  const ui: 'simple' | 'advanced' = uiPref || (nodeUI === 'simple' ? 'simple' : 'advanced')
+
   const { data: status } = usePoll<SystemStatus>(() => api.status(), 10000)
-  const { data: summary } = usePoll<Summary>(() => api.summary(24), 15000)
+  const { data: summary } = usePoll<Summary>(() => api.summary(24), ui === 'simple' ? null : 15000, [ui])
   const toast = useToast()
 
-  // Simple or advanced. The browser's own choice wins; otherwise the node's
-  // default; otherwise what was picked during onboarding.
   const { data: config, refresh: refreshConfig } = usePoll<AppConfig>(() => api.config.get(), 0)
-  const [uiPref, setUIPref] = useLocalStorage<'simple' | 'advanced' | ''>('orbis.ui', '')
-  const ui: 'simple' | 'advanced' = uiPref || (
-    config?.node.ui_mode === 'simple' || (!config?.node.ui_mode && config?.node.onboarded_mode === 'simple') ? 'simple' : 'advanced')
   const saveConfig = useCallback(async (patch: Record<string, unknown>) => {
     try {
       await api.config.patch(patch)
@@ -196,38 +183,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
   }, [refreshConfig, toast])
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null)
 
-  // One socket for the whole app; pages subscribe to the shared feed rather
-  // than each opening their own.
-  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([])
-  const eventBuffer = useRef<LiveEvent[]>([])
-  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const flushEvents = useCallback(() => {
-    flushTimer.current = null
-    if (eventBuffer.current.length === 0) return
-    const batch = eventBuffer.current
-    eventBuffer.current = []
-    setLiveEvents((prev) => {
-      const next = [...prev, ...batch]
-      // A bounded ring: the pages that need history keep their own copy.
-      return next.length > 600 ? next.slice(-400) : next
-    })
-  }, [])
-
-  const onEvent = useCallback((ev: LiveEvent) => {
-    eventBuffer.current.push(ev)
-    if (!flushTimer.current) {
-      flushTimer.current = setTimeout(flushEvents, 250)
-    }
-  }, [flushEvents])
-
-  useEffect(() => {
-    return () => {
-      if (flushTimer.current) clearTimeout(flushTimer.current)
-    }
-  }, [])
-
-  const connected = useLive(onEvent)
+  const connected = useLiveConnected()
 
   const mode = status?.mode ?? 'observe'
   const alerts = summary?.open_alerts ?? 0
@@ -274,14 +230,13 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
 
   return (
     <div className={`shell${ui === 'simple' ? ' simple' : ''}${tabs ? ' tabs' : ''}`}>
-      <CommandPalette pages={ROUTES} onNavigate={(r, sub) => navigate(r as Route, sub)} />
+      <CommandPalette pages={ROUTES} onNavigate={navigate as (r: string, sub?: string) => void} />
       <nav className="nav">
         <div className="brand">
           <svg className="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-            <circle cx="16" cy="16" r="11" stroke="var(--accent)" strokeWidth="1.8" />
-            <ellipse cx="16" cy="16" rx="11" ry="4.4" stroke="var(--accent)" strokeWidth="1.2" opacity=".55" />
-            <ellipse cx="16" cy="16" rx="4.4" ry="11" stroke="var(--accent)" strokeWidth="1.2" opacity=".35" />
-            <circle cx="16" cy="16" r="2.6" fill="var(--accent)" />
+            <circle cx="16" cy="16" r="11" stroke="var(--brass)" strokeWidth="1.6" />
+            <ellipse cx="16" cy="16" rx="11" ry="4.4" stroke="var(--brass)" strokeWidth="1.1" opacity=".6" />
+            <circle cx="16" cy="16" r="2.6" fill="var(--brass)" />
           </svg>
           <div>
             <div className="brand-name">Orbis</div>
@@ -318,9 +273,9 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
         )}
 
         <div className="nav-foot">
-          <div>{connected ? '● live' : '○ reconnecting'}</div>
-          <div>{summary ? `${summary.clients_online}/${summary.clients} online` : '—'}</div>
-          <div>{summary ? `${summary.active_flows} flows` : '—'}</div>
+          <div className="nav-foot-line"><span className={`dot ${connected ? 'on' : 'off'}`} />{connected ? 'Live' : 'Reconnecting'}</div>
+          {summary && <div>{summary.clients_online} of {summary.clients} devices online</div>}
+          {status && <div className="mono">{status.version}</div>}
         </div>
       </nav>
 
@@ -379,7 +334,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
         )}
         <div className={`page${shown === 'globe' || shown === 'assistant' ? ' flush' : ''}`}>
           {updated && (
-            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
+            <div className={route === 'globe' || route === 'assistant' ? 'flush-banner' : undefined}>
               <Banner tone="info" action={
                 <button className="btn sm primary" onClick={() => location.reload()}>Reload</button>
               }>
@@ -388,12 +343,12 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
             </div>
           )}
           {!updated && route !== 'settings' && route !== 's-settings' && (
-            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
+            <div className={route === 'globe' || route === 'assistant' ? 'flush-banner' : undefined}>
               <UpdateBanner onSettings={() => navigate('settings')} />
             </div>
           )}
-          {setupRequired && route !== 'settings' && (
-            <div style={{ padding: route === 'globe' || route === 'assistant' ? 18 : 0 }}>
+          {setupRequired && route !== 'settings' && shown !== 'dashboard' && (
+            <div className={route === 'globe' || route === 'assistant' ? 'flush-banner' : undefined}>
               <Banner tone="warn" action={
                 <button className="btn sm" onClick={() => navigate('settings')}>Set a password</button>
               }>
@@ -405,13 +360,14 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
 
           <ErrorBoundary name={title} key={shown}>
             <Suspense fallback={<Spinner />}>
-              {shown === 'dashboard' && <Dashboard status={status} summary={summary} events={liveEvents} onNavigate={navigate} />}
-              {route === 'globe' && <GlobePage events={liveEvents} />}
-              {route === 'flows' && <FlowsPage events={liveEvents} />}
+              {shown === 'dashboard' && <Dashboard status={status} summary={summary} onNavigate={navigate} />}
+              {route === 'globe' && <GlobePage />}
+              {route === 'flows' && <FlowsPage />}
               {route === 'analytics' && <AnalyticsPage />}
               {route === 'clients' && <ClientsPage />}
-              {route === 'topology' && <TopologyPage events={liveEvents} />}
-              {route === 'dns' && <DNSPage events={liveEvents} />}
+              {route === 'health' && <InternetHealthPage />}
+              {route === 'topology' && <TopologyPage />}
+              {route === 'dns' && <DNSPage />}
               {route === 'adblock' && <AdBlockPage />}
               {route === 'dnstools' && <DNSToolsPage />}
               {route === 'youtube' && <YouTubePage />}
@@ -445,6 +401,7 @@ function Shell({ setupRequired, onAuthChange }: { setupRequired: boolean; onAuth
               {route === 'events' && <EventsPage />}
               {route === 'alerts' && <AlertsPage />}
               {route === 'reports' && <ReportsPage />}
+              {route === 'changes' && <ChangeTimelinePage />}
               {route === 'settings' && <SettingsPage status={status} onAuthChange={onAuthChange} />}
             </Suspense>
           </ErrorBoundary>

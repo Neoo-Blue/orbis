@@ -167,7 +167,7 @@ function Delivery() {
         </div>
         <dl className="kv">
           <dt>Status</dt><dd>{cfg.email?.enabled ? `on · ${cfg.email.host}:${cfg.email.port}` : 'off'}</dd>
-          <dt>Recipients</dt><dd>{cfg.email?.to?.join(', ') || '—'}</dd>
+          <dt>Recipients</dt><dd>{cfg.email?.to?.join(', ') || '-'}</dd>
         </dl>
       </Card>
 

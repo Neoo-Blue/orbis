@@ -186,51 +186,135 @@ func (s *Store) DeletePolicy(id string) error {
 
 // ---------- blocklists ----------
 
-// ReplaceListDomains swaps a list's contents atomically so a partially
-// downloaded refresh never leaves the resolver with half a list.
-func (s *Store) ReplaceListDomains(list, category string, e ListEntries) error {
+// listWriteChunk is how many rows change per transaction while a list is
+// refreshed. The log writer gets the lock between chunks.
+const listWriteChunk = 1024
+
+// ReplaceListDomains makes a list's stored rows match e and reports how many
+// changed. Only the difference is written, in short transactions: rewriting
+// whole lists in one transaction held the write lock for 7 minutes per large
+// list on a Raspberry Pi, every refresh, and stopped all logging. Lists churn a
+// few percent a day, and nothing reads the rows until the index rebuild that
+// follows, so a crash part way through leaves old and new entries side by side
+// until the next refresh repairs it.
+func (s *Store) ReplaceListDomains(list, category string, e ListEntries) (int, error) {
+	type row struct {
+		kind      int
+		important int
+	}
+	want := make(map[string]row, e.Count())
+	for _, g := range []struct {
+		items []string
+		kind  int
+	}{{e.Exact, EntryExact}, {e.Wildcard, EntryWildcard}, {e.Regex, EntryRegex},
+		{e.AllowExact, EntryAllowExact}, {e.AllowWildcard, EntryAllowWildcard}, {e.AllowRegex, EntryAllowRegex}} {
+		for _, d := range g.items {
+			if _, dup := want[d]; !dup {
+				want[d] = row{g.kind, b2i(e.Important[d])}
+			}
+		}
+	}
+
+	var remove []string
+	rows, err := s.db.Query(`SELECT domain, wildcard, COALESCE(important,0), COALESCE(category,'') FROM block_domains WHERE source=?`, list)
+	if err != nil {
+		return 0, err
+	}
+	for rows.Next() {
+		var d, cat string
+		var r row
+		if err := rows.Scan(&d, &r.kind, &r.important, &cat); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if have, ok := want[d]; ok && have == r && cat == category {
+			delete(want, d)
+		} else {
+			remove = append(remove, d)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	changed := len(remove) + len(want)
+	for len(remove) > 0 {
+		n := min(listWriteChunk, len(remove))
+		if err := s.deleteListRows(list, remove[:n]); err != nil {
+			return 0, err
+		}
+		remove = remove[n:]
+	}
+	add := make([]string, 0, len(want))
+	for d := range want {
+		add = append(add, d)
+	}
+	for len(add) > 0 {
+		n := min(listWriteChunk, len(add))
+		tx, unlock, err := s.beginWrite()
+		if err != nil {
+			return 0, err
+		}
+		const domainCols = 5
+		for i := 0; i < n; i += insertChunk {
+			c := min(insertChunk, n-i)
+			args := make([]any, 0, c*domainCols)
+			for _, d := range add[i : i+c] {
+				r := want[d]
+				args = append(args, d, list, category, r.kind, r.important)
+			}
+			q := "INSERT OR IGNORE INTO block_domains (domain, source, category, wildcard, important) VALUES " + sqlValues(c, domainCols)
+			if _, err := tx.Exec(q, args...); err != nil {
+				tx.Rollback()
+				unlock()
+				return 0, err
+			}
+		}
+		err = tx.Commit()
+		unlock()
+		if err != nil {
+			return 0, err
+		}
+		add = add[n:]
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.db.Exec(`UPDATE list_meta SET entries=?, last_updated=?, last_error='' WHERE name=?`,
+		e.Count(), time.Now().Unix(), list); err != nil {
+		return 0, err
+	}
+	return changed, nil
+}
+
+func (s *Store) deleteListRows(list string, domains []string) error {
 	tx, unlock, err := s.beginWrite()
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM block_domains WHERE source=?", list); err != nil {
-		return err
-	}
-	put := func(items []string, kind int) error {
-		const domainCols = 5
-		for i := 0; i < len(items); {
-			n := insertChunk
-			if len(items)-i < n {
-				n = len(items) - i
-			}
-			args := make([]any, 0, n*domainCols)
-			for _, d := range items[i : i+n] {
-				args = append(args, d, list, category, kind, b2i(e.Important[d]))
-			}
-			q := "INSERT OR IGNORE INTO block_domains (domain, source, category, wildcard, important) VALUES " + sqlValues(n, domainCols)
-			if _, err := tx.Exec(q, args...); err != nil {
-				return err
-			}
-			i += n
+	for i := 0; i < len(domains); i += insertChunk {
+		c := min(insertChunk, len(domains)-i)
+		args := make([]any, 0, c+1)
+		args = append(args, list)
+		for _, d := range domains[i : i+c] {
+			args = append(args, d)
 		}
-		return nil
-	}
-	for _, g := range []struct {
-		items []string
-		kind  int
-	}{{e.Exact, EntryExact}, {e.Wildcard, EntryWildcard}, {e.Regex, EntryRegex},
-		{e.AllowExact, EntryAllowExact}, {e.AllowWildcard, EntryAllowWildcard}, {e.AllowRegex, EntryAllowRegex}} {
-		if err := put(g.items, g.kind); err != nil {
+		if _, err := tx.Exec("DELETE FROM block_domains WHERE source=? AND domain IN (?"+strings.Repeat(",?", c-1)+")", args...); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE list_meta SET entries=?, last_updated=?, last_error='' WHERE name=?`,
-		e.Count(), time.Now().Unix(), list); err != nil {
-		return err
-	}
 	return tx.Commit()
+}
+
+// TouchList records that a list was checked and has not changed, so it is not
+// fetched again until it is next due.
+func (s *Store) TouchList(name string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, err := s.db.Exec(`UPDATE list_meta SET last_updated=?, last_error='' WHERE name=?`, time.Now().Unix(), name)
+	return err
 }
 
 func (s *Store) UpsertListMeta(m ListMeta) error {
@@ -276,44 +360,56 @@ func (s *Store) ListMetas() ([]ListMeta, error) {
 	return out, rows.Err()
 }
 
+// DeleteList drops a list a chunk at a time, like ReplaceListDomains and for
+// the same reason.
 func (s *Store) DeleteList(name string) error {
-	tx, unlock, err := s.beginWrite()
-	if err != nil {
-		return err
+	for {
+		s.writeMu.Lock()
+		res, err := s.db.Exec(`DELETE FROM block_domains WHERE rowid IN
+			(SELECT rowid FROM block_domains WHERE source=? LIMIT ?)`, name, listWriteChunk)
+		s.writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			break
+		}
 	}
-	defer unlock()
-	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM block_domains WHERE source=?", name); err != nil {
-		return err
-	}
-	if _, err := tx.Exec("DELETE FROM list_meta WHERE name=?", name); err != nil {
-		return err
-	}
-	return tx.Commit()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, err := s.db.Exec("DELETE FROM list_meta WHERE name=?", name)
+	return err
 }
 
 // AllBlockDomains streams every enabled list's entries for index rebuilds:
-// kind is one of the Entry constants, important marks $important rules.
+// kind is one of the Entry constants, important marks $important rules. Rows
+// arrive in table order, because reading them by list seeks across the whole
+// file for every row; the builder's result does not depend on the order.
 func (s *Store) AllBlockDomains(fn func(domain, source, category string, kind int, important bool)) error {
-	rows, err := s.db.Query(`SELECT b.domain, b.source, COALESCE(b.category,''), b.wildcard, COALESCE(b.important,0)
-		FROM block_domains b JOIN list_meta m ON m.name = b.source WHERE m.enabled = 1 ORDER BY b.source`)
+	metas, err := s.ListMetas()
+	if err != nil {
+		return err
+	}
+	enabled := make(map[string]bool, len(metas))
+	for _, m := range metas {
+		enabled[m.Name] = m.Enabled
+	}
+	rows, err := s.db.Query(`SELECT domain, source, COALESCE(category,''), wildcard, COALESCE(important,0) FROM block_domains`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	// One string per list, not one per row: six million copies of a name
-	// would be most of the index.
-	var lastSrc, src string
 	for rows.Next() {
-		var d, c string
+		var d, src, c string
 		var k, imp int
 		if err := rows.Scan(&d, &src, &c, &k, &imp); err != nil {
 			return err
 		}
-		if src != lastSrc {
-			lastSrc = src
+		if enabled[src] {
+			fn(d, src, c, k, imp != 0)
 		}
-		fn(d, lastSrc, c, k, imp != 0)
 	}
 	return rows.Err()
 }

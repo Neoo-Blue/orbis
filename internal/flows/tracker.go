@@ -613,13 +613,18 @@ func (t *Tracker) Close(k Key, at time.Time) {
 	t.publish(UpdateClosed, snapshot)
 }
 
+// persistInterval is how often a long-lived flow's counters reach the database.
+// Every active flow rewrites its row each sweep, so this sets most of the
+// node's write load; the live views read the tracker, not the table.
+const persistInterval = 30 * time.Second
+
 // Start launches the reaper and the periodic persist sweep.
 func (t *Tracker) Start() {
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
 		reap := time.NewTicker(10 * time.Second)
-		persist := time.NewTicker(5 * time.Second)
+		persist := time.NewTicker(persistInterval)
 		defer reap.Stop()
 		defer persist.Stop()
 		for {

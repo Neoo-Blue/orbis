@@ -1,6 +1,7 @@
 package adblock
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -227,5 +228,92 @@ func TestOperatorCanStillBlockATLD(t *testing.T) {
 	m.Commit(b)
 	if r := m.Lookup("download.zip"); !r.Blocked {
 		t.Error("a locally-authored TLD rule should still apply")
+	}
+}
+
+func TestDomainSetSurvivesGrowth(t *testing.T) {
+	var s domainSet
+	const n = 50000
+	for i := 0; i < n; i++ {
+		s.set(hashDomain(fmt.Sprintf("host-%d.example.com", i)), uint32(i))
+	}
+	if s.n != n {
+		t.Fatalf("n = %d", s.n)
+	}
+	for i := 0; i < n; i++ {
+		if v, ok := s.find(hashDomain(fmt.Sprintf("host-%d.example.com", i))); !ok || v != uint32(i) {
+			t.Fatalf("entry %d: %d %v", i, v, ok)
+		}
+	}
+	if _, ok := s.find(hashDomain("absent.example.com")); ok {
+		t.Fatal("found a name that was never added")
+	}
+	s.set(hashDomain("host-7.example.com"), 99)
+	if v, _ := s.find(hashDomain("host-7.example.com")); v != 99 || s.n != n {
+		t.Fatalf("replacing an entry: v=%d n=%d", v, s.n)
+	}
+}
+
+func TestAttributionDoesNotDependOnRowOrder(t *testing.T) {
+	build := func(order []string) Match {
+		b := NewBuilder()
+		for _, src := range order {
+			b.AddBlockImportant("ads.example.com", src, "cat-"+src, false, src == "a-list")
+		}
+		m := New()
+		m.Commit(b)
+		return m.Lookup("ads.example.com")
+	}
+	x, y := build([]string{"a-list", "b-list"}), build([]string{"b-list", "a-list"})
+	if x != y || x.Source != "b-list" || x.Category != "cat-b-list" || !x.Important {
+		t.Fatalf("got %+v and %+v", x, y)
+	}
+}
+
+func TestBuiltinRuleKeepsItsAttributionOverAList(t *testing.T) {
+	b := NewBuilder()
+	b.AddBlock("dns.google", "zzz-list", "ads", true)
+	b.AddBlock("dns.google", "builtin:doh-bypass", "bypass", true)
+	m := New()
+	m.Commit(b)
+	if got := m.Lookup("dns.google"); got.Source != "builtin:doh-bypass" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestRegexVerdictIsRememberedPerIndex(t *testing.T) {
+	b := NewBuilder()
+	if err := b.AddRegex(`^ad[0-9]+\.`, "local:manual", "ads"); err != nil {
+		t.Fatal(err)
+	}
+	m := New()
+	m.Commit(b)
+	for i := 0; i < 3; i++ {
+		if got := m.Lookup("ad7.example.com"); !got.Blocked {
+			t.Fatalf("lookup %d: %+v", i, got)
+		}
+	}
+	// A new index must not inherit the old one's answers.
+	m.Commit(NewBuilder())
+	if got := m.Lookup("ad7.example.com"); got.Blocked {
+		t.Fatalf("stale verdict: %+v", got)
+	}
+}
+
+func BenchmarkLookupMiss(b *testing.B) {
+	bd := NewBuilder()
+	for i := 0; i < 1_000_000; i++ {
+		bd.AddBlock(fmt.Sprintf("host-%d.ads.example.net", i), "list", "ads", i%2 == 0)
+	}
+	for i := 0; i < 1200; i++ {
+		if err := bd.AddRegex(fmt.Sprintf(`^ad%d[0-9]+\.tracker`, i), "list", "ads"); err != nil {
+			b.Fatal(err)
+		}
+	}
+	m := New()
+	m.Commit(bd)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		m.Lookup("www.example-site.co.uk")
 	}
 }

@@ -344,10 +344,10 @@ func TestBackgroundBlockSourceIndex(t *testing.T) {
 
 func TestReplaceListDomainsChunked(t *testing.T) {
 	s := openTestStore(t)
-	if err := s.ReplaceListDomains("other", "ads", ListEntries{Exact: []string{"keep.example"}}); err != nil {
+	if _, err := s.ReplaceListDomains("other", "ads", ListEntries{Exact: []string{"keep.example"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReplaceListDomains("test", "ads", ListEntries{Exact: []string{"stale.example"}}); err != nil {
+	if _, err := s.ReplaceListDomains("test", "ads", ListEntries{Exact: []string{"stale.example"}}); err != nil {
 		t.Fatal(err)
 	}
 	e := ListEntries{Important: map[string]bool{}}
@@ -360,7 +360,7 @@ func TestReplaceListDomainsChunked(t *testing.T) {
 	}
 	// A duplicate in a later chunk must still be ignored.
 	e.Exact = append(e.Exact, e.Exact[0])
-	if err := s.ReplaceListDomains("test", "tracking", e); err != nil {
+	if _, err := s.ReplaceListDomains("test", "tracking", e); err != nil {
 		t.Fatal(err)
 	}
 	for kind := EntryExact; kind <= EntryAllowRegex; kind++ {
@@ -382,6 +382,142 @@ func TestReplaceListDomainsChunked(t *testing.T) {
 	}
 	if stale != 0 || other != 1 {
 		t.Errorf("replacement affected wrong rows: stale=%d other=%d", stale, other)
+	}
+}
+
+func TestReplaceListDomainsWritesOnlyTheDifference(t *testing.T) {
+	s := openTestStore(t)
+	e := ListEntries{Exact: []string{"a.example", "b.example", "c.example"}, Wildcard: []string{"w.example"}}
+	if n, err := s.ReplaceListDomains("test", "ads", e); err != nil || n != 4 {
+		t.Fatalf("first load changed %d: %v", n, err)
+	}
+	if n, err := s.ReplaceListDomains("test", "ads", e); err != nil || n != 0 {
+		t.Fatalf("identical refresh changed %d: %v", n, err)
+	}
+
+	// One removed, one added, one moved from exact to wildcard.
+	next := ListEntries{Exact: []string{"a.example", "d.example"}, Wildcard: []string{"w.example", "b.example"}}
+	if n, err := s.ReplaceListDomains("test", "ads", next); err != nil || n != 4 {
+		t.Fatalf("diff changed %d: %v", n, err)
+	}
+	got := map[string]int{}
+	rows, err := s.db.Query("SELECT domain, wildcard FROM block_domains WHERE source='test'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d string
+		var k int
+		if err := rows.Scan(&d, &k); err != nil {
+			t.Fatal(err)
+		}
+		got[d] = k
+	}
+	want := map[string]int{"a.example": EntryExact, "d.example": EntryExact, "w.example": EntryWildcard, "b.example": EntryWildcard}
+	if len(got) != len(want) {
+		t.Fatalf("rows = %v", got)
+	}
+	for d, k := range want {
+		if got[d] != k {
+			t.Fatalf("%s kind %d, want %d", d, got[d], k)
+		}
+	}
+
+	// A category change on the list rewrites its rows.
+	if n, err := s.ReplaceListDomains("test", "tracking", next); err != nil || n != 8 {
+		t.Fatalf("recategorised changed %d: %v", n, err)
+	}
+}
+
+// The log writer must get the lock between chunks of a large refresh, which
+// is what stopped a 480k-row list from blocking all logging for 7 minutes.
+func TestLargeListRefreshDoesNotStarveTheLogWriter(t *testing.T) {
+	s := openTestStore(t)
+	const n = listWriteChunk * 12
+	e := ListEntries{Exact: make([]string, 0, n)}
+	for i := 0; i < n; i++ {
+		e.Exact = append(e.Exact, fmt.Sprintf("host-%d.example", i))
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.ReplaceListDomains("big", "ads", e)
+		done <- err
+	}()
+	var flushed int
+	for finished := false; !finished; {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			finished = true
+		default:
+			start := s.WriteStats().Flushes
+			s.QueueDNS(DNSQuery{TS: time.Now(), Name: "during.example", QType: "A"})
+			s.flush()
+			if s.WriteStats().Flushes > start {
+				flushed++
+			}
+		}
+	}
+	if flushed < 2 {
+		t.Fatalf("only %d log flushes got in during the refresh", flushed)
+	}
+}
+
+func TestQueueFlowKeepsOneRowPerFlow(t *testing.T) {
+	s := openTestStore(t)
+	s.writeMu.Lock() // a stalled writer
+	first := Flow{ID: "f1", BytesIn: 1, StartedAt: time.Now(), LastSeen: time.Now(), Proto: "tcp", SrcIP: "10.0.0.1", DstIP: "10.0.0.2", Direction: "out", Verdict: "allow"}
+	for i := 0; i < 1000; i++ {
+		first.BytesIn = int64(i)
+		s.QueueFlow(first)
+	}
+	if got := s.WriteStats().Pending; got != 1 {
+		s.writeMu.Unlock()
+		t.Fatalf("a stalled writer holds %d rows for one flow", got)
+	}
+	s.writeMu.Unlock()
+	s.flush()
+	var bytes int64
+	if err := s.db.QueryRow("SELECT bytes_in FROM flows WHERE id='f1'").Scan(&bytes); err != nil {
+		t.Fatal(err)
+	}
+	if bytes != 999 {
+		t.Fatalf("bytes_in = %d, want the newest snapshot", bytes)
+	}
+	// The next batch starts clean.
+	s.QueueFlow(first)
+	if got := s.WriteStats().Pending; got != 1 {
+		t.Fatalf("pending = %d", got)
+	}
+}
+
+func TestDeleteListRemovesEverything(t *testing.T) {
+	s := openTestStore(t)
+	e := ListEntries{}
+	for i := 0; i < listWriteChunk+10; i++ {
+		e.Exact = append(e.Exact, fmt.Sprintf("host-%d.example", i))
+	}
+	if err := s.UpsertListMeta(ListMeta{Name: "gone", URL: "http://x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReplaceListDomains("gone", "ads", e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteList("gone"); err != nil {
+		t.Fatal(err)
+	}
+	var rows, metas int
+	if err := s.db.QueryRow("SELECT count(*) FROM block_domains").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow("SELECT count(*) FROM list_meta").Scan(&metas); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 || metas != 0 {
+		t.Fatalf("rows=%d metas=%d", rows, metas)
 	}
 }
 

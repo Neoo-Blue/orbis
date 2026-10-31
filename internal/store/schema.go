@@ -164,7 +164,6 @@ CREATE TABLE IF NOT EXISTS block_domains (
   wildcard      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (domain, source)
 );
-CREATE INDEX IF NOT EXISTS idx_block_domain ON block_domains(domain);
 
 CREATE TABLE IF NOT EXISTS list_meta (
   name          TEXT PRIMARY KEY,

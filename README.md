@@ -394,7 +394,7 @@ filtered at every layer even while the node it runs on is not the network's rout
 is generated when you do not set one, shown with a QR code to join behind the admin login, and
 replaceable with your own. Bridge mode hands the adapter to an existing bridge instead.
 
-**A real firewall.** Zones with trust levels, an ordered rule table with live hit counters, NAT
+**A real firewall.** Zones with trust levels, a zone matrix showing what happens between every pair of them with the last hour of traffic, an ordered rule table with live hit counters, NAT
 and port forwarding, time-based rules, IPv6, flow offload, an anti-lockout rule, all compiled
 into one nftables ruleset and loaded atomically after `nft -c` validation. Guest and IoT zones
 are isolated from the rest by default.

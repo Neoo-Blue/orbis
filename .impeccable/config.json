@@ -20,6 +20,15 @@
         "value": "geist",
         "createdAt": "2026-10-31T08:57:03.093Z",
         "reason": "Claude: same Geist face DESIGN.md declares; the block page self-hosts it under @font-face family Geist because it cannot load the app's bundle"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "internal/blockpage/page.html"
+        ],
+        "createdAt": "2026-10-31T17:24:21.415Z",
+        "reason": "Claude: the .ask-state dot animates only while the page is polling for a real answer to a request, stops on approved or denied, and honours reduced motion, so it is tied to live state"
       }
     ]
   }

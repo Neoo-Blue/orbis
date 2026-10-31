@@ -426,6 +426,20 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 		logEntry.BlockSource = "policy:" + policy.Name + ":unfiltered"
 	}
 	if cfg.AdBlock.Enabled && !unfiltered {
+		// Firefox asks this name whether it may send its lookups past this
+		// resolver. NXDOMAIN is the agreed no. Any answer, a block included,
+		// reads as yes and takes the browser out of filtering altogether.
+		if name == dohCanary {
+			m := &dns.Msg{MsgHdr: dns.MsgHdr{Rcode: dns.RcodeNameError}}
+			reply(m, r)
+			logEntry.Blocked = true
+			logEntry.BlockSource = "doh-canary"
+			logEntry.RCode = dns.RcodeToString[m.Rcode]
+			logEntry.LatencyMS = msSince(start)
+			s.stats.Blocked.Add(1)
+			s.finish(w, m, logEntry, cfg)
+			return
+		}
 		if match, blocked := s.evaluateBlock(name, clientAddr, cfg); blocked {
 			m := s.blockedReply(r, q, cfg, match, clientAddr)
 			logEntry.Blocked = true
@@ -514,6 +528,9 @@ func (s *Server) handle(w dns.ResponseWriter, r *dns.Msg) {
 //
 // The stored OPT belongs to the conversation with the upstream, so the client
 // gets its own, and none at all if it did not offer EDNS (RFC 6891).
+// dohCanary is the name Firefox uses to ask a network about encrypted DNS.
+const dohCanary = "use-application-dns.net"
+
 func reply(m, r *dns.Msg) {
 	rcode := m.Rcode
 	m.SetReply(r)

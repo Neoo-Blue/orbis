@@ -45,6 +45,9 @@ tap.
   the sinkhole, which also shut off plain http. It now fails HTTPS at once and keeps the page, so a
   browser falling back from https shows it.
 - **Hosted apps crashed on a node with no storage devices.**
+- **Orbis told Firefox it could skip the filter.** Firefox asks `use-application-dns.net` whether a
+  network allows encrypted DNS, and any answer, even a block, means yes. It now gets NXDOMAIN, the
+  agreed no, so Firefox stays on the network's resolver unless someone has forced it on.
 
 ## v1.35.0
 

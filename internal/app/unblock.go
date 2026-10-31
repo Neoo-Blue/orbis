@@ -62,11 +62,14 @@ func (a *App) AskUnblock(host, note string, client netip.Addr) (blockpage.AskSta
 		if r.Note != "" {
 			detail = fmt.Sprintf("They say: %s\n%s", r.Note, r.Why)
 		}
+		data := map[string]any{}
 		if base := a.adminBase(client, host); base != "" {
-			detail += fmt.Sprintf("\nAnswer in one tap: %s/unblock/%s?t=%s", base, r.ID, a.Unblock.Token(r.ID))
+			link := fmt.Sprintf("%s/unblock/%s", base, r.ID)
+			detail += fmt.Sprintf("\nAnswer in one tap: %s?t=%s", link, a.Unblock.Token(r.ID))
+			data["approve_url"], data["token"] = link, a.Unblock.Token(r.ID)
 		}
 		a.emit(store.Event{Severity: store.SevWarning, Category: "unblock", ClientID: r.ClientID,
-			Title: fmt.Sprintf("%s asks to open %s", r.Device, r.Host), Detail: detail})
+			Title: fmt.Sprintf("%s asks to open %s", r.Device, r.Host), Detail: detail, Data: data})
 		a.Bus.Publish(Event{Type: "unblock.pending", Data: r})
 	}
 	return askState(r), nil

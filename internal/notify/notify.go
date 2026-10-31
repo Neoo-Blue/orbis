@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"net/smtp"
 	"strings"
 	"sync"
@@ -91,7 +92,7 @@ func (n *Notifier) deliver(c config.NotifyConfig, ev store.Event) {
 	defer cancel()
 
 	for _, hook := range c.Webhooks {
-		if !hook.Enabled || hook.URL == "" {
+		if !hook.Enabled || hook.URL == "" || (hook.Only != "" && hook.Only != ev.Category) {
 			continue
 		}
 		if err := n.postWebhook(ctx, hook, ev); err != nil {
@@ -105,12 +106,53 @@ func (n *Notifier) deliver(c config.NotifyConfig, ev store.Event) {
 	}
 }
 
+// ntfyMessage shapes an event for ntfy, which pushes to a phone with nothing
+// to open on this network. It takes a topic URL and publishes as JSON to the
+// server's root, the form that carries buttons. A request gets Allow and Deny on
+// the notification itself: the phone makes the call, so it has to be able to
+// reach this node, on home Wi-Fi or over Tailscale.
+func ntfyMessage(topicURL string, ev store.Event) (string, map[string]any, error) {
+	u, err := url.Parse(topicURL)
+	if err != nil {
+		return "", nil, err
+	}
+	topic := strings.Trim(u.Path, "/")
+	u.Path = "/"
+	var lines []string
+	for _, l := range strings.Split(ev.Detail, "\n") {
+		if !strings.HasPrefix(l, "Answer in one tap") {
+			lines = append(lines, l)
+		}
+	}
+	msg := map[string]any{"topic": topic, "title": ev.Title, "message": strings.Join(lines, "\n"), "tags": []string{"shield"}}
+	if link, ok := ev.Data["approve_url"].(string); ok {
+		token, _ := ev.Data["token"].(string)
+		answer := func(label, query, body string) map[string]any {
+			return map[string]any{
+				"action": "http", "label": label, "url": link + query, "method": "POST", "clear": true,
+				"headers": map[string]string{"Content-Type": "application/x-www-form-urlencoded"},
+				"body":    body + "&t=" + url.QueryEscape(token),
+			}
+		}
+		msg["priority"] = 4
+		msg["click"] = link + "?t=" + url.QueryEscape(token)
+		msg["actions"] = []map[string]any{answer("Allow 1 hour", "?for=hour", "answer=allow"), answer("Deny", "", "answer=deny")}
+	}
+	return u.String(), msg, nil
+}
+
 // postWebhook sends the event as JSON. Slack and Discord both accept a plain
 // {"text": ...} body, so the "slack" format covers the common case without a
 // per-service integration.
 func (n *Notifier) postWebhook(ctx context.Context, hook config.Webhook, ev store.Event) error {
 	var payload any
 	switch strings.ToLower(hook.Format) {
+	case "ntfy":
+		target, message, err := ntfyMessage(hook.URL, ev)
+		if err != nil {
+			return err
+		}
+		hook.URL, payload = target, message
 	case "slack":
 		payload = map[string]string{
 			"text": fmt.Sprintf("*[%s] %s*\n%s", strings.ToUpper(ev.Severity), ev.Title, ev.Detail),

@@ -1146,3 +1146,6 @@ table.t tbody tr, .plate-list > li, .stack-in > * { animation: row-in .3s var(--
 .nav-item .nav-badge.asks { margin-left: auto; }
 .grant { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
 .grant:last-child { border-bottom: 0; }
+
+.phone-steps { display: grid; gap: 10px; padding-left: 20px; font-size: 13.5px; }
+.phone-steps .mono { font-size: 12.5px; overflow-wrap: anywhere; }

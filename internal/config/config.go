@@ -1055,13 +1055,16 @@ type ReportSchedule struct {
 }
 
 // Webhook posts an event as JSON. Format selects the body shape: "json"
-// (default), "slack" or "discord".
+// (default), "slack", "discord" or "ntfy".
 type Webhook struct {
 	Name    string            `yaml:"name" json:"name"`
 	Enabled bool              `yaml:"enabled" json:"enabled"`
 	URL     string            `yaml:"url" json:"url"`
 	Format  string            `yaml:"format" json:"format"`
 	Headers map[string]string `yaml:"headers" json:"headers"`
+	// Only limits a webhook to one event category, so a phone can hear about
+	// requests without hearing about everything else.
+	Only string `yaml:"only,omitempty" json:"only,omitempty"`
 }
 
 type EmailConfig struct {

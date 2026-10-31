@@ -1128,7 +1128,7 @@ export interface LoungeDevice {
 
 export interface Webhook {
   name: string; enabled: boolean; url: string
-  format?: string; headers?: Record<string, string>
+  format?: string; headers?: Record<string, string>; only?: string
 }
 
 export interface NotifyConfig {

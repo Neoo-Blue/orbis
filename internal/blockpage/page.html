@@ -170,7 +170,7 @@ footer a { color: var(--dim); text-underline-offset: 3px; }
   <p class="ask-state" id="ask-state" role="status" hidden><i></i><span></span></p>
   <footer>{{if .Trusted}}This device can unblock without asking. {{if .AdminURL}}<a href="{{.AdminURL}}">Review in Orbis</a>{{end}}{{else}}Whoever runs this network gets your request and can say yes in one tap.{{if .AdminURL}} <a href="{{.AdminURL}}">Run this network?</a>{{end}}{{end}}</footer>
   {{else}}
-  <p class="lede">Orbis no longer blocks this site. Your device is still remembering the old answer for a few seconds, so this page will try again by itself.</p>
+  <p class="lede">Orbis no longer blocks this site. Your browser can hold on to the old answer for up to a minute, so this page keeps trying and opens the site by itself.</p>
   <div class="actions"><button class="btn primary" id="reload" type="button">Try again now</button></div>
   {{end}}
 </main>
@@ -184,7 +184,7 @@ footer a { color: var(--dim); text-underline-offset: 3px; }
   var ask = document.getElementById('ask'), form = document.getElementById('ask-form'), self = document.getElementById('self');
   var stateEl = document.getElementById('ask-state'), note = document.getElementById('note'), cancel = document.getElementById('ask-cancel');
   function say(text, tone) { stateEl.hidden = false; stateEl.className = 'ask-state ' + (tone || ''); stateEl.lastElementChild.textContent = text }
-  function opened() { say('Approved. Opening the site.', 'yes'); setTimeout(function () { location.reload() }, 2500) }
+  function opened() { say('Approved. Opening the site, which can take up to a minute.', 'yes'); setTimeout(function () { location.reload() }, 2500) }
   function send(path, body) {
     return fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then(function (r) {
       return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'That did not work.'); return j });

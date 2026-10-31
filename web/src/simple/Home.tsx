@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { api } from '../api'
+import { RequestRow, useUnblock } from '../pages/Requests'
 import { usePoll } from '../hooks'
 import { Dot, Icons, Loading, Spinner, useToast } from '../ui'
 import { ago, num } from '../format'
@@ -20,6 +21,7 @@ function Glance({ what, sub, value, onClick }: { what: string; sub?: string; val
 }
 
 export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => void; onAsk: (q: string) => void }) {
+  const { data: asks, refresh: refreshAsks } = useUnblock()
   const { data: health, refresh } = usePoll(() => api.simple.health(), 15000)
   const { data: consent } = usePoll(() => api.consent.status(), 15000)
   const { data: clients } = usePoll(() => api.clients.list(), 20000)
@@ -47,6 +49,11 @@ export function SimpleHome({ onNavigate, onAsk }: { onNavigate: (r: string) => v
   if (!health) return <Loading what="your network" />
   return (
     <div style={{ display: 'grid', gap: 22 }}>
+      {(asks?.pending.length ?? 0) > 0 && (
+        <div className="stack-in" style={{ display: 'grid', gap: 10 }}>
+          {asks!.pending.map((r) => <RequestRow key={r.id} r={r} onDone={refreshAsks} />)}
+        </div>
+      )}
       <div className="simple-top">
       <div className="simple-left">
       <div className={`hero ${health.level}`}>

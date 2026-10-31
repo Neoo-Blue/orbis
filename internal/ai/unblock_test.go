@@ -59,7 +59,7 @@ func unblockSetup(t *testing.T) (*store.Store, *config.Config) {
 		"Four":       {"ads", store.ListEntries{Exact: []string{"widely.example"}}},
 	}
 	for name, l := range lists {
-		if err := st.ReplaceListDomains(name, l[0].(string), l[1].(store.ListEntries)); err != nil {
+		if _, err := st.ReplaceListDomains(context.Background(), name, l[0].(string), l[1].(store.ListEntries)); err != nil {
 			t.Fatal(err)
 		}
 	}

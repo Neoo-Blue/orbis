@@ -13,24 +13,13 @@ import (
 
 // ClaimsBlockedHost reports whether a request reached this node because the
 // resolver answered a blocked name with it, as opposed to someone opening
-// Orbis itself. It asks the same question the resolver did for this client, so
-// a name blocked by a profile counts, and it answers no for anything else: the
-// request then falls through to the interface, which is why the resolver only
-// ever points a name here when the name itself is blocked.
-func (a *App) ClaimsBlockedHost(hostport string, client netip.Addr) bool {
+// Orbis itself. Anything else falls through to the interface.
+func (a *App) ClaimsBlockedHost(hostport string) bool {
 	host := hostport
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		host = h
 	}
-	if net.ParseIP(host) != nil || !strings.Contains(host, ".") || !a.Cfg.Snapshot().DNS.BlockPage {
-		return false
-	}
-	if a.Matcher.Lookup(host).Blocked {
-		return true
-	}
-	clientID, _ := a.clientForAddr(client)
-	out, err := a.DiagnoseDomain(context.Background(), host, clientID, false)
-	return err == nil && out["verdict"] == "block"
+	return a.BlockGuard.Pointed(host, time.Now())
 }
 
 // SyncBlockPage starts or stops the HTTPS listener to match the setting.
@@ -58,7 +47,7 @@ func (a *App) explainBlock(ctx context.Context, host string, client netip.Addr) 
 		page.Device = firstNonEmpty(c.Label, c.Hostname, c.IP)
 	}
 	page.DeviceAddress = net.ParseIP(page.Device) != nil
-	if addr, ok := a.BlockGuard.AddrFor(client, now); ok {
+	if addr, ok := a.BlockGuard.AddrFor(client, host, now); ok {
 		port := ""
 		if _, p, err := net.SplitHostPort(a.Cfg.Snapshot().API.Listen); err == nil && p != "80" {
 			port = ":" + p

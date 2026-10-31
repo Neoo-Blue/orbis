@@ -2,7 +2,14 @@ package blockpage
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -94,10 +101,10 @@ func guardOn(prefix string) *Guard {
 func TestGuardSendsClientsToTheAddressOnTheirNetwork(t *testing.T) {
 	g := guardOn("192.168.50.75/24")
 	now := time.Now()
-	if a, ok := g.AddrFor(netip.MustParseAddr("192.168.50.9"), now); !ok || a.String() != "192.168.50.75" {
+	if a, ok := g.AddrFor(netip.MustParseAddr("192.168.50.9"), "ads.example.com", now); !ok || a.String() != "192.168.50.75" {
 		t.Fatalf("got %v %v", a, ok)
 	}
-	if _, ok := g.AddrFor(netip.MustParseAddr("127.0.0.1"), now); ok {
+	if _, ok := g.AddrFor(netip.MustParseAddr("127.0.0.1"), "ads.example.com", now); ok {
 		t.Fatal("this node looking itself up must get the sinkhole")
 	}
 }
@@ -109,14 +116,14 @@ func TestGuardFallsBackAfterRejectionsThenTriesAgain(t *testing.T) {
 	for i := 0; i < rejectionsToFallBack-1; i++ {
 		g.Note(c, false, now)
 	}
-	if _, ok := g.AddrFor(c, now); !ok {
+	if _, ok := g.AddrFor(c, "ads.example.com", now); !ok {
 		t.Fatal("too few rejections to give up")
 	}
 	g.Note(c, false, now)
-	if _, ok := g.AddrFor(c, now); ok {
+	if _, ok := g.AddrFor(c, "ads.example.com", now); ok {
 		t.Fatal("a device that refuses the certificate must get the sinkhole")
 	}
-	if _, ok := g.AddrFor(c, now.Add(fallBackFor+time.Minute)); !ok {
+	if _, ok := g.AddrFor(c, "ads.example.com", now.Add(fallBackFor+time.Minute)); !ok {
 		t.Fatal("a device that installs the CA later must be picked up again")
 	}
 }
@@ -129,7 +136,7 @@ func TestOnePinnedAppDoesNotUndoWhatABrowserProved(t *testing.T) {
 	for i := 0; i < rejectionsToFallBack*3; i++ {
 		g.Note(c, false, now)
 	}
-	if _, ok := g.AddrFor(c, now); !ok {
+	if _, ok := g.AddrFor(c, "ads.example.com", now); !ok {
 		t.Fatal("a pinned app on a device that trusts the CA must not switch the page off")
 	}
 }
@@ -148,20 +155,177 @@ func TestOnlyPlausibleHostnamesReachTheCA(t *testing.T) {
 
 func TestCertificatesAreOnlyMintedForClaimedNames(t *testing.T) {
 	minted := 0
+	allow := true
 	s := &Server{
-		Claims: func(host string, _ netip.Addr) bool { return host == "ads.example.com" },
+		Claims: func(host string) bool { return host == "ads.example.com" },
+		Allow:  func(netip.Addr) bool { return allow },
 		Leaf:   func(string) (*tls.Certificate, error) { minted++; return &tls.Certificate{}, nil },
 	}
-	var refused sync.Map
+	var offered sync.Map
 	minting := make(chan struct{}, 1)
-	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "bank.example.com"}, &refused, minting); err == nil || minted != 0 {
+	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "bank.example.com"}, &offered, minting); err == nil || minted != 0 {
 		t.Fatalf("minted %d for a name nobody was sent here for: %v", minted, err)
 	}
-	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "ads.example.com"}, &refused, minting); err != nil || minted != 1 {
+	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "ads.example.com"}, &offered, minting); err != nil || minted != 1 {
 		t.Fatalf("minted %d: %v", minted, err)
 	}
+	allow = false
+	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "ads.example.com"}, &offered, minting); err == nil || minted != 1 {
+		t.Fatalf("minted %d past the limit: %v", minted, err)
+	}
+	allow = true
 	minting <- struct{}{}
-	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "ads.example.com"}, &refused, minting); err == nil || minted != 1 {
+	if _, err := s.certificate(&tls.ClientHelloInfo{ServerName: "ads.example.com"}, &offered, minting); err == nil || minted != 1 {
 		t.Fatalf("minted %d with no capacity left: %v", minted, err)
+	}
+}
+
+func TestOnlyNamesTheResolverPointedHereAreClaimed(t *testing.T) {
+	g := guardOn("192.168.50.75/24")
+	c := netip.MustParseAddr("192.168.50.9")
+	now := time.Now()
+	if _, ok := g.AddrFor(c, "Ads.Example.com.", now); !ok {
+		t.Fatal("expected the page")
+	}
+	if !g.Pointed("ads.example.com", now) {
+		t.Fatal("the name just answered is not claimed")
+	}
+	if g.Pointed("other.example.com", now) {
+		t.Fatal("a name never answered is claimed")
+	}
+	if g.Pointed("ads.example.com", now.Add(pointedFor)) {
+		t.Fatal("an unblocked name must stop being claimed")
+	}
+	if _, ok := g.AddrFor(netip.MustParseAddr("127.0.0.1"), "local.example.com", now); ok || g.Pointed("local.example.com", now) {
+		t.Fatal("a client given the sinkhole leaves no claim")
+	}
+}
+
+func TestAFullTableFallsBackToTheSinkhole(t *testing.T) {
+	g := guardOn("192.168.50.75/24")
+	c := netip.MustParseAddr("192.168.50.9")
+	now := time.Now()
+	for i := range guardMaxNames {
+		g.pointed[fmt.Sprintf("n%d.example.com", i)] = now
+	}
+	if _, ok := g.AddrFor(c, "new.example.com", now); ok {
+		t.Fatal("unrecorded, this name would fall through to the interface")
+	}
+	if _, ok := g.AddrFor(c, "n1.example.com", now); !ok {
+		t.Fatal("a name already recorded needs no new room")
+	}
+	if _, ok := g.AddrFor(c, "new.example.com", now.Add(pointedFor+time.Second)); !ok {
+		t.Fatal("once the old names lapse there is room again")
+	}
+}
+
+func listenBlockPage(t *testing.T, g *Guard) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotAfter: time.Now().Add(time.Hour), DNSNames: []string{"ads.example.com"}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := testServer()
+	s.Guard = g
+	s.Claims = func(string) bool { return true }
+	s.Leaf = func(string) (*tls.Certificate, error) {
+		return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+	if err := s.ListenTLS(addr); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	return addr
+}
+
+func offered(t *testing.T, g *Guard, c netip.Addr, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, got := g.AddrFor(c, "ads.example.com", time.Now()); got == want {
+			if time.Now().After(deadline) || want == false {
+				return
+			}
+			// Connections close asynchronously: a "still offered" needs time
+			// for a wrong verdict to appear.
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("page offered = %v, want %v", !want, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func dialAndRefuse(t *testing.T, addr string) {
+	t.Helper()
+	if conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: "ads.example.com"}); err == nil {
+		conn.Close()
+		t.Fatal("this client must refuse the certificate")
+	}
+}
+
+func TestProbesDoNotSwitchThePageOff(t *testing.T) {
+	g := guardOn("127.0.0.1/8")
+	addr := listenBlockPage(t, g)
+	c := netip.MustParseAddr("127.0.0.1")
+	for range rejectionsToFallBack * 2 {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = conn.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n"))
+		conn.Close()
+	}
+	offered(t, g, c, true)
+	for range rejectionsToFallBack {
+		dialAndRefuse(t, addr)
+	}
+	offered(t, g, c, false)
+}
+
+func TestAToolSkippingVerificationProvesNothing(t *testing.T) {
+	g := guardOn("127.0.0.1/8")
+	addr := listenBlockPage(t, g)
+	client := http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "ads.example.com"}}}
+	defer client.CloseIdleConnections()
+	resp, err := client.Get("https://" + addr + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	for range rejectionsToFallBack {
+		dialAndRefuse(t, addr)
+	}
+	offered(t, g, netip.MustParseAddr("127.0.0.1"), false)
+}
+
+func TestABrowserOverTLSIsProof(t *testing.T) {
+	g := guardOn("192.168.50.75/24")
+	s := testServer()
+	s.Guard = g
+	c := netip.MustParseAddr("192.168.50.9")
+	r := httptest.NewRequest(http.MethodGet, "https://ads.example.com/ad.js", nil)
+	r.RemoteAddr, r.TLS = "192.168.50.9:5000", &tls.ConnectionState{}
+	r.Header.Set("Sec-Fetch-Dest", "script")
+	s.ServeHTTP(httptest.NewRecorder(), r)
+	now := time.Now()
+	for range rejectionsToFallBack {
+		g.Note(c, false, now)
+	}
+	if _, ok := g.AddrFor(c, "ads.example.com", now); !ok {
+		t.Fatal("this device already showed it trusts the CA")
 	}
 }

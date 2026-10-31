@@ -380,7 +380,7 @@ func TestBlockPageIsOfferedOnlyWhereItCanWork(t *testing.T) {
 		t.Fatalf("no hook answered %v", a.A)
 	}
 	offer := false
-	s.hooks.BlockPageAddr = func(netip.Addr) (netip.Addr, bool) {
+	s.hooks.BlockPageAddr = func(netip.Addr, string) (netip.Addr, bool) {
 		return netip.MustParseAddr("192.168.50.75"), offer
 	}
 	if a := ask(t, s, "ads.example.com", dns.TypeA).Answer[0].(*dns.A); !a.A.Equal(net.IPv4zero) {
@@ -414,7 +414,7 @@ func TestACloakedNameNeverResolvesToThisNode(t *testing.T) {
 	matcher.Commit(b)
 	s.cfg.DNS.SinkholeIPv4, s.cfg.DNS.SinkholeIPv6 = "0.0.0.0", "::"
 	s.cfg.DNS.BlockPage = true
-	s.hooks.BlockPageAddr = func(netip.Addr) (netip.Addr, bool) { return netip.MustParseAddr("192.168.50.75"), true }
+	s.hooks.BlockPageAddr = func(netip.Addr, string) (netip.Addr, bool) { return netip.MustParseAddr("192.168.50.75"), true }
 
 	// Whoever owns this name owns what it serves. Pointing it at this node
 	// would give their page our origin, which is DNS rebinding.

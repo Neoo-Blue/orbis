@@ -86,6 +86,7 @@ func (a *App) DiagnoseDomain(ctx context.Context, domain, clientID string, resol
 
 	// 2. Per-client policy, when one was named.
 	var policy *store.Policy
+	policyAllowed := false
 	if clientID != "" {
 		if p := a.PolicyForClient(clientID); p != nil {
 			policy = p
@@ -125,7 +126,24 @@ func (a *App) DiagnoseDomain(ctx context.Context, domain, clientID string, resol
 						Detail: fmt.Sprintf("Explicitly allowed for this device by policy %q, overriding blocklists.", policy.Name),
 						Rule:   al, Source: "policy:" + policy.Name,
 					})
-					final, reason = "allow", "Explicitly allowed by this device's policy."
+					// A switched-off service stays off: the resolver refuses
+					// it before it ever looks at the allowlist.
+					if final != "block" {
+						final, reason, policyAllowed = "allow", "Explicitly allowed by this device's policy.", true
+					}
+				}
+			}
+			if !policyAllowed && final != "block" && cfg.AdBlock.Enabled && !policy.Unfiltered {
+				for _, d := range policy.Denylist {
+					if domainGlobMatch(name, d) {
+						steps = append(steps, DiagnoseStep{
+							Stage: "Policy denylist", Hit: true, Verdict: "block",
+							Detail: fmt.Sprintf("Blocked for this device by policy %q.", policy.Name),
+							Rule:   d, Source: "policy:" + policy.Name,
+						})
+						final, reason = "block", "Blocked by this device's policy."
+						break
+					}
 				}
 			}
 		}
@@ -169,7 +187,7 @@ func (a *App) DiagnoseDomain(ctx context.Context, domain, clientID string, resol
 			Detail: fmt.Sprintf("Matched %q in %s.", match.Rule, describeSource(match.Source)),
 			Rule:   match.Rule, Source: match.Source,
 		})
-		if final != "block" {
+		if final != "block" && !policyAllowed {
 			final = "block"
 			reason = fmt.Sprintf("Blocked by %s, which matched the rule %q.", match.Source, match.Rule)
 		}

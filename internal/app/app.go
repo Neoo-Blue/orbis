@@ -170,6 +170,11 @@ type App struct {
 	startedAt time.Time
 }
 
+// blockPageHandshakes is per client per second. Past it a blocked name fails
+// quietly, which is all an ad deserved anyway, and a page looping through random
+// names cannot keep the CA signing.
+const blockPageHandshakes = 10
+
 func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	if logf == nil {
 		logf = func(format string, args ...any) {
@@ -550,7 +555,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 
 	// DNS.
 	a.BlockGuard = blockpage.NewGuard()
-	a.BlockPage = &blockpage.Server{Explain: a.explainBlock, Claims: a.ClaimsBlockedHost, Guard: a.BlockGuard, Log: logf}
+	handshakes := dnsproxy.NewRateLimiter(blockPageHandshakes)
+	a.BlockPage = &blockpage.Server{Explain: a.explainBlock, Claims: a.ClaimsBlockedHost, Guard: a.BlockGuard, Log: logf,
+		Allow: func(client netip.Addr) bool { return handshakes.Allow(client, time.Now()) }}
 	if a.CA != nil {
 		a.BlockPage.Leaf = a.CA.Leaf
 	}
@@ -563,7 +570,9 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 		Publish: func(q store.DNSQuery) {
 			a.Bus.Publish(Event{Type: "dns.query", Data: q})
 		},
-		BlockPageAddr: func(client netip.Addr) (netip.Addr, bool) { return a.BlockGuard.AddrFor(client, time.Now()) },
+		BlockPageAddr: func(client netip.Addr, name string) (netip.Addr, bool) {
+			return a.BlockGuard.AddrFor(client, name, time.Now())
+		},
 		CountryCheck: func(client netip.Addr, name string, addrs []netip.Addr) (bool, string) {
 			if a.Country == nil {
 				return false, ""

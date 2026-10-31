@@ -81,8 +81,10 @@ type Page struct {
 type Server struct {
 	// Explain fills in a page for a name asked for by a client.
 	Explain func(ctx context.Context, host string, client netip.Addr) Page
-	// Claims reports whether a name is one this client was pointed here for.
-	Claims func(hostport string, client netip.Addr) bool
+	// Claims reports whether the resolver pointed a name here.
+	Claims func(hostport string) bool
+	// Allow limits TLS handshakes per client.
+	Allow func(client netip.Addr) bool
 	// Leaf mints a certificate for a name from the Orbis CA.
 	Leaf func(host string) (*tls.Certificate, error)
 	// Guard learns which devices can show the page over HTTPS.
@@ -115,9 +117,11 @@ func hostname(s string) bool {
 	return true
 }
 
-// certificate answers a TLS hello: only for a name this client was sent here
-// for, and only as fast as the node can spare.
-func (s *Server) certificate(hello *tls.ClientHelloInfo, refused *sync.Map, minting chan struct{}) (*tls.Certificate, error) {
+// certificate answers a TLS hello: only for a name the resolver sent here, and
+// only as fast as the node can spare. Each refusal here leaves offered unset,
+// because a handshake we ended says nothing about whether the client trusts the
+// CA.
+func (s *Server) certificate(hello *tls.ClientHelloInfo, offered *sync.Map, minting chan struct{}) (*tls.Certificate, error) {
 	client := netip.Addr{}
 	remote := ""
 	if hello.Conn != nil {
@@ -126,26 +130,39 @@ func (s *Server) certificate(hello *tls.ClientHelloInfo, refused *sync.Map, mint
 			client = ap.Addr().Unmap()
 		}
 	}
+	if s.Allow != nil && !s.Allow(client) {
+		return nil, errors.New("too many handshakes from this client")
+	}
 	name := hello.ServerName
-	if !hostname(name) || (s.Claims != nil && !s.Claims(name, client)) {
-		// This one says nothing about whether the client trusts the CA.
-		refused.Store(remote, true)
+	if !hostname(name) || (s.Claims != nil && !s.Claims(name)) {
 		return nil, errNotBlocked
 	}
 	select {
 	case minting <- struct{}{}:
 		defer func() { <-minting }()
 	default:
-		refused.Store(remote, true)
 		return nil, errors.New("too many certificates at once")
 	}
-	return s.Leaf(name)
+	cert, err := s.Leaf(name)
+	if err == nil {
+		offered.Store(remote, true)
+	}
+	return cert, err
 }
 
 // ServeHTTP renders the page for a browser opening the blocked site, and
 // nothing at all for everything else. A blocked ad is a script or an image
 // inside someone else's page, and it should fail quietly and fast.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	client := netip.Addr{}
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		client = ap.Addr().Unmap()
+	}
+	// Proof the CA is trusted needs a browser: a tool that skips verification
+	// completes the handshake too, and must not vouch for the whole device.
+	if r.TLS != nil && s.Guard != nil && (r.Header.Get("Sec-Fetch-Dest") != "" || opensDocument(r)) {
+		s.Guard.Note(client, true, time.Now())
+	}
 	if face, ok := map[string][]byte{"/__orbis/geist.woff2": font, "/__orbis/geist-mono.woff2": monoFont}[r.URL.Path]; ok {
 		w.Header().Set("Content-Type", "font/woff2")
 		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
@@ -156,10 +173,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !opensDocument(r) {
 		w.WriteHeader(http.StatusNoContent)
 		return
-	}
-	client := netip.Addr{}
-	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-		client = ap.Addr().Unmap()
 	}
 	page := s.Explain(r.Context(), hostOnly(r.Host), client)
 	page.Nonce = nonce()
@@ -220,8 +233,7 @@ func (s *Server) ListenTLS(addr string) error {
 	if err != nil {
 		return err
 	}
-	var seen sync.Map    // net.Conn that sent a request or finished a handshake
-	var refused sync.Map // remote address we turned away ourselves
+	var offered sync.Map // remote address that was sent our certificate
 	minting := make(chan struct{}, maxMinting)
 	srv := &http.Server{
 		Handler:           s,
@@ -233,23 +245,22 @@ func (s *Server) ListenTLS(addr string) error {
 			MinVersion: tls.VersionTLS12,
 			NextProtos: []string{"http/1.1"},
 			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return s.certificate(hello, &refused, minting)
+				return s.certificate(hello, &offered, minting)
 			},
 		},
 		ConnState: func(c net.Conn, st http.ConnState) {
-			switch st {
-			case http.StateActive:
-				seen.Store(c, true)
-			case http.StateClosed:
-				_, ok := seen.LoadAndDelete(c)
-				tc, isTLS := c.(*tls.Conn)
-				if _, ours := refused.LoadAndDelete(c.RemoteAddr().String()); ours || !isTLS || s.Guard == nil {
-					return
-				}
-				ok = ok || tc.ConnectionState().HandshakeComplete
-				if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
-					s.Guard.Note(ap.Addr().Unmap(), ok, time.Now())
-				}
+			if st != http.StateClosed {
+				return
+			}
+			// Only a client that saw the certificate and walked away refused
+			// it. A port scan, or plain http sent to this port, did not.
+			_, sent := offered.LoadAndDelete(c.RemoteAddr().String())
+			tc, isTLS := c.(*tls.Conn)
+			if !sent || !isTLS || s.Guard == nil || tc.ConnectionState().HandshakeComplete {
+				return
+			}
+			if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil {
+				s.Guard.Note(ap.Addr().Unmap(), false, time.Now())
 			}
 		},
 		// A refused certificate is expected here, not worth a journal line.
@@ -293,6 +304,12 @@ const (
 	trustedFor = 7 * 24 * time.Hour
 	// guardMaxClients bounds the table; a home network never reaches it.
 	guardMaxClients = 4096
+	// pointedFor is how long a name stays claimed after the resolver sent it
+	// here. It outlasts the answer and a browser's own cache of it, and it is
+	// what ends a claim once a name is unblocked.
+	pointedFor = 5 * time.Minute
+	// guardMaxNames bounds the names kept for that long.
+	guardMaxNames = 8192
 	// interfacesEvery is how often this node's own addresses are re-read.
 	interfacesEvery = time.Minute
 )
@@ -308,6 +325,11 @@ type trust struct {
 type Guard struct {
 	mu      sync.Mutex
 	clients map[netip.Addr]*trust
+	// pointed is every name just answered with this node, and when. This is
+	// the only thing that reaches the page and the CA: the resolver's own
+	// record of what it did, not a second opinion on what it would do.
+	pointed map[string]time.Time
+	swept   time.Time
 
 	nets     []netip.Prefix
 	netsRead time.Time
@@ -316,7 +338,41 @@ type Guard struct {
 }
 
 func NewGuard() *Guard {
-	return &Guard{clients: map[netip.Addr]*trust{}, interfaces: localPrefixes}
+	return &Guard{clients: map[netip.Addr]*trust{}, pointed: map[string]time.Time{}, interfaces: localPrefixes}
+}
+
+func nameKey(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
+}
+
+// remember records a name about to be pointed here. It reports false when the
+// table cannot take it: a name sent here but not recorded would fall through to
+// the interface, so such a name has to get the sinkhole.
+func (g *Guard) remember(name string, now time.Time) bool {
+	if _, known := g.pointed[name]; !known && len(g.pointed) >= guardMaxNames {
+		if now.Sub(g.swept) < time.Minute {
+			return false
+		}
+		g.swept = now
+		for n, at := range g.pointed {
+			if now.Sub(at) >= pointedFor {
+				delete(g.pointed, n)
+			}
+		}
+		if len(g.pointed) >= guardMaxNames {
+			return false
+		}
+	}
+	g.pointed[name] = now
+	return true
+}
+
+// Pointed reports whether the resolver sent a name here within pointedFor.
+func (g *Guard) Pointed(name string, now time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	at, ok := g.pointed[nameKey(name)]
+	return ok && now.Sub(at) < pointedFor
 }
 
 // Note records how a TLS connection from a client ended.
@@ -343,9 +399,9 @@ func (g *Guard) Note(client netip.Addr, ok bool, now time.Time) {
 	}
 }
 
-// AddrFor returns the address a client should be sent to for the page, or
+// AddrFor returns the address a client should be sent to for a blocked name, or
 // false when it should get the plain sinkhole instead.
-func (g *Guard) AddrFor(client netip.Addr, now time.Time) (netip.Addr, bool) {
+func (g *Guard) AddrFor(client netip.Addr, name string, now time.Time) (netip.Addr, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if t := g.clients[client]; t != nil && now.Before(t.until) {
@@ -358,7 +414,7 @@ func (g *Guard) AddrFor(client netip.Addr, now time.Time) (netip.Addr, bool) {
 	}
 	for _, p := range g.nets {
 		if p.Contains(client) {
-			return p.Addr(), true
+			return p.Addr(), g.remember(nameKey(name), now)
 		}
 	}
 	return netip.Addr{}, false

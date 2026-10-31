@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -119,11 +118,7 @@ func (s *Server) shortcuts(next http.Handler) http.Handler {
 // resolver answered a blocked name with this node.
 func (s *Server) blockHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		client := netip.Addr{}
-		if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-			client = ap.Addr().Unmap()
-		}
-		if s.app.ClaimsBlockedHost(r.Host, client) {
+		if s.app.ClaimsBlockedHost(r.Host) {
 			s.app.BlockPage.ServeHTTP(w, r)
 			return
 		}

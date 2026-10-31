@@ -36,7 +36,7 @@ type Hooks struct {
 	CountryCheck func(client netip.Addr, name string, addrs []netip.Addr) (bool, string)
 	// BlockPageAddr returns the address that serves the block page to this
 	// client, or false when the client should get the plain sinkhole.
-	BlockPageAddr func(client netip.Addr) (netip.Addr, bool)
+	BlockPageAddr func(client netip.Addr, name string) (netip.Addr, bool)
 }
 
 type Server struct {
@@ -679,7 +679,7 @@ func (s *Server) blockedReply(r *dns.Msg, q dns.Question, cfg config.Config, mat
 	// leads, and the name still belongs to whoever runs it: answering it with
 	// this node would be DNS rebinding, putting their page on our origin.
 	if cfg.DNS.BlockPage && s.hooks.BlockPageAddr != nil && client.IsValid() {
-		if page, ok := s.hooks.BlockPageAddr(client); ok {
+		if page, ok := s.hooks.BlockPageAddr(client, q.Name); ok {
 			// With no AAAA a browser goes straight to the A answer. The
 			// sinkhole's :: would make it try that first and fail.
 			sink4, sink6 = page.String(), ""

@@ -466,6 +466,22 @@ func TestLargeListRefreshDoesNotStarveTheLogWriter(t *testing.T) {
 	}
 }
 
+func TestShouldTruncateWAL(t *testing.T) {
+	for _, c := range []struct {
+		frames, copied int
+		want           bool
+	}{
+		{100, 100, false},       // small, leave it
+		{344876, 343158, true},  // measured on a Pi: grown and all but copied
+		{344876, 100000, false}, // still copying a backlog
+		{walTruncateFrames, walTruncateFrames, true},
+	} {
+		if got := shouldTruncateWAL(c.frames, c.copied); got != c.want {
+			t.Errorf("shouldTruncateWAL(%d, %d) = %v", c.frames, c.copied, got)
+		}
+	}
+}
+
 func TestQueueFlowKeepsOneRowPerFlow(t *testing.T) {
 	s := openTestStore(t)
 	s.writeMu.Lock() // a stalled writer

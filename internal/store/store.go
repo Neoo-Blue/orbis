@@ -257,6 +257,14 @@ func (s *Store) flushLoop() {
 // 4 KB pages, the same as journal_size_limit.
 const walTruncateFrames = 16384
 
+// shouldTruncateWAL reports a WAL that has grown and is all but copied across.
+// Asking for everything copied never comes true on a live node, because a log
+// row always lands between the checkpoint and the check; the file stayed at
+// 1.4 GB with all but 0.5% of it already in the database.
+func shouldTruncateWAL(frames, copied int) bool {
+	return frames >= walTruncateFrames && frames-copied < walTruncateFrames
+}
+
 // checkpoint makes progress even with pooled readers holding snapshots;
 // PASSIVE never waits for them like a truncating checkpoint. A file that grew
 // is only cut back by a checkpoint that resets it, and a busy node rarely gets
@@ -281,7 +289,7 @@ func (s *Store) checkpoint() {
 		}
 		return
 	}
-	if frames < walTruncateFrames || copied < frames {
+	if !shouldTruncateWAL(frames, copied) {
 		return
 	}
 	s.writeMu.Lock()

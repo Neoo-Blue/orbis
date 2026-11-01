@@ -455,15 +455,19 @@ func (m *Matcher) Threat(domain string) bool {
 		return false
 	}
 	for _, idx := range []*index{m.overlay.Load(), m.idx.Load()} {
-		if r, ok := lookupIn(idx, d); ok && threatCategory(r.Category) {
-			return true
-		}
 		if id, ok := idx.exact.find(hashDomain(d)); ok && threatCategory(idx.entries[id].category) {
 			return true
 		}
+		if v := idx.regexVerdict(d); v.block >= 0 && threatCategory(idx.regexes[v.block].category) {
+			return true
+		}
 		for name := d; ; {
-			if id, ok := idx.wildcard.find(hashDomain(name)); ok && threatCategory(idx.entries[id].category) {
-				return true
+			if id, ok := idx.wildcard.find(hashDomain(name)); ok {
+				e := idx.entries[id]
+				// As in Lookup, a list's wildcard on a single label is a parse artefact.
+				if threatCategory(e.category) && (strings.Contains(name, ".") || isLocalSource(e.source)) {
+					return true
+				}
 			}
 			dot := strings.IndexByte(name, '.')
 			if dot < 0 {

@@ -164,13 +164,11 @@ func (m *Manager) Ask(r Request, now time.Time) (*Request, bool, error) {
 	defer m.mu.Unlock()
 	r.Host = nameKey(r.Host)
 	mine, open := 0, 0
-	var oldest *Request
 	for _, x := range m.reqs {
 		if x.State != Pending || now.Sub(x.Asked) >= requestLife {
 			continue
 		}
 		open++
-		oldest = x
 		if x.ClientID == r.ClientID {
 			mine++
 			if x.Host == r.Host {
@@ -179,13 +177,8 @@ func (m *Manager) Ask(r Request, now time.Time) (*Request, bool, error) {
 			}
 		}
 	}
-	if mine >= maxPerDevice {
+	if mine >= maxPerDevice || open >= maxPending {
 		return nil, false, ErrTooMany
-	}
-	// The owner already heard about the oldest one, and a full queue must not
-	// shut out everyone else.
-	if open >= maxPending {
-		oldest.State, oldest.Decided, oldest.By = Denied, now, "too many waiting"
 	}
 	id := make([]byte, 9)
 	if _, err := rand.Read(id); err != nil {

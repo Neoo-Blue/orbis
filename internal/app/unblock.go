@@ -24,7 +24,7 @@ var ErrTooBroad = errors.New("a site on a threat list can only be allowed for th
 // ErrNotBlocked refuses a request for a name that is not stopped for this
 // device. A grant opens everything under a name, so asking must not reach
 // further than what the block page was showing.
-var ErrNotBlocked = errors.New("this site is not blocked for this device")
+var ErrNotBlocked = errors.New("this site cannot be opened from here")
 
 // HowLong puts a request's length into words.
 func HowLong(minutes int) string {
@@ -53,8 +53,9 @@ func (a *App) adminBase(client netip.Addr) string {
 }
 
 func (a *App) unblockRequest(host string, form blockpage.AskForm, client netip.Addr) (unblock.Request, error) {
+	host = strings.ToLower(strings.TrimRight(host, "."))
 	page := a.explainBlock(context.Background(), host, client)
-	if suffix, _ := publicsuffix.PublicSuffix(strings.ToLower(host)); !page.Blocked || suffix == strings.ToLower(host) {
+	if suffix, _ := publicsuffix.PublicSuffix(host); !page.Blocked || suffix == host {
 		return unblock.Request{}, ErrNotBlocked
 	}
 	clientID, _ := a.clientForAddr(client)

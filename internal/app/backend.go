@@ -843,7 +843,7 @@ func (a *App) Health() map[string]any {
 
 	if t := a.Resources().Throttled; strings.Contains(t, "under-voltage") {
 		when := "has run short of power since it last started"
-		if strings.HasPrefix(t, "now") {
+		if current, _, _ := strings.Cut(t, ";"); strings.HasPrefix(current, "now") && strings.Contains(current, "under-voltage") {
 			when = "is short of power right now"
 		}
 		add("attention", "This Pi "+when+". Use a 5.1 V, 3 A supply: low voltage can corrupt its SD card.")

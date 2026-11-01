@@ -115,7 +115,7 @@ func TestOnlyABlockedNameCanBeAskedFor(t *testing.T) {
 	if _, err := a.unblockRequest("listed.example.com", blockpage.AskForm{Minutes: 60}, guest); err != nil {
 		t.Fatal(err)
 	}
-	for _, host := range []string{"open.example.com", "co.uk", "com"} {
+	for _, host := range []string{"open.example.com", "co.uk", "co.uk..", "com"} {
 		if _, err := a.unblockRequest(host, blockpage.AskForm{Minutes: 60}, guest); !errors.Is(err, ErrNotBlocked) {
 			t.Errorf("%s: %v", host, err)
 		}

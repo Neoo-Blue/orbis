@@ -313,6 +313,11 @@ func (s *Server) serveAsk(w http.ResponseWriter, r *http.Request, client netip.A
 		}, client)
 	}
 	if err != nil {
+		// A double tap: the first one opened the site, so there is nothing to refuse.
+		if !s.Explain(r.Context(), host, client).Blocked {
+			http.Redirect(w, r, back, http.StatusSeeOther)
+			return
+		}
 		w.Header().Set("Referrer-Policy", "same-origin")
 		s.render(w, r, client, back, err.Error())
 		return

@@ -114,6 +114,7 @@ func TestAThreatListIsNotHiddenByAnAdList(t *testing.T) {
 	b.AddBlock("hidden.example", "z-threat-list", "malware", true)
 	b.AddBlock("dns.example", "builtin:doh-bypass", "bypass", true)
 	b.AddBlock("ads.example", "a-ad-list", "ads", false)
+	b.AddBlock("example", "z-threat-list", "malware", true)
 	m.Commit(b)
 	if got := m.Lookup("both.example").Category; got != "malware" {
 		t.Errorf("both.example reads %q", got)

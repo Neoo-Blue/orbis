@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -477,5 +478,23 @@ func TestThePageNeverHoldsAConnectionOpen(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "<title>Opening fine.example.com</title>") {
 		t.Fatalf("title in the opening state: %.200s", w.Body.String())
+	}
+}
+
+func TestADoubleTapLandsOnTheSite(t *testing.T) {
+	refused := errors.New("refused")
+	s := &Server{
+		Explain: func(context.Context, string, netip.Addr) Page { return Page{Host: "site.example"} },
+		Ask:     func(string, AskForm, netip.Addr) (AskState, error) { return AskState{}, refused },
+		Status:  func(string, netip.Addr) AskState { return AskState{} },
+		Self:    func(string, int, netip.Addr) (AskState, error) { return AskState{}, refused },
+	}
+	r := httptest.NewRequest(http.MethodPost, "http://site.example/__orbis/self", strings.NewReader("minutes=60&back=/page"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Origin", "http://site.example")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/page" {
+		t.Fatalf("got %d %q", w.Code, w.Header().Get("Location"))
 	}
 }

@@ -30,8 +30,9 @@ export function RequestRow({ r, onDone }: { r: UnblockRequest; onDone: () => voi
   const toast = useToast()
   const answer = async (allow: boolean, minutes: number, done: string) => {
     try {
-      await api.unblock.decide(r.id, { allow, minutes, everyone: false })
-      toast(done, allow ? 'ok' : 'info')
+      const got = await api.unblock.decide(r.id, { allow, minutes, everyone: false })
+      if (got.state === (allow ? 'approved' : 'denied')) toast(done, allow ? 'ok' : 'info')
+      else toast('This was already answered', 'info')
       onDone()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not answer that', 'err')
@@ -95,7 +96,7 @@ export function RequestsPage() {
   const { data, refresh } = useUnblock()
   const { data: clients, } = usePoll(() => api.clients.list(), 30000)
   const toast = useToast()
-  const devices = useMemo(() => [...(clients?.clients ?? [])].sort((a, b) => clientName(a).localeCompare(clientName(b))), [clients])
+  const devices = useMemo(() => (clients?.clients ?? []).filter((c) => c.mac).sort((a, b) => clientName(a).localeCompare(clientName(b))), [clients])
   if (!data) return <Loading what="requests" />
   const trusted = new Set(data.trusted)
   const trust = async (id: string, on: boolean) => {

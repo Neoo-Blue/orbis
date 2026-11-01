@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -68,6 +69,16 @@ func (s *Server) quickRule(w http.ResponseWriter, r *http.Request, action string
 		note = "added from the domain tester"
 	}
 
+	// The new rule replaces any on this name, so Undo needs to know what it was.
+	var previous *store.LocalRule
+	if rules, err := s.app.Store.LocalRules(); err == nil {
+		for i := range rules {
+			if rules[i].Domain == domain {
+				previous = &rules[i]
+			}
+		}
+	}
+
 	// Reuse the app-level operations rather than writing the rule here: they
 	// already reindex the matcher, audit, and publish the change, and a second
 	// implementation would drift from them.
@@ -84,7 +95,7 @@ func (s *Server) quickRule(w http.ResponseWriter, r *http.Request, action string
 	// A cached answer would keep serving the old verdict for its whole TTL,
 	// which reads as the button not having worked.
 	s.app.DNS.Cache().FlushDomain(domain)
-	writeOK(w, map[string]any{"ok": true, "verdict": s.app.Matcher.Lookup(domain)})
+	writeOK(w, map[string]any{"ok": true, "verdict": s.app.Matcher.Lookup(domain), "previous": previous})
 }
 
 // handleQuickUnblock removes any local rule for a name and flushes the cache,

@@ -307,12 +307,15 @@ func describeThrottle(v uint64) string {
 	if v&0x80000 != 0 {
 		past = append(past, "at the temperature limit")
 	}
-	switch {
-	case len(now) > 0:
-		return "now: " + strings.Join(now, ", ")
-	case len(past) > 0:
-		return "since boot: " + strings.Join(past, ", ") + " (check the power supply)"
-	default:
+	var parts []string
+	if len(now) > 0 {
+		parts = append(parts, "now: "+strings.Join(now, ", "))
+	}
+	if len(past) > 0 {
+		parts = append(parts, "since boot: "+strings.Join(past, ", ")+" (check the power supply)")
+	}
+	if len(parts) == 0 {
 		return "ok"
 	}
+	return strings.Join(parts, "; ")
 }

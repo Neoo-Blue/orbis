@@ -205,15 +205,13 @@ func TestALapsedRequestCannotBeApproved(t *testing.T) {
 	}
 }
 
-func TestAFullQueueMakesRoomForTheNextAsk(t *testing.T) {
+func TestAFullQueueStopsTheNotifications(t *testing.T) {
 	m := manager(t)
 	now := time.Now()
-	first := ask(t, m, "site0.example", "c0", now)
-	for i := 1; i < maxPending; i++ {
+	for i := 0; i < maxPending; i++ {
 		ask(t, m, fmt.Sprintf("site%d.example", i), fmt.Sprintf("c%d", i), now)
 	}
-	ask(t, m, "new.example", "newcomer", now)
-	if got, _ := m.Get(first.ID); got.State != Denied {
-		t.Fatalf("the oldest request is %s", got.State)
+	if _, _, err := m.Ask(Request{Host: "new.example", ClientID: "newcomer"}, now); !errors.Is(err, ErrTooMany) {
+		t.Fatalf("got %v", err)
 	}
 }

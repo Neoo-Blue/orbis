@@ -30,8 +30,9 @@ under "Show release notes" when it offers an update.
 - **Notifications could be forged.** A device's hostname could add mail headers, and a note could ping a
   whole Slack or Discord channel or dress up a link.
 - **Smaller.** An oversized post to an approval link is refused before it is read, a negative length no
-  longer means forever, a request left unanswered for a day cannot be approved, a full queue makes room for
-  the next ask, and grants are checked without a lock, so a slow SD card cannot hold up DNS.
+  longer means forever, a request left unanswered for a day cannot be approved, and grants are checked without a lock, so a slow SD card cannot hold up DNS.
+- **Undo could delete your own rule.** Allowing or blocking replaces any rule already on that name, and Undo
+  removed it outright. It now puts the old rule back.
 - **A device's network switch read backwards.** It sat off while the device had access, and repeated the
   Block device button beside it, so it is gone.
 - **A restart after changing lists left the network unfiltered.** Removing a list happened before the

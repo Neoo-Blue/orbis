@@ -14,6 +14,9 @@ export function DNSPage() {
   const [blockedOnly, setBlockedOnly] = useState(false)
   const [clientId, setClientId] = useState('')
   const [paused, setPaused] = useState(false)
+  // Rows hold still under the pointer, or a click lands on whatever moved there.
+  const [held, setHeld] = useState(false)
+  const frozen = paused || held
   const [why, setWhy] = useState<{ name: string; client?: string } | null>(null)
   const sites = useSiteActions()
   const [lookup, setLookup] = useState('')
@@ -25,14 +28,14 @@ export function DNSPage() {
   const { data: clients } = usePoll(() => api.clients.list(), 20000)
   const { data: log, refresh } = usePoll(
     () => api.dns.log({ hours: 2, q: debounced || undefined, blocked_only: blockedOnly, client_id: clientId || undefined, limit: 300 }),
-    paused ? null : 6000,
-    [debounced, blockedOnly, clientId, paused],
+    frozen ? null : 6000,
+    [debounced, blockedOnly, clientId, frozen],
   )
 
   // Live queries from the socket, prepended so the log feels immediate.
   const [live, setLive] = useState<DNSQuery[]>([])
   useLiveBatch(['dns.query'], (batch) => {
-    if (paused) return
+    if (frozen) return
     const additions: DNSQuery[] = []
     for (const ev of batch) {
       const q = ev.data as DNSQuery
@@ -189,7 +192,7 @@ export function DNSPage() {
         ) : (
           <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 520px)', minHeight: 240 }}>
             {why && <WhyDrawer name={why.name} clientId={why.client} onClose={() => setWhy(null)} />}
-            <table className="t">
+            <table className="t" onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)}>
               <thead>
                 <tr>
                   <th style={{ width: 62 }}>Time</th>

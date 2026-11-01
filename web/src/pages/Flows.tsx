@@ -20,6 +20,9 @@ export function FlowsPage() {
   const [clientId, setClientId] = useState('')
   const [hours, setHours] = useLocalStorage<number>('orbis.flows.hours', 24)
   const [paused, setPaused] = useState(false)
+  // Rows hold still under the pointer, or a click lands on whatever moved there.
+  const [held, setHeld] = useState(false)
+  const frozen = paused || held
   const [selected, setSelected] = useState<Flow | null>(null)
   const debounced = useDebounced(query, 250)
   const toast = useToast()
@@ -32,15 +35,15 @@ export function FlowsPage() {
   )
   const { data: activeData } = usePoll(
     () => api.flows.active(600),
-    view === 'live' && !paused ? 3000 : null,
-    [view, paused],
+    view === 'live' && !frozen ? 3000 : null,
+    [view, frozen],
   )
 
   // Live rows arriving over the socket are merged in so the list updates
   // between polls; pausing freezes it so a row can actually be read.
   const [liveFlows, setLiveFlows] = useState<Map<string, Flow>>(new Map())
   useLiveBatch(['flow.new', 'flow.update', 'flow.close'], (batch) => {
-    if (view !== 'live' || paused) return
+    if (view !== 'live' || frozen) return
     setLiveFlows((prev) => {
       const next = new Map(prev)
       for (const ev of batch) {
@@ -125,7 +128,7 @@ export function FlowsPage() {
           </Empty>
         ) : (
           <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 210px)' }}>
-            <table className="t">
+            <table className="t" onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)}>
               <thead>
                 <tr>
                   <th style={{ width: 62 }}>Time</th>

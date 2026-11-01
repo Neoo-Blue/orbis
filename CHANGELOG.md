@@ -10,7 +10,8 @@ under "Show release notes" when it offers an update.
 - **Devices get their names from your router.** In observe mode Orbis never sees DHCP, so devices read as
   bare addresses. It now asks the router what it calls each one.
 - **Act from the row.** The DNS log, Connections and a device's lookups have Allow, Block and Why on each
-  row, with Undo. A device can be marked trusted from its own page.
+  row, with Undo. A live list holds still while the pointer is on it, so a click lands where you aimed. A
+  device can be marked trusted from its own page.
 
 ### Changed
 - **Country codes replace emoji flags.**

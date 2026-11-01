@@ -397,22 +397,33 @@ func (m *Manager) restore() bool {
 		return false
 	}
 	start := time.Now()
+	// Filter with what was saved before anything slow. Dropping a list takes
+	// minutes and nothing is blocked until the matcher has an index, so even a
+	// snapshot that has fallen behind the lists is far better than none, and
+	// the rebuild replaces it.
+	saved, err := m.matcher.LoadIndex(path)
+	if err == nil {
+		if err := m.RebuildLocal(); err != nil {
+			m.log("adblock: rules not applied: %v", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		m.log("adblock: saved index unusable, rebuilding: %v", err)
+	}
+	loaded := err == nil
 	if err := m.SyncConfig(); err != nil {
 		m.log("adblock: %v", err)
 		return false
 	}
+	if !loaded {
+		return false
+	}
 	if _, err := os.Stat(path + dirtySuffix); err == nil {
-		m.log("adblock: lists changed after the saved index was built, rebuilding")
+		m.log("adblock: lists changed after the saved index was built, filtering with it until the rebuild")
 		return false
 	}
-	if err := m.matcher.LoadIndex(path, m.fingerprint()); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			m.log("adblock: saved index unusable, rebuilding: %v", err)
-		}
+	if saved != m.fingerprint() {
+		m.log("adblock: the list set changed, filtering with the saved index until the rebuild")
 		return false
-	}
-	if err := m.RebuildLocal(); err != nil {
-		m.log("adblock: rules not applied: %v", err)
 	}
 	m.mu.Lock()
 	m.lastBuild, m.lastCount = time.Now(), m.matcher.Count()
@@ -494,7 +505,7 @@ func (m *Manager) Run(ctx context.Context) {
 		if err := m.Rebuild(ctx); err != nil {
 			m.log("adblock: initial rebuild failed: %v", err)
 		} else {
-			m.log("adblock: initial index ready after %s; lookups before this were unfiltered", time.Since(start).Round(time.Millisecond))
+			m.log("adblock: initial index ready after %s", time.Since(start).Round(time.Millisecond))
 		}
 	}
 	go func() {

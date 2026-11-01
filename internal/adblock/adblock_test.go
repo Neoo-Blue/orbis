@@ -345,8 +345,8 @@ func TestSavedIndexAnswersLikeTheOriginal(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded := New()
-	if err := loaded.LoadIndex(path, "lists"); err != nil {
-		t.Fatal(err)
+	if saved, err := loaded.LoadIndex(path); err != nil || saved != "lists" {
+		t.Fatalf("fingerprint %q: %v", saved, err)
 	}
 	for _, name := range []string{"ads.example.com", "x.tracker.example.net", "ok.tracker.example.net", "ad7.example.org", "safe1.tracker.example.net", "fine.example.org"} {
 		if got, want := loaded.Lookup(name), m.Lookup(name); got != want {
@@ -375,7 +375,7 @@ func TestDamagedIndexIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := New()
-	if err := fresh.LoadIndex(path, "lists"); err == nil {
+	if _, err := fresh.LoadIndex(path); err == nil {
 		t.Fatal("a truncated index must be refused")
 	}
 	if fresh.Count() != 0 {
@@ -383,17 +383,29 @@ func TestDamagedIndexIsRefused(t *testing.T) {
 	}
 }
 
-func TestAnIndexBuiltFromOtherListsIsRefused(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "index.bin")
-	b := NewBuilder()
-	b.AddBlock("ads.example.com", "list-a", "ads", false)
-	m := New()
-	m.Commit(b)
-	if err := m.SaveIndex(path, "lists"); err != nil {
+func TestAnOutOfDateIndexFiltersUntilTheRebuild(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "orbis.db"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := New().LoadIndex(path, "other lists"); err == nil {
-		t.Fatal("a list switched off in the YAML must not come back from the snapshot")
+	defer st.Close()
+	cfg := config.Default()
+	cfg.Store.Path = filepath.Join(dir, "orbis.db")
+	mgr := NewManager(st, New(), cfg, func(string, ...any) {})
+	b := NewBuilder()
+	b.AddBlock("ads.example.com", "list-a", "ads", false)
+	mgr.matcher.Commit(b)
+	if err := mgr.matcher.SaveIndex(mgr.snapshotPath(), "a different set of lists"); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := NewManager(st, New(), cfg, func(string, ...any) {})
+	if fresh.restore() {
+		t.Fatal("an out of date index must still ask for a rebuild")
+	}
+	if !fresh.matcher.Lookup("ads.example.com").Blocked {
+		t.Fatal("while the rebuild waits, filtering should carry on with what was saved")
 	}
 }
 

@@ -4,6 +4,13 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.36.2
+
+### Fixed
+- **A restart after changing lists left the network unfiltered.** Removing a list happened before the
+  block index loaded, which on the reference Pi meant about seven minutes with nothing blocked. The saved
+  index now loads first and keeps filtering, even if it is slightly out of date, until the rebuild lands.
+
 ## v1.36.1
 
 ### Fixed

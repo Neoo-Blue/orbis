@@ -6,7 +6,36 @@ under "Show release notes" when it offers an update.
 
 ## v1.36.2
 
+### Added
+- **Devices get their names from your router.** In observe mode Orbis never sees DHCP, so devices read as
+  bare addresses. It now asks the router what it calls each one.
+- **Act from the row.** The DNS log, Connections and a device's lookups have Allow, Block and Why on each
+  row, with Undo. A live list holds still while the pointer is on it, so a click lands where you aimed. A
+  device can be marked trusted from its own page.
+
+### Changed
+- **Country codes replace emoji flags.**
+
 ### Fixed
+- **Orbis never saw a Pi running short of power.** It read a file that says 0 on some kernels. It now asks
+  the firmware, and low voltage shows in Needs you, since it can corrupt the SD card.
+- **Anyone on the network could lock you out of the dashboard.** A crafted request to the block page made
+  Orbis treat its own address as a blocked site, and no sign-in was needed. Only a real lookup can do that now.
+- **Asking to unblock could reach further than the page showed.** A request could name something never
+  blocked, or a whole suffix like `co.uk`. Now it has to be blocked for that device, and not a public suffix.
+- **Threat lists were hidden by ad lists.** A name on both read as an ad, so it could be opened for everyone,
+  for good, and approving a site also opened anything under it on a threat list. Encrypted DNS services now
+  count as threats too.
+- **Trust followed the address.** A guest who took a trusted device's address could unblock sites. Orbis now
+  checks the device's hardware address, and logs each one. Threat-listed sites also notify you.
+- **Notifications could be forged.** A device's hostname could add mail headers, and a note could ping a
+  whole Slack or Discord channel or dress up a link.
+- **Smaller.** An oversized post to an approval link is refused before it is read, a negative length no
+  longer means forever, a request left unanswered for a day cannot be approved, and grants are checked without a lock, so a slow SD card cannot hold up DNS.
+- **Undo could delete your own rule.** Allowing or blocking replaces any rule already on that name, and Undo
+  removed it outright. It now puts the old rule back.
+- **A device's network switch read backwards.** It sat off while the device had access, and repeated the
+  Block device button beside it, so it is gone.
 - **A restart after changing lists left the network unfiltered.** Removing a list happened before the
   block index loaded, which on the reference Pi meant about seven minutes with nothing blocked. The saved
   index now loads first and keeps filtering, even if it is slightly out of date, until the rebuild lands.

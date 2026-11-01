@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -208,6 +209,18 @@ func TestOnlyNamesTheResolverPointedHereAreClaimed(t *testing.T) {
 	}
 	if _, ok := g.AddrFor(netip.MustParseAddr("127.0.0.1"), "local.example.com", now); ok || g.Pointed("local.example.com", now) {
 		t.Fatal("a client given the sinkhole leaves no claim")
+	}
+}
+
+func TestReachingThisNodeClaimsNothing(t *testing.T) {
+	g := guardOn("192.168.50.75/24")
+	now := time.Now()
+	addr, ok := g.Reach(netip.MustParseAddr("192.168.50.9"), now)
+	if !ok || addr.String() != "192.168.50.75" {
+		t.Fatalf("got %s %v", addr, ok)
+	}
+	if g.Pointed("192.168.50.75", now) {
+		t.Fatal("looking up an address made it a blocked site")
 	}
 }
 
@@ -465,5 +478,23 @@ func TestThePageNeverHoldsAConnectionOpen(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "<title>Opening fine.example.com</title>") {
 		t.Fatalf("title in the opening state: %.200s", w.Body.String())
+	}
+}
+
+func TestADoubleTapLandsOnTheSite(t *testing.T) {
+	refused := errors.New("refused")
+	s := &Server{
+		Explain: func(context.Context, string, netip.Addr) Page { return Page{Host: "site.example"} },
+		Ask:     func(string, AskForm, netip.Addr) (AskState, error) { return AskState{}, refused },
+		Status:  func(string, netip.Addr) AskState { return AskState{} },
+		Self:    func(string, int, netip.Addr) (AskState, error) { return AskState{}, refused },
+	}
+	r := httptest.NewRequest(http.MethodPost, "http://site.example/__orbis/self", strings.NewReader("minutes=60&back=/page"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Origin", "http://site.example")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/page" {
+		t.Fatalf("got %d %q", w.Code, w.Header().Get("Location"))
 	}
 }

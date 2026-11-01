@@ -1150,3 +1150,10 @@ table.t tbody tr, .plate-list > li, .stack-in > * { animation: row-in .3s var(--
 
 .phone-steps { display: grid; gap: 10px; padding-left: 20px; font-size: 13.5px; }
 .phone-steps .mono { font-size: 12.5px; overflow-wrap: anywhere; }
+
+/* Row actions: there when wanted, out of the way otherwise. */
+table.t td.tools { white-space: nowrap; text-align: right; }
+table.t td.tools .btn { padding: 2px 9px; margin-left: 4px; opacity: 0; transition: opacity .14s var(--ease), background .16s var(--ease), border-color .16s var(--ease); }
+table.t tbody tr:hover td.tools .btn, table.t td.tools .btn:focus-visible { opacity: 1; }
+@media (hover: none) { table.t td.tools .btn { opacity: 1; } }
+.cc { display: inline-block; min-width: 20px; margin-right: 6px; font: 500 10.5px var(--mono); color: var(--text-faint); }

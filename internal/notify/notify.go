@@ -161,12 +161,14 @@ func (n *Notifier) postWebhook(ctx context.Context, hook config.Webhook, ev stor
 		}
 		hook.URL, payload = target, message
 	case "slack":
+		// Titles and details carry what guests typed and devices call themselves.
 		payload = map[string]string{
-			"text": fmt.Sprintf("*[%s] %s*\n%s", strings.ToUpper(ev.Severity), ev.Title, ev.Detail),
+			"text": slackEscape.Replace(fmt.Sprintf("*[%s] %s*\n%s", strings.ToUpper(ev.Severity), ev.Title, ev.Detail)),
 		}
 	case "discord":
-		payload = map[string]string{
-			"content": fmt.Sprintf("**[%s] %s**\n%s", strings.ToUpper(ev.Severity), ev.Title, ev.Detail),
+		payload = map[string]any{
+			"content":          strings.ReplaceAll(fmt.Sprintf("**[%s] %s**\n%s", strings.ToUpper(ev.Severity), ev.Title, ev.Detail), "](", "]\\("),
+			"allowed_mentions": map[string]any{"parse": []string{}},
 		}
 	default:
 		payload = map[string]any{
@@ -203,6 +205,13 @@ func (n *Notifier) postWebhook(ctx context.Context, hook config.Webhook, ev stor
 	return nil
 }
 
+var slackEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
+// mailSubject is one line, or a device's hostname could add headers of its own.
+func mailSubject(ev store.Event) string {
+	return strings.Join(strings.Fields(fmt.Sprintf("[Orbis %s] %s", strings.ToUpper(ev.Severity), ev.Title)), " ")
+}
+
 func (n *Notifier) sendEmail(c config.EmailConfig, ev store.Event) error {
 	if c.Host == "" || len(c.To) == 0 {
 		return fmt.Errorf("email sink is incomplete")
@@ -211,11 +220,10 @@ func (n *Notifier) sendEmail(c config.EmailConfig, ev store.Event) error {
 	if from == "" {
 		from = "orbis@localhost"
 	}
-	subject := fmt.Sprintf("[Orbis %s] %s", strings.ToUpper(ev.Severity), ev.Title)
 	msg := strings.Join([]string{
 		"From: " + from,
 		"To: " + strings.Join(c.To, ", "),
-		"Subject: " + subject,
+		"Subject: " + mailSubject(ev),
 		"Date: " + ev.TS.Format(time.RFC1123Z),
 		"Content-Type: text/plain; charset=utf-8",
 		"",

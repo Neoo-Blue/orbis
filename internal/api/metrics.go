@@ -144,6 +144,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		if r.TempC > 0 {
 			m.gauge("orbis_host_temp_celsius", "SoC or CPU temperature.", r.TempC)
 		}
+		if strings.Contains(r.Throttled, "under-voltage") {
+			m.gauge("orbis_host_undervoltage", "1 once the firmware has recorded low voltage since boot.", 1)
+		}
 	}
 
 	// Threat intelligence.

@@ -105,6 +105,30 @@ func TestMatcherHierarchy(t *testing.T) {
 	}
 }
 
+func TestAThreatListIsNotHiddenByAnAdList(t *testing.T) {
+	m := New()
+	b := NewBuilder()
+	b.AddBlock("both.example", "a-ad-list", "ads", false)
+	b.AddBlock("both.example", "z-threat-list", "malware", false)
+	b.AddBlock("hidden.example", "a-ad-list", "ads", false)
+	b.AddBlock("hidden.example", "z-threat-list", "malware", true)
+	b.AddBlock("dns.example", "builtin:doh-bypass", "bypass", true)
+	b.AddBlock("ads.example", "a-ad-list", "ads", false)
+	b.AddBlock("example", "z-threat-list", "malware", true)
+	m.Commit(b)
+	if got := m.Lookup("both.example").Category; got != "malware" {
+		t.Errorf("both.example reads %q", got)
+	}
+	for name, want := range map[string]bool{
+		"both.example": true, "hidden.example": true, "x.hidden.example": true, "dns.example": true,
+		"ads.example": false, "nothing.example": false,
+	} {
+		if got := m.Threat(name); got != want {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}
+
 func TestMatcherNeverBlocksTLD(t *testing.T) {
 	// A malformed list entry of "com" must not take the whole internet down.
 	m := New()

@@ -313,6 +313,11 @@ func (s *Server) serveAsk(w http.ResponseWriter, r *http.Request, client netip.A
 		}, client)
 	}
 	if err != nil {
+		// A double tap: the first one opened the site, so there is nothing to refuse.
+		if !s.Explain(r.Context(), host, client).Blocked {
+			http.Redirect(w, r, back, http.StatusSeeOther)
+			return
+		}
 		w.Header().Set("Referrer-Policy", "same-origin")
 		s.render(w, r, client, back, err.Error())
 		return
@@ -605,10 +610,27 @@ func (g *Guard) Forgive(client netip.Addr) {
 }
 
 // AddrFor returns the address a client should be sent to for a blocked name, or
-// false when it should get the plain sinkhole instead.
+// false when it should get the plain sinkhole instead. It stakes a claim on the
+// name, so it is the resolver's alone: a page that claimed its own Host would
+// let anyone turn this node's address into a blocked site.
 func (g *Guard) AddrFor(client netip.Addr, name string, now time.Time) (netip.Addr, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	addr, ok := g.reach(client, now)
+	if !ok {
+		return addr, false
+	}
+	return addr, g.remember(nameKey(name), now)
+}
+
+// Reach returns this node's address on a client's network, and claims nothing.
+func (g *Guard) Reach(client netip.Addr, now time.Time) (netip.Addr, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.reach(client, now)
+}
+
+func (g *Guard) reach(client netip.Addr, now time.Time) (netip.Addr, bool) {
 	if now.Sub(g.netsRead) > interfacesEvery {
 		if nets, err := g.interfaces(); err == nil {
 			g.nets, g.netsRead = nets, now
@@ -616,7 +638,7 @@ func (g *Guard) AddrFor(client netip.Addr, name string, now time.Time) (netip.Ad
 	}
 	for _, p := range g.nets {
 		if p.Contains(client) {
-			return p.Addr(), g.remember(nameKey(name), now)
+			return p.Addr(), true
 		}
 	}
 	return netip.Addr{}, false

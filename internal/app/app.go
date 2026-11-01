@@ -16,13 +16,12 @@ import (
 	"time"
 
 	"github.com/Neoo-Blue/orbis/internal/adblock"
-	"github.com/Neoo-Blue/orbis/internal/blockpage"
 	"github.com/Neoo-Blue/orbis/internal/ai"
 	"github.com/Neoo-Blue/orbis/internal/alerts"
+	"github.com/Neoo-Blue/orbis/internal/blockpage"
 	"github.com/Neoo-Blue/orbis/internal/config"
 	"github.com/Neoo-Blue/orbis/internal/confighistory"
 	"github.com/Neoo-Blue/orbis/internal/consent"
-	"github.com/Neoo-Blue/orbis/internal/unblock"
 	"github.com/Neoo-Blue/orbis/internal/country"
 	"github.com/Neoo-Blue/orbis/internal/dhcp"
 	"github.com/Neoo-Blue/orbis/internal/discover"
@@ -45,6 +44,7 @@ import (
 	"github.com/Neoo-Blue/orbis/internal/store"
 	"github.com/Neoo-Blue/orbis/internal/threat"
 	"github.com/Neoo-Blue/orbis/internal/topology"
+	"github.com/Neoo-Blue/orbis/internal/unblock"
 	"github.com/Neoo-Blue/orbis/internal/update"
 	"github.com/Neoo-Blue/orbis/internal/usage"
 	"github.com/Neoo-Blue/orbis/internal/vpn"
@@ -77,20 +77,20 @@ type App struct {
 	// BlockPage shows why a site was stopped; BlockGuard decides who can see it.
 	BlockPage  *blockpage.Server
 	BlockGuard *blockpage.Guard
-	DNSCrypt  *dnsproxy.EncryptedServer
-	DHCP      *dhcp.Server
-	Firewall  *firewall.Engine
-	VPN       *vpn.Manager
-	Tailscale *vpn.Tailscale
-	Egress    *vpn.EgressManager
-	Net       *netconf.Manager
-	WAN       *netconf.WANMonitor
-	PortMap   *portmap.Server
-	Topology  *topology.Scanner
-	Intercept *intercept.Manager
-	MITM      *mitm.Proxy
-	CA        *mitm.CA
-	Lounge    *lounge.Manager
+	DNSCrypt   *dnsproxy.EncryptedServer
+	DHCP       *dhcp.Server
+	Firewall   *firewall.Engine
+	VPN        *vpn.Manager
+	Tailscale  *vpn.Tailscale
+	Egress     *vpn.EgressManager
+	Net        *netconf.Manager
+	WAN        *netconf.WANMonitor
+	PortMap    *portmap.Server
+	Topology   *topology.Scanner
+	Intercept  *intercept.Manager
+	MITM       *mitm.Proxy
+	CA         *mitm.CA
+	Lounge     *lounge.Manager
 
 	AI         *ai.Client
 	Intel      *ai.Intel
@@ -573,6 +573,7 @@ func New(cfg *config.Config, logf func(string, ...any)) (*App, error) {
 	if a.CA != nil {
 		a.BlockPage.Leaf = a.CA.Leaf
 	}
+	a.Unblock.Threat = a.Matcher.Threat
 	a.DNS = dnsproxy.New(cfg, st, a.Matcher, dnsproxy.Hooks{
 		OnAnswer:     a.Tracker.NoteHostname,
 		OnQuery:      a.onDNSQuery,
@@ -723,6 +724,9 @@ func (a *App) Start() {
 
 	a.Tracker.Start()
 	a.Registry.Start()
+
+	a.wg.Add(1)
+	go a.nameLoop()
 
 	if cfg.Capture.Enabled {
 		if err := a.Capture.Start(); err != nil {
@@ -1185,6 +1189,12 @@ func (a *App) raise(severity, category, title, detail string) {
 // emit records an event that is a detection rather than a defect: stored,
 // streamed, notified when it is a warning or worse, never filed as a problem.
 func (a *App) emit(ev store.Event) {
+	if ev.ID == "" {
+		ev.ID = uuid.NewString()
+	}
+	if ev.TS.IsZero() {
+		ev.TS = time.Now()
+	}
 	_ = a.Store.AddEvent(ev)
 	if a.Notifier != nil && store.SeverityRank(ev.Severity) >= store.SeverityRank(store.SevWarning) {
 		a.Notifier.Send(ev)

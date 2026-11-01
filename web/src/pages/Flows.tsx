@@ -3,7 +3,8 @@ import { api } from '../api'
 import { useLiveBatch } from '../live'
 import { usePoll, useDebounced, useLocalStorage } from '../hooks'
 import { Card, Empty, Icons, Loading, Search, Segmented, useToast } from '../ui'
-import { ago, bytes, clientName, clock, countryFlag, flowTarget, riskColor } from '../format'
+import { ago, bytes, clientName, clock, flowTarget, riskColor } from '../format'
+import { useSiteActions, WhyDrawer } from './Why'
 import type { Client, Flow } from '../types'
 
 type View = 'live' | 'history'
@@ -11,12 +12,17 @@ type View = 'live' | 'history'
 /** The connection log. Little Snitch's list view, but for the whole network:
  *  every row is one connection with who asked for it and where it went. */
 export function FlowsPage() {
+  const [why, setWhy] = useState<{ name: string; client?: string } | null>(null)
+  const sites = useSiteActions()
   const [view, setView] = useLocalStorage<View>('orbis.flows.view', 'live')
   const [query, setQuery] = useState('')
   const [verdict, setVerdict] = useLocalStorage<string>('orbis.flows.verdict', '')
   const [clientId, setClientId] = useState('')
   const [hours, setHours] = useLocalStorage<number>('orbis.flows.hours', 24)
   const [paused, setPaused] = useState(false)
+  // Rows hold still under the pointer, or a click lands on whatever moved there.
+  const [held, setHeld] = useState(false)
+  const frozen = paused || held
   const [selected, setSelected] = useState<Flow | null>(null)
   const debounced = useDebounced(query, 250)
   const toast = useToast()
@@ -29,15 +35,15 @@ export function FlowsPage() {
   )
   const { data: activeData } = usePoll(
     () => api.flows.active(600),
-    view === 'live' && !paused ? 3000 : null,
-    [view, paused],
+    view === 'live' && !frozen ? 3000 : null,
+    [view, frozen],
   )
 
   // Live rows arriving over the socket are merged in so the list updates
   // between polls; pausing freezes it so a row can actually be read.
   const [liveFlows, setLiveFlows] = useState<Map<string, Flow>>(new Map())
   useLiveBatch(['flow.new', 'flow.update', 'flow.close'], (batch) => {
-    if (view !== 'live' || paused) return
+    if (view !== 'live' || frozen) return
     setLiveFlows((prev) => {
       const next = new Map(prev)
       for (const ev of batch) {
@@ -122,7 +128,7 @@ export function FlowsPage() {
           </Empty>
         ) : (
           <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 210px)' }}>
-            <table className="t">
+            <table className="t" onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)}>
               <thead>
                 <tr>
                   <th style={{ width: 62 }}>Time</th>
@@ -133,6 +139,7 @@ export function FlowsPage() {
                   <th className="num">Down</th>
                   <th className="num">Up</th>
                   <th style={{ width: 78 }}>Verdict</th>
+                  <th style={{ width: 120 }} />
                 </tr>
               </thead>
               <tbody>
@@ -147,7 +154,7 @@ export function FlowsPage() {
                         {c ? clientName(c) : f.src_ip}
                       </td>
                       <td className="truncate" style={{ maxWidth: 260 }} title={`${flowTarget(f)} (${f.dst_ip})`}>
-                        {f.country && <span style={{ marginRight: 6 }}>{countryFlag(f.country)}</span>}
+                        {f.country && <span className="cc">{f.country}</span>}
                         {flowTarget(f)}
                         {f.risk > 0.4 && (
                           <span style={{ marginLeft: 6, color: riskColor(f.risk), fontSize: 10 }}>●</span>
@@ -162,6 +169,14 @@ export function FlowsPage() {
                       <td>
                         <span className={`tag ${f.verdict}`}>{f.verdict}</span>
                       </td>
+                      <td className="tools" onClick={(e) => e.stopPropagation()}>
+                        {(f.hostname || f.sni) && (
+                          <>
+                            <button className="btn sm" onClick={() => setWhy({ name: f.hostname || f.sni || '', client: f.client_id })}>Why</button>
+                            <button className="btn sm" onClick={() => void sites.block(f.hostname || f.sni || '')}>Block</button>
+                          </>
+                        )}
+                      </td>
                     </tr>
                   )
                 })}
@@ -171,6 +186,7 @@ export function FlowsPage() {
         )}
       </Card>
 
+      {why && <WhyDrawer name={why.name} clientId={why.client} onClose={() => setWhy(null)} />}
       {selected && (
         <FlowDetail
           flow={selected}
@@ -187,6 +203,7 @@ function FlowDetail({ flow, client, onClose, onBlock }: {
   flow: Flow; client?: Client; onClose: () => void; onBlock: () => void
 }) {
   const [check, setCheck] = useState<string | null>(null)
+  const sites = useSiteActions()
   const host = flow.hostname || flow.sni
 
   useEffect(() => {
@@ -214,7 +231,7 @@ function FlowDetail({ flow, client, onClose, onBlock }: {
             {flow.app && <><dt>Application</dt><dd>{flow.app}</dd></>}
             {flow.as_org && <><dt>Network</dt><dd>AS{flow.asn} {flow.as_org}</dd></>}
             {flow.country && (
-              <><dt>Location</dt><dd>{countryFlag(flow.country)} {flow.city || ''} {flow.country}</dd></>
+              <><dt>Location</dt><dd>{flow.city ? `${flow.city}, ` : ''}{flow.country}</dd></>
             )}
             {flow.ja4 && <><dt>TLS fingerprint</dt><dd style={{ fontSize: 11 }}>{flow.ja4}</dd></>}
             <dt>Started</dt><dd>{ago(flow.started_at)}</dd>
@@ -237,20 +254,10 @@ function FlowDetail({ flow, client, onClose, onBlock }: {
               <button className="btn danger" onClick={onBlock}>Kill this connection</button>
             )}
             {host && (
-              <button className="btn" onClick={async () => {
-                await api.adblock.addRule({ domain: host, action: 'block', wildcard: true, note: 'from connection detail' })
-                await api.dns.flush(host)
-              }}>
-                Block {host}
-              </button>
+              <button className="btn" onClick={() => void sites.block(host)}>Block {host}</button>
             )}
             {host && (
-              <button className="btn" onClick={async () => {
-                await api.adblock.addRule({ domain: host, action: 'allow', note: 'from connection detail' })
-                await api.dns.flush(host)
-              }}>
-                Always allow {host}
-              </button>
+              <button className="btn" onClick={() => void sites.allow(host)}>Always allow {host}</button>
             )}
           </div>
         </div>

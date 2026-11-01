@@ -7,14 +7,18 @@ import { clientName, clock, compact, pct } from '../format'
 import type { Client, DNSQuery } from '../types'
 
 import { DNSRecordsCard } from './DNSRecords'
-import { WhyDrawer } from './Why'
+import { useSiteActions, WhyDrawer } from './Why'
 
 export function DNSPage() {
   const [query, setQuery] = useState('')
   const [blockedOnly, setBlockedOnly] = useState(false)
   const [clientId, setClientId] = useState('')
   const [paused, setPaused] = useState(false)
+  // Rows hold still under the pointer, or a click lands on whatever moved there.
+  const [held, setHeld] = useState(false)
+  const frozen = paused || held
   const [why, setWhy] = useState<{ name: string; client?: string } | null>(null)
+  const sites = useSiteActions()
   const [lookup, setLookup] = useState('')
   const [lookupResult, setLookupResult] = useState<Awaited<ReturnType<typeof api.adblock.check>> | null>(null)
   const debounced = useDebounced(query, 250)
@@ -24,14 +28,14 @@ export function DNSPage() {
   const { data: clients } = usePoll(() => api.clients.list(), 20000)
   const { data: log, refresh } = usePoll(
     () => api.dns.log({ hours: 2, q: debounced || undefined, blocked_only: blockedOnly, client_id: clientId || undefined, limit: 300 }),
-    paused ? null : 6000,
-    [debounced, blockedOnly, clientId, paused],
+    frozen ? null : 6000,
+    [debounced, blockedOnly, clientId, frozen],
   )
 
   // Live queries from the socket, prepended so the log feels immediate.
   const [live, setLive] = useState<DNSQuery[]>([])
   useLiveBatch(['dns.query'], (batch) => {
-    if (paused) return
+    if (frozen) return
     const additions: DNSQuery[] = []
     for (const ev of batch) {
       const q = ev.data as DNSQuery
@@ -188,7 +192,7 @@ export function DNSPage() {
         ) : (
           <div className="table-wrap" style={{ maxHeight: 'calc(100vh - 520px)', minHeight: 240 }}>
             {why && <WhyDrawer name={why.name} clientId={why.client} onClose={() => setWhy(null)} />}
-            <table className="t">
+            <table className="t" onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)}>
               <thead>
                 <tr>
                   <th style={{ width: 62 }}>Time</th>
@@ -198,6 +202,7 @@ export function DNSPage() {
                   <th>Answer</th>
                   <th style={{ width: 88 }}>Result</th>
                   <th className="num" style={{ width: 64 }}>Latency</th>
+                  <th style={{ width: 76 }} />
                 </tr>
               </thead>
               <tbody>
@@ -229,6 +234,11 @@ export function DNSPage() {
                       </td>
                       <td className="num" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
                         {q.latency_ms ? `${q.latency_ms.toFixed(0)}ms` : '-'}
+                      </td>
+                      <td className="tools" onClick={(e) => e.stopPropagation()}>
+                        {q.blocked
+                          ? <button className="btn sm" onClick={() => void sites.allow(q.name)}>Allow</button>
+                          : <button className="btn sm" onClick={() => void sites.block(q.name)}>Block</button>}
                       </td>
                     </tr>
                   )

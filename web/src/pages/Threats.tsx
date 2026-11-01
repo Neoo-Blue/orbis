@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Banner, Card, Empty, Field, Icons, Loading, Segmented, Stat, Switch, useConfirm, useToast } from '../ui'
-import { ago, countryFlag, num } from '../format'
+import { ago, num } from '../format'
 import type { CountryStatus, IDSStatus, ThreatDecision, ThreatFeed, ThreatHit } from '../types'
-import { bytes, countryFlag as flag } from '../format'
+import { bytes } from '../format'
 import { IntelTab } from './ai/IntelTab'
 
 /**
@@ -154,7 +154,7 @@ function HitsTable({ hits, devices, hours }: {
                   <td>
                     <span className="mono">{h.remote_ip}</span>
                     {(h.country || h.as_org) && (
-                      <span className="hint" style={{ marginLeft: 6 }}>{h.country ? countryFlag(h.country) : ''} {h.as_org}</span>
+                      <span className="hint" style={{ marginLeft: 6 }}>{h.country} {h.as_org}</span>
                     )}
                   </td>
                   <td>{h.source}{h.reason ? <span className="hint"> · {h.reason}</span> : null}</td>
@@ -367,7 +367,7 @@ function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string |
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {data.countries.map((c) => (
               <span key={c} className="tag" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                {flag(c)} {countryName(c)} <span className="hint mono">{c}</span>
+                {countryName(c)} <span className="hint mono">{c}</span>
                 {data.set_sizes?.[c] ? <span className="hint">{num(data.set_sizes[c])} ranges</span> : null}
                 <button className="btn sm" disabled={busy === 'rm:' + c} onClick={() => act('rm:' + c, () => api.country.rule(c, 'remove'), `${countryName(c)} removed`)} title="Remove">×</button>
               </span>
@@ -405,7 +405,7 @@ function CountriesTab({ data, busy, act }: { data: CountryStatus; busy: string |
             <tbody>
               {seen.map((s) => (
                 <tr key={s.country}>
-                  <td>{flag(s.country)} {countryName(s.country)} <span className="hint mono">{s.country}</span></td>
+                  <td>{countryName(s.country)} <span className="hint mono">{s.country}</span></td>
                   <td className="mono">{num(s.connections)}</td>
                   <td className="mono">{bytes(s.bytes)}</td>
                   <td className="mono">{num((data.counters?.['dns:' + s.country] ?? 0) + (data.counters?.['flow:' + s.country] ?? 0))}</td>
@@ -509,7 +509,7 @@ function AttacksTab({ data, busy, act }: { data: IDSStatus; busy: string | null;
               {(data.alerts ?? []).map((a) => (
                 <tr key={a.id}>
                   <td className="hint" style={{ whiteSpace: 'nowrap' }}>{ago(a.ts)}</td>
-                  <td><span className="mono">{a.ip}</span>{(a.country || a.as_org) && <span className="hint" style={{ marginLeft: 6 }}>{a.country ? flag(a.country) : ''} {a.as_org}</span>}</td>
+                  <td><span className="mono">{a.ip}</span>{(a.country || a.as_org) && <span className="hint" style={{ marginLeft: 6 }}>{a.country} {a.as_org}</span>}</td>
                   <td>{titles[a.scenario] ?? a.scenario} <span className="hint">· {a.count} in window</span>{a.sample && <div className="hint mono" style={{ fontSize: 11, maxWidth: 420 }} title={a.sample}>{a.sample.slice(0, 90)}</div>}</td>
                   <td className="hint">{a.host || SOURCE_LABEL[a.source] || a.source}</td>
                   <td>{a.action === 'ban' ? <span className="tag ok">banned{a.ban_until ? ` until ${ago(a.ban_until).replace(' ago', '')}` : ''}</span> : a.action === 'reported' ? <span className="tag warn" title="Inside the network: reported, not banned">reported</span> : <span className="tag err">ban failed</span>}</td>
@@ -527,7 +527,7 @@ function AttacksTab({ data, busy, act }: { data: IDSStatus; busy: string | null;
             <thead><tr><th>Address</th><th>Alerts</th><th>Bans</th><th>Scenarios</th><th>Last seen</th></tr></thead>
             <tbody>{(data.offenders ?? []).map((o) => (
               <tr key={o.ip}>
-                <td><span className="mono">{o.ip}</span>{(o.country || o.as_org) && <span className="hint" style={{ marginLeft: 6 }}>{o.country ? flag(o.country) : ''} {o.as_org}</span>}</td>
+                <td><span className="mono">{o.ip}</span>{(o.country || o.as_org) && <span className="hint" style={{ marginLeft: 6 }}>{o.country} {o.as_org}</span>}</td>
                 <td className="mono">{o.alerts}</td><td className="mono">{o.bans}</td>
                 <td className="hint">{o.scenarios.map((k) => titles[k] ?? k).join(', ')}</td>
                 <td className="hint">{ago(o.last)}</td>

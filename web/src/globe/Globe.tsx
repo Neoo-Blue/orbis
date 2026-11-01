@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { GlobeScene, type ArcSpec, type PointSpec } from './scene'
 import type { GlobeArc, GlobeData } from '../types'
 import { arcKind, type ColorBy } from './kind'
-import { bytes, countryFlag } from '../format'
+import { bytes } from '../format'
 
 interface Props {
   data: GlobeData | null
@@ -148,7 +148,7 @@ export function Globe({ data, liveArcs, onSelect, focus, autoRotate = true, clas
             ↓ {bytes(hover.arc.bytes_in ?? 0)} received · ↑ {bytes(hover.arc.bytes_out ?? 0)} sent
           </div>
           <div className="meta">
-            {hover.arc.country && <>{countryFlag(hover.arc.country)} {hover.arc.city || hover.arc.country} · </>}
+            {hover.arc.country && <>{hover.arc.city || hover.arc.country} · </>}
             {hover.arc.org || hover.arc.dst}
           </div>
           {hover.arc.verdict !== 'allow' && (

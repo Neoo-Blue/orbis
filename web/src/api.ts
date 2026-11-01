@@ -541,9 +541,9 @@ export const api = {
     diagnose: (domain: string, opts: { client_id?: string; resolve?: boolean } = {}) =>
       post<Diagnosis>('/dnstools/diagnose', { domain, resolve: true, ...opts }),
     allow: (domain: string, note?: string) =>
-      post<{ ok: boolean }>('/dnstools/allow', { domain, note }),
+      post<{ ok: boolean; previous?: LocalRule | null }>('/dnstools/allow', { domain, note }),
     block: (domain: string, wildcard = false, note?: string) =>
-      post<{ ok: boolean }>('/dnstools/block', { domain, wildcard, note }),
+      post<{ ok: boolean; previous?: LocalRule | null }>('/dnstools/block', { domain, wildcard, note }),
     unblock: (domain: string) => post<{ ok: boolean }>('/dnstools/unblock', { domain }),
     importList: (source: { text?: string; file?: string; filename?: string }, opts: { action?: 'block' | 'allow'; dry_run?: boolean; note?: string } = {}) =>
       post<ImportResult>('/dnstools/import', { ...source, ...opts }),

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -237,17 +238,50 @@ func readTemp() float64 {
 	return 0
 }
 
-// readThrottled decodes the Raspberry Pi firmware's throttle word: the low
-// bits are "now", the high bits "since boot".
+// throttled keeps the last reading: resources are sampled every five seconds,
+// and asking the firmware starts a process.
+var throttled struct {
+	sync.Mutex
+	at   time.Time
+	word string
+}
+
 func readThrottled() string {
+	throttled.Lock()
+	defer throttled.Unlock()
+	if time.Since(throttled.at) >= time.Minute {
+		throttled.at = time.Now()
+		throttled.word = ""
+		if v, ok := throttleWord(); ok {
+			throttled.word = describeThrottle(v)
+		}
+	}
+	return throttled.word
+}
+
+// throttleWord asks the firmware itself. The sysfs file reads 0 on some kernels
+// while the firmware has recorded under-voltage, so it is only the fallback.
+func throttleWord() (uint64, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "vcgencmd", "get_throttled").Output(); err == nil {
+		if _, word, ok := strings.Cut(strings.TrimSpace(string(out)), "=0x"); ok {
+			if v, err := strconv.ParseUint(word, 16, 32); err == nil {
+				return v, true
+			}
+		}
+	}
 	b, err := os.ReadFile("/sys/devices/platform/soc/soc:firmware/get_throttled")
 	if err != nil {
-		return ""
+		return 0, false
 	}
 	v, err := strconv.ParseUint(strings.TrimPrefix(strings.TrimSpace(string(b)), "0x"), 16, 32)
-	if err != nil {
-		return ""
-	}
+	return v, err == nil
+}
+
+// describeThrottle decodes the throttle word: the low bits are "now", the high
+// bits "since boot".
+func describeThrottle(v uint64) string {
 	var now, past []string
 	if v&0x1 != 0 {
 		now = append(now, "under-voltage")
@@ -273,12 +307,15 @@ func readThrottled() string {
 	if v&0x80000 != 0 {
 		past = append(past, "at the temperature limit")
 	}
-	switch {
-	case len(now) > 0:
-		return "now: " + strings.Join(now, ", ")
-	case len(past) > 0:
-		return "since boot: " + strings.Join(past, ", ") + " (check the power supply)"
-	default:
+	var parts []string
+	if len(now) > 0 {
+		parts = append(parts, "now: "+strings.Join(now, ", "))
+	}
+	if len(past) > 0 {
+		parts = append(parts, "since boot: "+strings.Join(past, ", ")+" (check the power supply)")
+	}
+	if len(parts) == 0 {
 		return "ok"
 	}
+	return strings.Join(parts, "; ")
 }

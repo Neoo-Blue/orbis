@@ -86,6 +86,8 @@ func (s *Server) handleUnblockTrust(w http.ResponseWriter, r *http.Request) {
 // the owner's authority for this one request, so a tap on a phone needs no
 // sign-in, and it grants nothing beyond answering this request once.
 func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
+	// FormValue parses the body, and nobody here has shown a token yet.
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	id, token := chi.URLParam(r, "id"), r.FormValue("t")
 	if !s.app.Unblock.ValidToken(id, token) {
 		http.Error(w, "This link is not valid.", http.StatusForbidden)

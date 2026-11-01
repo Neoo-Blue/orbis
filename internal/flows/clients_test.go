@@ -123,3 +123,31 @@ func TestRegistryCopiesOwnMeta(t *testing.T) {
 	}
 	<-done
 }
+
+func TestRouterNamesDoNotCountAsSeeingADevice(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := NewClientRegistry(st, nil)
+
+	keyed := netip.MustParseAddr("192.168.50.9")
+	bare := netip.MustParseAddr("192.168.50.10")
+	r.Observe(keyed, "5C:B2:6D:06:6D:64", "own-name")
+	seen := r.Observe(bare, "", "").LastSeen
+
+	r.NameDevice(keyed, "router-name")
+	if got := r.ByIP(keyed).Hostname; got != "own-name" {
+		t.Errorf("a device with a MAC kept %q, want its own name", got)
+	}
+	r.NameDevice(bare, "first")
+	r.NameDevice(bare, "second")
+	c := r.ByIP(bare)
+	if c.Hostname != "second" {
+		t.Errorf("an address-keyed device has %q, want the newest name", c.Hostname)
+	}
+	if !c.LastSeen.Equal(seen) {
+		t.Error("naming a device marked it seen")
+	}
+}

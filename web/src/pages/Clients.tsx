@@ -5,7 +5,8 @@ import { PauseMenu, pauseOkMessage, pauseUntilLabel } from '../PauseMenu'
 import {
   Bar, Card, CopyButton, Drawer, Empty, Icons, Loading, Search, Segmented, Switch, useToast,
 } from '../ui'
-import { ago, bits, bytes, clientName, compact, countryFlag, deviceGlyph, flowTarget } from '../format'
+import { ago, bits, bytes, clientName, compact, deviceGlyph, flowTarget } from '../format'
+import { useSiteActions } from './Why'
 import type { Client, DNSQuery, Flow, Policy } from '../types'
 
 export function ClientsPage() {
@@ -271,7 +272,7 @@ export function ClientDrawer({ id, until, onClose, onChanged }: { id: string; un
                       {dests.destinations.map((d, i) => (
                         <tr key={i}>
                           <td className="truncate" title={String(d.host)}>
-                            {d.country ? <span style={{ marginRight: 6 }}>{countryFlag(String(d.country))}</span> : null}
+                            {d.country ? <span className="cc">{String(d.country)}</span> : null}
                             {String(d.host)}
                           </td>
                           <td className="num">{compact(Number(d.connections))}</td>
@@ -310,7 +311,7 @@ function FlowList({ flows }: { flows: Flow[] }) {
             <tr key={f.id}>
               <td className="truncate" title={flowTarget(f)}>
                 {f.verdict === 'block' && <span className="tag block" style={{ marginRight: 6 }}>blocked</span>}
-                {f.country && <span style={{ marginRight: 5 }}>{countryFlag(f.country)}</span>}
+                {f.country && <span className="cc">{f.country}</span>}
                 {flowTarget(f)}
               </td>
               <td className="num">{f.dst_port}</td>
@@ -325,11 +326,12 @@ function FlowList({ flows }: { flows: Flow[] }) {
 }
 
 function DNSList({ queries }: { queries: DNSQuery[] }) {
+  const sites = useSiteActions()
   if (!queries.length) return <Empty title="No lookups recorded">Lookups appear as this device asks for names.</Empty>
   return (
     <div className="table-wrap" style={{ maxHeight: 380 }}>
       <table className="t">
-        <thead><tr><th>Domain</th><th>Type</th><th>Result</th><th>When</th></tr></thead>
+        <thead><tr><th>Domain</th><th>Type</th><th>Result</th><th>When</th><th style={{ width: 70 }} /></tr></thead>
         <tbody>
           {queries.map((q) => (
             <tr key={q.id}>
@@ -341,6 +343,9 @@ function DNSList({ queries }: { queries: DNSQuery[] }) {
                   : <span className="tag" style={{ opacity: .7 }}>{q.cached ? 'cached' : q.rcode}</span>}
               </td>
               <td style={{ color: 'var(--text-faint)', fontSize: 11 }}>{ago(q.ts)}</td>
+              <td className="tools">
+                {q.blocked && <button className="btn sm" onClick={() => void sites.allow(q.name)}>Allow</button>}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -350,6 +355,7 @@ function DNSList({ queries }: { queries: DNSQuery[] }) {
 }
 
 function ClientSettings({ client, until, onChanged }: { client: Client; until?: string; onChanged: () => void }) {
+  const { data: trust, refresh: refreshTrust } = usePoll(() => api.unblock.list(), 0)
   const [label, setLabel] = useState(client.label ?? '')
   const [zone, setZone] = useState(client.zone ?? '')
   const [notes, setNotes] = useState(client.notes ?? '')
@@ -446,6 +452,10 @@ function ClientSettings({ client, until, onChanged }: { client: Client; until?: 
           </div>
         )}
       </div>
+      {client.mac && (
+        <Switch checked={(trust?.trusted ?? []).includes(client.id)} label="Trusted: can unblock sites without asking"
+          onChange={async (v) => { await api.unblock.trust(client.id, v); refreshTrust() }} />
+      )}
       <div className="field">
         <label>Notes</label>
         <textarea className="textarea" value={notes} onChange={(e) => setNotes(e.target.value)}
@@ -462,13 +472,6 @@ function ClientSettings({ client, until, onChanged }: { client: Client; until?: 
         <button className={`btn ${client.blocked ? '' : 'danger'}`} onClick={toggleBlock}>
           {client.blocked ? 'Restore access' : 'Block device'}
         </button>
-      </div>
-
-      <div style={{ borderTop: '1px solid var(--line-soft)', paddingTop: 12 }}>
-        <Switch checked={client.blocked} onChange={toggleBlock}
-          label={client.blocked
-            ? (until ? `Paused from the network · ${pauseUntilLabel(until)}` : 'Blocked from the network')
-            : 'Has network access'} />
       </div>
     </div>
   )

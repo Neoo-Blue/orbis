@@ -2,21 +2,26 @@ import { useState } from 'react'
 import { api } from '../api'
 import { usePoll } from '../hooks'
 import { Drawer, Loading, useToast } from '../ui'
+import type { LocalRule } from '../types'
 
-/** Why a name was stopped, and what to do about it, without leaving the page
- *  you were on. */
-export function WhyDrawer({ name, clientId, onClose, onChanged }: {
-  name: string; clientId?: string; onClose: () => void; onChanged?: () => void
-}) {
-  const { data, error, refresh } = usePoll(() => api.dnstools.diagnose(name, { client_id: clientId }), 0, [name, clientId])
+/** Allow or block a site from wherever it is showing. A quick rule replaces
+ *  whatever rule the name had, so Undo puts that one back. */
+export function useSiteActions(onChanged?: () => void) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
-  const decide = async (act: () => Promise<unknown>, done: string, undo: () => Promise<unknown>) => {
+  const run = async (act: () => Promise<{ previous?: LocalRule | null }>, done: string, name: string) => {
     setBusy(true)
     try {
-      await act()
-      toast(done, 'ok', { label: 'Undo', onClick: async () => { await undo(); refresh(); onChanged?.() } })
-      refresh()
+      const { previous: was } = await act()
+      toast(done, 'ok', {
+        label: 'Undo',
+        onClick: async () => {
+          await (was
+            ? api.adblock.addRule({ domain: was.domain, action: was.action, wildcard: was.wildcard, note: was.note })
+            : api.adblock.deleteRule(name))
+          onChanged?.()
+        },
+      })
       onChanged?.()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'That did not work', 'err')
@@ -24,8 +29,20 @@ export function WhyDrawer({ name, clientId, onClose, onChanged }: {
       setBusy(false)
     }
   }
-  const allow = () => decide(() => api.dnstools.allow(name), `${name} is allowed`, () => api.adblock.deleteRule(name))
-  const block = () => decide(() => api.dnstools.block(name), `${name} is blocked`, () => api.adblock.deleteRule(name))
+  return {
+    busy,
+    allow: (name: string) => run(() => api.dnstools.allow(name), `${name} is allowed`, name),
+    block: (name: string) => run(() => api.dnstools.block(name, true), `${name} is blocked`, name),
+  }
+}
+
+/** Why a name was stopped, and what to do about it, without leaving the page
+ *  you were on. */
+export function WhyDrawer({ name, clientId, onClose, onChanged }: {
+  name: string; clientId?: string; onClose: () => void; onChanged?: () => void
+}) {
+  const { data, error, refresh } = usePoll(() => api.dnstools.diagnose(name, { client_id: clientId }), 0, [name, clientId])
+  const sites = useSiteActions(() => { refresh(); onChanged?.() })
   return (
     <Drawer title={<span className="mono">{name}</span>} onClose={onClose}>
       {error && <p className="hint">{error}</p>}
@@ -43,8 +60,8 @@ export function WhyDrawer({ name, clientId, onClose, onChanged }: {
           </ol>
           <div style={{ display: 'flex', gap: 8 }}>
             {data.verdict === 'block'
-              ? <button className="btn primary" disabled={busy} onClick={allow}>Allow this site</button>
-              : <button className="btn danger" disabled={busy} onClick={block}>Block this site</button>}
+              ? <button className="btn primary" disabled={sites.busy} onClick={() => void sites.allow(name)}>Allow this site</button>
+              : <button className="btn danger" disabled={sites.busy} onClick={() => void sites.block(name)}>Block this site</button>}
           </div>
         </div>
       )}

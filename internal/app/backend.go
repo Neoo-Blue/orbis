@@ -841,6 +841,13 @@ func (a *App) Health() map[string]any {
 		worse(l)
 	}
 
+	if t := a.Resources().Throttled; strings.Contains(t, "under-voltage") {
+		when := "has run short of power since it last started"
+		if current, _, _ := strings.Cut(t, ";"); strings.HasPrefix(current, "now") && strings.Contains(current, "under-voltage") {
+			when = "is short of power right now"
+		}
+		add("attention", "This Pi "+when+". Use a 5.1 V, 3 A supply: low voltage can corrupt its SD card.")
+	}
 	if cfg.API.AdminHash == "" {
 		points = append(points, map[string]any{"level": "problem", "page": "settings",
 			"text": "No admin password is set. Anyone on this network can open Orbis."})

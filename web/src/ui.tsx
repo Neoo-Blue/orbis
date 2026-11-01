@@ -93,7 +93,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               {t.action && (
                 <button className="btn sm" style={{ marginLeft: 10 }} onClick={() => {
                   setToasts((all) => all.filter((x) => x.id !== t.id))
-                  void t.action!.onClick()
+                  Promise.resolve().then(() => t.action!.onClick())
+                    .catch((e) => push(e instanceof Error ? e.message : 'Undo did not work', 'err'))
                 }}>{t.action.label}</button>
               )}
             </div>

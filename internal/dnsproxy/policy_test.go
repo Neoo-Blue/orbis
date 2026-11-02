@@ -157,13 +157,8 @@ func TestRebindProtection(t *testing.T) {
 	if !RebindAllowed("vpn.example.com", "lan", []string{"vpn.example.com"}) {
 		t.Error("allowlisted name must be exempt")
 	}
-	for _, name := range []string{"192-168-50-203.fb2ccc7488d44d938143cd983dd41d9a.plex.direct", "app.192.168.50.222.nip.io", "ipv4only.arpa"} {
-		if !RebindAllowed(name, "lan", nil) {
-			t.Errorf("%s spells out its own address and cannot be rebound", name)
-		}
-	}
-	if RebindAllowed("plex.direct.evil.com", "lan", nil) {
-		t.Error("only the real suffix counts")
+	if !RebindAllowed("ipv4only.arpa", "lan", nil) {
+		t.Error("NAT64 discovery must be exempt")
 	}
 	if RebindAllowed("evil.com", "lan", nil) {
 		t.Error("public name must not be exempt")
@@ -258,5 +253,30 @@ func TestMatchForwardZoneMostSpecific(t *testing.T) {
 	empty := []config.ForwardZone{{Domain: "corp.example"}}
 	if got := MatchForwardZone(empty, "a.corp.example"); got != "" {
 		t.Fatalf("zone without upstreams must be skipped, got %q", got)
+	}
+}
+
+func TestANameMayPointOnlyAtTheAddressItSpells(t *testing.T) {
+	for name, own := range map[string]string{
+		"192-168-50-203.fb2ccc7488d44d938143cd983dd41d9a.plex.direct.": "192.168.50.203",
+		"app.192.168.50.222.nip.io.":                                   "192.168.50.222",
+		"app-192-168-50-222.nip.io.":                                   "192.168.50.222",
+	} {
+		m := new(dns.Msg)
+		for _, ip := range []string{own, "192.168.50.1"} {
+			rr, err := dns.NewRR(name + " 60 IN A " + ip)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.Answer = append(m.Answer, rr)
+		}
+		if n := StripRebind(m, spelled(name)...); n != 1 || len(m.Answer) != 1 || m.Answer[0].(*dns.A).A.String() != own {
+			t.Errorf("%s: dropped %d, kept %v", name, n, m.Answer)
+		}
+	}
+	for _, name := range []string{"192-168-50-1.plex.direct.evil.com.", "foo.nip.io.", "192-168-50-1.example.com."} {
+		if got := spelled(name); len(got) != 0 {
+			t.Errorf("%s spells %v", name, got)
+		}
 	}
 }

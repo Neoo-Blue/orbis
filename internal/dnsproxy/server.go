@@ -559,7 +559,7 @@ func (s *Server) rebindStrip(resp *dns.Msg, name string, cfg config.Config) bool
 	if !cfg.DNS.RebindProtection || RebindAllowed(name, cfg.DNS.LocalDomain, cfg.DNS.RebindAllowlist) {
 		return false
 	}
-	n := StripRebind(resp)
+	n := StripRebind(resp, spelled(name)...)
 	if n > 0 {
 		s.stats.Rebind.Add(1)
 		s.log("dns: stripped %d private answer(s) for %s (rebinding protection)", n, name)

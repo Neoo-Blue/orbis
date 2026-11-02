@@ -2,6 +2,7 @@ package dnsproxy
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -122,8 +123,9 @@ func RebindAllowed(name string, localDomain string, allowlist []string) bool {
 			return true
 		}
 	}
-	// Reverse lookups and service discovery are local by definition.
-	for _, suffix := range []string{"in-addr.arpa", "ip6.arpa", "local", "home.arpa", "internal", "lan"} {
+	// Reverse lookups and service discovery are local by definition, and
+	// ipv4only.arpa answers with fixed addresses devices use to detect NAT64.
+	for _, suffix := range []string{"in-addr.arpa", "ip6.arpa", "local", "home.arpa", "internal", "lan", "ipv4only.arpa"} {
 		if n == suffix || strings.HasSuffix(n, "."+suffix) {
 			return true
 		}
@@ -136,11 +138,45 @@ func RebindAllowed(name string, localDomain string, allowlist []string) bool {
 	return false
 }
 
-// StripRebind removes A/AAAA records pointing into local space and reports how
-// many it dropped. The rest of the answer is preserved: a legitimate record set
-// that happens to include one bad address should lose that address, not the
-// whole response.
-func StripRebind(m *dns.Msg) int {
+// spelled returns the addresses a name writes out, for services that answer
+// with exactly that address: Plex apps reach a server on the LAN through
+// 192-168-1-5.<id>.plex.direct, and nip.io serves app.192.168.1.5.nip.io. Such
+// a name may point into the LAN, but only at the address it spells, so the
+// answer is checked rather than the service trusted.
+func spelled(name string) []netip.Addr {
+	n := strings.ToLower(strings.TrimSuffix(name, "."))
+	rest := ""
+	for _, suffix := range []string{".plex.direct", ".nip.io"} {
+		if strings.HasSuffix(n, suffix) {
+			rest = strings.TrimSuffix(n, suffix)
+		}
+	}
+	if rest == "" {
+		return nil
+	}
+	var out []netip.Addr
+	add := func(s string) {
+		if a, err := netip.ParseAddr(s); err == nil && a.Is4() {
+			out = append(out, a)
+		}
+	}
+	labels := strings.Split(rest, ".")
+	if len(labels) >= 4 {
+		add(strings.Join(labels[len(labels)-4:], "."))
+	}
+	for _, l := range labels {
+		if parts := strings.Split(l, "-"); len(parts) >= 4 {
+			add(strings.Join(parts[len(parts)-4:], "."))
+		}
+	}
+	return out
+}
+
+// StripRebind removes A/AAAA records pointing into local space, other than the
+// keep addresses, and reports how many it dropped. The rest of the answer is
+// preserved: a legitimate record set that happens to include one bad address
+// should lose that address, not the whole response.
+func StripRebind(m *dns.Msg, keep ...netip.Addr) int {
 	if m == nil {
 		return 0
 	}
@@ -158,7 +194,7 @@ func StripRebind(m *dns.Msg) int {
 				out = append(out, rr)
 				continue
 			}
-			if addr.IsValid() && IsRebindAddr(addr) {
+			if addr.IsValid() && IsRebindAddr(addr) && !slices.Contains(keep, addr.Unmap()) {
 				dropped++
 				continue
 			}

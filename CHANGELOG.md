@@ -4,6 +4,15 @@ Each release on GitHub carries the section below that matches its tag. Orbis sho
 under "Show release notes" when it offers an update.
 
 
+## v1.36.3
+
+### Fixed
+- **Plex apps could not reach a server at home directly.** Rebinding protection stripped the local addresses
+  from Plex's own `plex.direct` names, so a TV had to go the long way round to a server on the same network. A
+  `plex.direct` or `nip.io` name may now point at the local address written in it, and at no other, and
+  `ipv4only.arpa` passes.
+- **A failed AI assessment now says why the model stopped**, so a repeat can be told apart from a cut-off answer.
+
 ## v1.36.2
 
 ### Added

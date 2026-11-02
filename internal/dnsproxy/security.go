@@ -122,8 +122,11 @@ func RebindAllowed(name string, localDomain string, allowlist []string) bool {
 			return true
 		}
 	}
-	// Reverse lookups and service discovery are local by definition.
-	for _, suffix := range []string{"in-addr.arpa", "ip6.arpa", "local", "home.arpa", "internal", "lan"} {
+	// Reverse lookups and service discovery are local by definition. The rest
+	// spell out the address they resolve to, so they cannot be rebound, and
+	// stripping them breaks what relies on them: Plex apps reach a server on
+	// the LAN through plex.direct, and devices check for NAT64 with ipv4only.arpa.
+	for _, suffix := range []string{"in-addr.arpa", "ip6.arpa", "local", "home.arpa", "internal", "lan", "plex.direct", "nip.io", "ipv4only.arpa"} {
 		if n == suffix || strings.HasSuffix(n, "."+suffix) {
 			return true
 		}

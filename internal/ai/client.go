@@ -150,7 +150,7 @@ func (c *Client) complete(ctx context.Context, system string, msgs []Message, to
 		resp, err := c.completeOnce(ctx, cfg, model, fam, structured, system, msgs, tools)
 		if err == nil && validate != nil {
 			if verr := validate(resp.Text); verr != nil {
-				err = &ProviderError{Status: 200, Message: "output was not the expected JSON: " + trimErr(verr.Error())}
+				err = &ProviderError{Status: 200, Message: fmt.Sprintf("output was not the expected JSON (stopped: %s): %s", resp.StopReason, trimErr(verr.Error()))}
 				resp = nil
 			}
 		}

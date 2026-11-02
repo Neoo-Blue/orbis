@@ -157,6 +157,14 @@ func TestRebindProtection(t *testing.T) {
 	if !RebindAllowed("vpn.example.com", "lan", []string{"vpn.example.com"}) {
 		t.Error("allowlisted name must be exempt")
 	}
+	for _, name := range []string{"192-168-50-203.fb2ccc7488d44d938143cd983dd41d9a.plex.direct", "app.192.168.50.222.nip.io", "ipv4only.arpa"} {
+		if !RebindAllowed(name, "lan", nil) {
+			t.Errorf("%s spells out its own address and cannot be rebound", name)
+		}
+	}
+	if RebindAllowed("plex.direct.evil.com", "lan", nil) {
+		t.Error("only the real suffix counts")
+	}
 	if RebindAllowed("evil.com", "lan", nil) {
 		t.Error("public name must not be exempt")
 	}
